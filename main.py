@@ -22,7 +22,7 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = Dispatcher()
-
+    await bot.delete_webhook(drop_pending_updates=True)
     # 1. Middleware-ni ro'yxatdan o'tkazish
     dp.update.middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
 
