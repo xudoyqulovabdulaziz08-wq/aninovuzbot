@@ -1,17 +1,8 @@
-# Bot framework
-aiogram==3.13.1
-
-# Database (SQLAlchemy & Migration)
-sqlalchemy==2.0.35
-alembic==1.13.3
-asyncpg==0.29.0
-psycopg2-binary==2.9.9
-
-# Caching (Valkey/Redis)
-redis==5.1.1
-
-# Configuration & Environment
-python-dotenv==1.0.1
-
-# Utilities
-pydantic==2.9.2
+aiogram
+sqlalchemy[asyncio]
+alembic
+asyncpg
+psycopg2-binary
+redis
+python-dotenv
+pydantic
