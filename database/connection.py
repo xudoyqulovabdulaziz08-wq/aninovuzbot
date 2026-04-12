@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-
+from config import config
 # PostgreSQL URL manzilingiz (asyncpg drayveri bilan)
 # DIQQAT: 'postgresql://' ni 'postgresql+asyncpg://' ga o'zgartirdik
 DATABASE_URL = "postgresql+asyncpg://avnadmin:AVNS_NL2rxYz4-DWFJ0f4Fme@pg-32706ea0-xudoyqulovabdulaziz08-0be3.h.aivencloud.com:27624/defaultdb?ssl=require"
