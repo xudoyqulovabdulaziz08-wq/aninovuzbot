@@ -7,9 +7,8 @@ DATABASE_URL = "postgresql+asyncpg://avnadmin:AVNS_NL2rxYz4-DWFJ0f4Fme@pg-32706e
 
 # 1. Engine yaratish (Bazaga ulanish yo'lagi)
 engine = create_async_engine(
-    DATABASE_URL,
-    echo=False, # Loglarda har bir SQL so'rovni ko'rmaslik uchun False
-    future=True
+    config.DATABASE_URL,
+    connect_args={"ssl": True} # sslmode o'rniga shunday bering
 )
 
 # 2. Sessionmaker yaratish (Har bir xabar uchun alohida sessiya ochish uchun)
