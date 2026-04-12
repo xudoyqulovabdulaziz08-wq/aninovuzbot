@@ -3,7 +3,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 # PostgreSQL URL manzilingiz (asyncpg drayveri bilan)
 # DIQQAT: 'postgresql://' ni 'postgresql+asyncpg://' ga o'zgartirdik
-DATABASE_URL = "postgresql+asyncpg://avnadmin:AVNS_NL2rxYz4-DWFJ0f4Fme@pg-32706ea0-xudoyqulovabdulaziz08-0be3.h.aivencloud.com:27624/defaultdb?sslmode=require"
+DATABASE_URL = "postgresql+asyncpg://avnadmin:AVNS_NL2rxYz4-DWFJ0f4Fme@pg-32706ea0-xudoyqulovabdulaziz08-0be3.h.aivencloud.com:27624/defaultdb?ssl=require"
 
 # 1. Engine yaratish (Bazaga ulanish yo'lagi)
 engine = create_async_engine(
