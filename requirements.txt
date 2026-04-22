@@ -5,4 +5,8 @@ asyncpg
 psycopg2-binary
 redis
 python-dotenv
+<<<<<<< HEAD
 pydantic
+
+pydantic
+>>>>>>> f1d9877 (Save local changes before rebase)

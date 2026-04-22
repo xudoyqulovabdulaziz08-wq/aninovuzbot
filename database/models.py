@@ -2,12 +2,13 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import (
-    CheckConstraint, Numeric, String, Integer, BigInteger, Boolean, Table, Text, Float,
-    DateTime, ForeignKey, Index, UniqueConstraint
+    CheckConstraint, Numeric, String, Integer, BigInteger, Boolean,
+    Table, Text, DateTime, ForeignKey, Index, UniqueConstraint, Column
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
-from sqlalchemy import Column, ForeignKey, Table # Column qo'shildi
+
+
 # ================= BASE =================
 class Base(DeclarativeBase):
     pass
@@ -20,6 +21,7 @@ anime_genre = Table(
     Column("anime_id", ForeignKey("anime_list.anime_id", ondelete="CASCADE"), primary_key=True),
     Column("genre_id", ForeignKey("genres.id", ondelete="CASCADE"), primary_key=True)
 )
+
 
 # ================= USER =================
 class DBUser(Base):
@@ -44,11 +46,13 @@ class DBUser(Base):
     tickets: Mapped[List["Ticket"]] = relationship(back_populates="user")
     admin_settings: Mapped["AdminSettings"] = relationship(back_populates="user", uselist=False)
 
+
 # ================= GENRE =================
 class Genre(Base):
-    __tablename__ = "genres" # "genres" deb to'g'rilandi
+    __tablename__ = "genres"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
+
 
 # ================= ANIME =================
 class Anime(Base):
@@ -57,18 +61,13 @@ class Anime(Base):
     __table_args__ = (
         Index("idx_anime_title", "title"),
         Index("idx_anime_year", "year"),
-    ) # genre indeksi olib tashlandi
+    )
 
     anime_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     poster_id: Mapped[Optional[str]] = mapped_column(String(255))
     lang: Mapped[Optional[str]] = mapped_column(String(100))
-    
-    genres: Mapped[List["Genre"]] = relationship(
-        secondary=anime_genre,
-        backref="animes"
-    )
-    
+    genres: Mapped[List["Genre"]] = relationship(secondary=anime_genre, backref="animes")
     year: Mapped[Optional[int]] = mapped_column(Integer)
     fandub: Mapped[Optional[str]] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text)
@@ -81,6 +80,7 @@ class Anime(Base):
     favorites: Mapped[List["Favorite"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
     history: Mapped[List["History"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
     comments: Mapped[List["Comment"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
+
 
 # ================= EPISODE =================
 class Episode(Base):
@@ -98,14 +98,17 @@ class Episode(Base):
 
     anime: Mapped["Anime"] = relationship(back_populates="episodes")
 
+
 # ================= FAVORITE =================
 class Favorite(Base):
     __tablename__ = "favorites"
     user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
     anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"), primary_key=True)
 
-    user: Mapped["DBUser"] = relationship(back_populates="user") # relationship back_populates to'g'rilandi
+    # ✅ TUZATILDI: back_populates="favorites" (oldin "user" deb xato yozilgandi)
+    user: Mapped["DBUser"] = relationship(back_populates="favorites")
     anime: Mapped["Anime"] = relationship(back_populates="favorites")
+
 
 # ================= HISTORY =================
 class History(Base):
@@ -124,6 +127,7 @@ class History(Base):
     user: Mapped["DBUser"] = relationship(back_populates="history")
     anime: Mapped["Anime"] = relationship(back_populates="history")
 
+
 # ================= COMMENT =================
 class Comment(Base):
     __tablename__ = "comments"
@@ -131,11 +135,7 @@ class Comment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     parent_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("comments.id", ondelete="CASCADE"))
-
-    parent: Mapped[Optional["Comment"]] = relationship(
-        remote_side="Comment.id",
-        backref="replies"
-    )
+    parent: Mapped[Optional["Comment"]] = relationship(remote_side="Comment.id", backref="replies")
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
     comment_text: Mapped[str] = mapped_column(Text)
@@ -143,6 +143,7 @@ class Comment(Base):
 
     user: Mapped["DBUser"] = relationship(back_populates="comments")
     anime: Mapped["Anime"] = relationship(back_populates="comments")
+
 
 # ================= TICKET =================
 class Ticket(Base):
@@ -158,6 +159,7 @@ class Ticket(Base):
 
     user: Mapped["DBUser"] = relationship(back_populates="tickets")
 
+
 # ================= BOSHQA JADVALLAR =================
 class Channel(Base):
     __tablename__ = "channels"
@@ -168,12 +170,14 @@ class Channel(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+
 class HelpPage(Base):
     __tablename__ = "help_pages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     page_number: Mapped[int] = mapped_column(Integer, unique=True)
     title: Mapped[str] = mapped_column(String(255))
     content: Mapped[str] = mapped_column(Text)
+
 
 class FanGroup(Base):
     __tablename__ = "fan_groups"
@@ -183,15 +187,17 @@ class FanGroup(Base):
     is_vip: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+
 class Advertisement(Base):
     __tablename__ = "advertisements"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ad_type: Mapped[str] = mapped_column(String(20)) 
-    target_group: Mapped[str] = mapped_column(String(20)) 
+    ad_type: Mapped[str] = mapped_column(String(20))
+    target_group: Mapped[str] = mapped_column(String(20))
     chat_id: Mapped[int] = mapped_column(BigInteger)
-    message_id: Mapped[int] = mapped_column(BigInteger) # Qo'shildi
+    message_id: Mapped[int] = mapped_column(BigInteger)
     end_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
 
 class AdminSettings(Base):
     __tablename__ = "admin_settings"
