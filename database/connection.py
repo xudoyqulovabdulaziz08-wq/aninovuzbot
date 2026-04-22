@@ -19,3 +19,4 @@ async def check_db():
             print("✅ PostgreSQL bazasiga muvaffaqiyatli ulanildi!")
     except Exception as e:
         print(f"❌ Bazaga ulanishda xato: {e}")
+        
