@@ -50,4 +50,3 @@ class DbSessionMiddleware(BaseMiddleware):
 
             return await handler(event, data)
         
-
