@@ -10,7 +10,7 @@ class CacheManager:
         self.redis = redis.from_url(url, decode_responses=True)
         # Ulanishni tekshirish uchun flag
         self.is_connected = False
-
+    
     async def connect(self):
         """Redis bilan aloqani tekshirish"""
         try:
@@ -47,8 +47,9 @@ class CacheManager:
             data = {}
             for c in mapper.column_attrs:
                 value = getattr(obj, c.key)
-                    # datetime va boshqa murakkab turlarni stringga aylantiramiz
-                if isinstance(value, (datetime, bytes)):
+                if value is None:
+                    data[c.key] = None
+                elif isinstance(value, (datetime, bytes)):
                     data[c.key] = str(value)
                 else:
                     data[c.key] = value
