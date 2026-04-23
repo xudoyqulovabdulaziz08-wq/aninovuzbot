@@ -61,6 +61,9 @@ async def on_shutdown(bot: Bot):
     
     logger.info("✅ All connections closed safely. Goodbye!")
 
+async def index_handler(request):
+    return web.Response(text="Aninovuz Bot is Running! 🚀", content_type="text/plain")
+
 def main():
     # Logging konfiguratsiyasi
     logging.basicConfig(
@@ -90,6 +93,8 @@ def main():
 
     # Webhook Application setup
     app = web.Application()
+    # ✅ Mana bu qator asosiy sahifadagi 404 ni yo'qotadi:
+    app.router.add_get("/", index_handler)
     
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
