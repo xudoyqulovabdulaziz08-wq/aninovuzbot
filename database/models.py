@@ -7,7 +7,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
-
+from decimal import Decimal
 
 # ================= BASE =================
 class Base(DeclarativeBase):
@@ -28,7 +28,7 @@ class DBUser(Base):
     __tablename__ = "users"
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    username: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="user", index=True, nullable=False)
@@ -71,7 +71,7 @@ class Anime(Base):
     year: Mapped[Optional[int]] = mapped_column(Integer)
     fandub: Mapped[Optional[str]] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text)
-    rating_sum = mapped_column(Numeric(10, 2), default=0)
+    rating_sum: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
     rating_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     views_week: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -115,7 +115,7 @@ class History(Base):
     __tablename__ = "history"
     __table_args__ = (
         Index("idx_history_user_anime", "user_id", "anime_id"),
-        UniqueConstraint("user_id", "anime_id", name="uix_user_anime"),
+        UniqueConstraint("user_id", "anime_id", "last_episode")
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -135,7 +135,7 @@ class Comment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     parent_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("comments.id", ondelete="CASCADE"))
-    parent: Mapped[Optional["Comment"]] = relationship(remote_side="Comment.id", backref="replies")
+    parent: Mapped[Optional["Comment"]] = relationship(remote_side=[id], backref="replies")
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
     comment_text: Mapped[str] = mapped_column(Text)
@@ -148,7 +148,7 @@ class Comment(Base):
 # ================= TICKET =================
 class Ticket(Base):
     __tablename__ = "tickets"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
     )
@@ -201,7 +201,7 @@ class Advertisement(Base):
 
 class AdminSettings(Base):
     __tablename__ = "admin_settings"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), unique=True)
     role: Mapped[str] = mapped_column(String(20), default="moderator")
     user: Mapped["DBUser"] = relationship(back_populates="admin_settings")
