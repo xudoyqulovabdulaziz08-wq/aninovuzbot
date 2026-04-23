@@ -36,4 +36,4 @@ async def admin_panel(message: types.Message, user: DBUser):
             "• Statistika"
         )
     else:
-        await message.answer("❌ Ruxsat yo'q!")
+        await message.answer("❌ Ruxsat yo'q! Bu bo'lim faqat adminlar uchun.") 
