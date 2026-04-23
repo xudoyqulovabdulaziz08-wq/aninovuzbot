@@ -1,13 +1,14 @@
 import redis
 import logging
 from sqlalchemy import event
-from database.cache import VALKEY_URL
+from config import config
 from database.models import (
     DBUser, Anime, Genre, Episode, Comment, Favorite,
     History, Ticket, Channel, HelpPage, FanGroup,
     Advertisement, AdminSettings
 )
-
+# database/cache.py faylining oxirgi qatori
+VALKEY_URL = config.VALKEY_URL
 # ================= LOGGING =================
 logging.basicConfig(
     level=logging.INFO,
