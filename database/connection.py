@@ -14,10 +14,10 @@ ssl_context = ssl.create_default_context(
     cafile=os.path.join(ROOT_DIR, "ca.pem")
 )
 
-ssl_context.load_cert_chain(
-    certfile=os.path.join(ROOT_DIR, "service.cert"),
-    keyfile=os.path.join(ROOT_DIR, "service.key")
-)
+#ssl_context.load_cert_chain(
+#   certfile=os.path.join(ROOT_DIR, "service.cert"),
+#  keyfile=os.path.join(ROOT_DIR, "service.key")
+#
 
 # 2. Engine yaratishda "True" o'rniga shu ssl_context ni beramiz
 engine = create_async_engine(
