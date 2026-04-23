@@ -25,7 +25,7 @@ class CacheManager:
         
         # 0.15 BALL UPGRADE: Monitoring metrics
         self.stats = {"hits": 0, "misses": 0, "errors": 0}
-        valkey = CacheManager(config.VALKEY_URL)
+        
     def _get_key(self, table_name: str, obj_id: Any) -> str:
         return f"{self.namespace}:{table_name}:{obj_id}:{self.version}"
 
@@ -144,3 +144,5 @@ class CacheManager:
 
     async def close(self):
         await self.redis.close()
+
+valkey = CacheManager(url=config.VALKEY_URL)
