@@ -10,6 +10,8 @@ class DbSessionMiddleware(BaseMiddleware):
     def __init__(self, session_pool):
         self.session_pool = session_pool
 
+    
+
     async def __call__(
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
@@ -20,33 +22,36 @@ class DbSessionMiddleware(BaseMiddleware):
             data["session"] = session
             data["valkey"] = valkey
 
-            user: User = data.get("event_from_user")
-            if user:
-                # Keshdan foydalanuvchini olish
-                cached_user = await valkey.get("users", user.id)
+            user_obj: User = data.get("event_from_user")
+            if user_obj:
+                # 1. Keshdan foydalanuvchini qidiramiz
+                cached_user = await valkey.get("users", user_obj.id)
 
                 if not cached_user:
-                    # Bazadan qidirish
+                    # 2. Agar keshda bo'lmasa, Bazadan qidiramiz
                     result = await session.execute(
-                        select(DBUser).where(DBUser.user_id == user.id)
+                        select(DBUser).where(DBUser.user_id == user_obj.id)
                     )
                     db_user = result.scalar_one_or_none()
 
                     if not db_user:
-                        # Yangi user qo'shish
+                        # 3. Agar bazada ham bo'lmasa - YANGI FOYDALANUVCHI
                         db_user = DBUser(
-                            user_id=user.id,
-                            username=user.username,
+                            user_id=user_obj.id,
+                            username=user_obj.username,
                             status="user"
                         )
                         session.add(db_user)
                         await session.commit()
                         await session.refresh(db_user)
                     
+                    # 4. Keshga yozamiz (Model obyektini uzatamiz)
                     await valkey.set(db_user)
                     data["user"] = db_user
                 else:
-                    data["user"] = cached_user
+                    # 5. ✅ MANA SHU YERGA: 
+                    # Keshdan kelgan dictni DBUser obyektiga aylantiramiz.
+                    # Shunda handlerlarda user['status'] emas, user.status deb yozaverasiz.
+                    data["user"] = DBUser(**cached_user)
 
             return await handler(event, data)
-        

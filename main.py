@@ -11,6 +11,7 @@ from handlers import start
 from database.events import *
 from database.models import Base
 from config import config
+from database.cache import valkey
 
 # ================= SOZLAMALAR =================
 # Render sizga bepul domain beradi: https://SIZNING_BOT_NOMI.onrender.com
@@ -30,6 +31,7 @@ async def create_tables():
 
 async def on_startup(bot: Bot):
     await check_db()
+    await valkey.connect()
     await create_tables()
     await bot.set_webhook(WEBHOOK_URL)
     print(f"🚀 Webhook o'rnatildi: {WEBHOOK_URL}")
