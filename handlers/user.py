@@ -15,16 +15,23 @@ async def personal_cabinet(message: types.Message, user: DBUser):
     now = datetime.now()
     vip_status = "❌ Faol emas"
     
+    # VIP muddatini tekshirish
     if user.vip_expire_date:
         if user.vip_expire_date > now:
             vip_status = f"✅ {user.vip_expire_date.strftime('%d.%m.%Y')} gacha"
         else:
             vip_status = "⚠️ Muddati tugagan"
 
+    # 🚀 MUAMMONI YECHIMI: 
+    # Username'ni bazadan emas, hozirgi xabardan olamiz.
+    # Agar foydalanuvchida username bo'lmasa "O'rnatilmagan" deb chiqadi.
+    current_username = message.from_user.username
+    display_username = f"@{current_username}" if current_username else "O'rnatilmagan"
+
     text = (
         f"👤 <b>Shaxsiy kabinet</b>\n\n"
         f"🆔 ID: <code>{user.user_id}</code>\n"
-        f"👤 Username: @{user.username or 'Yo\'q'}\n"
+        f"👤 Username: {display_username}\n"  # Jonli username
         f"🏅 Status: <b>{user.status.upper()}</b>\n"
         f"⭐ Ballar: <b>{user.points}</b>\n"
         f"👥 Takliflar: <b>{user.referral_count}</b>\n"
@@ -34,9 +41,9 @@ async def personal_cabinet(message: types.Message, user: DBUser):
 
 
 @router.message(F.text == "🌟 Reyting")
-async def rating(message: types.Message, session: AsyncSession):
-    # 1. Bazadan ballar bo'yicha TOP 10 foydalanuvchini olamiz
-    stmt = select(DBUser).order_by(desc(DBUser.points)).limit(10)
+async def rating(message: types.Message, session: AsyncSession, user: DBUser):
+    # 1. Bazadan TOP 10 ni olamiz
+    stmt = select(DBUser).order_by(DBUser.points.desc()).limit(10)
     result = await session.execute(stmt)
     top_users = result.scalars().all()
 
@@ -46,15 +53,19 @@ async def rating(message: types.Message, session: AsyncSession):
     text = "🏆 <b>TOP-10 Foydalanuvchilar:</b>\n\n"
     
     for i, top_user in enumerate(top_users, 1):
-        # Username bo'lsa username, bo'lmasa ID ni ko'rsatamiz
-        user_name = f"@{top_user.username}" if top_user.username else f"ID:{top_user.user_id}"
-        
-        # Har xil o'rinlar uchun medallar
+        # Username tekshiruvi: Agar bazada @Yo'q bo'lsa, ID ko'rsatiladi
+        if top_user.username and top_user.username != "Yo'q":
+            user_name = f"@{top_user.username}"
+        else:
+            user_name = f"ID:<code>{top_user.user_id}</code>"
+            
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "👤"
-        
         text += f"{medal} {i}. {user_name} — <b>{top_user.points} ball</b>\n"
 
-    text += f"\n\nSizning ballaringiz: <b>{getattr(message, 'user_points', 'Noma\'lum')}</b>" # Middleware orqali ballni ham yuborsa bo'ladi
+    # O'z ballingiz (Middleware orqali kelgan obyektni ishlatamiz)
+    my_points = user.points if user.points is not None else 0
+    text += f"\n\nSizning ballaringiz: <b>{my_points} ball</b>"
+    
     await message.answer(text)
 
 
