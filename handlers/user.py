@@ -7,10 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 router = Router()
 
 
-# ================= TUGMA HANDLERLARI =================
-@router.message(F.text == "🔍 Anime qidirish")
-async def anime_search(message: types.Message):
-    await message.answer("🔍 Qidirmoqchi bo'lgan anime nomini yozing:")
+
 
 
 @router.message(F.text == "👤 Shaxsiy kabinet")
@@ -87,6 +84,6 @@ async def buy_vip(message: types.Message):
 
 @router.message(F.text == "📢 Reklama berish")
 async def advertisement(message: types.Message):
-    await message.answer("📢 Reklama uchun: @admin")
+    await message.answer("📢Reklama xizmati tez kunda...")
 
 

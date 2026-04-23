@@ -32,21 +32,20 @@ async def get_sub_keyboard(session: AsyncSession) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 async def check_subscription(bot: Bot, user_id: int, session: AsyncSession) -> bool:
-    # 1. Keshdan kanallarni qidiramiz
-    cached_channels = await valkey.get("custom", "active_channels_list")
+    # 1. Keshdan qidiramiz (Klassdagi get formatiga mos: table="custom", id="channels")
+    channels_data = await valkey.get("custom", "channels")
     
-    if cached_channels:
-        channels_data = cached_channels
-    else:
-        # 2. Keshda bo'lmasa, bazadan olamiz
+    if not channels_data:
+        # 2. Bazadan olish
         stmt = select(Channel).where(Channel.is_active == True)
         result = await session.execute(stmt)
         active_channels = result.scalars().all()
         
         channels_data = [{"id": ch.channel_id, "url": ch.url, "title": ch.title} for ch in active_channels]
         
-        # 3. Keshga yozamiz (15 daqiqaga)
-        await valkey.set_custom("custom:active_channels_list", channels_data, expire=900)
+        # 3. Keshga yozish (Kalitni to'g'ri formatda beramiz)
+        # CacheManager._get_key("custom", "channels") -> "custom:channels" hosil qiladi
+        await valkey.set_custom("custom:channels", channels_data, expire=900)
 
     if not channels_data:
         return True

@@ -41,11 +41,12 @@ async def on_startup(bot: Bot):
 
 
 async def on_shutdown(bot: Bot):
-    await bot.delete_webhook()
+    # Eski tiqilib qolgan (pending) startlarni o'chirib yuboradi
+    await bot.delete_webhook(drop_pending_updates=True) 
     print("🛑 Webhook o'chirildi.")
 
 
-# ... (importlar o'zgarishsiz qoladi)
+
 
 def main():
     logging.basicConfig(level=logging.INFO)
