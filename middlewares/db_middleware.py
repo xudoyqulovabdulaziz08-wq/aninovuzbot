@@ -7,6 +7,7 @@ from aiogram.types import TelegramObject, User
 from sqlalchemy import select
 from database.models import DBUser
 from database.cache import valkey 
+from config import config
 
 logger = logging.getLogger("DbMiddleware")
 

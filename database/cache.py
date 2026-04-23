@@ -6,8 +6,9 @@ from typing import Any, Optional, Dict, List
 from sqlalchemy import inspect
 import redis.asyncio as redis
 from redis.exceptions import RedisError, ConnectionError, TimeoutError
-
+from config import config
 logger = logging.getLogger("CacheManager")
+
 
 class CacheManager:
     def __init__(self, url: str):
@@ -24,7 +25,6 @@ class CacheManager:
         
         # 0.15 BALL UPGRADE: Monitoring metrics
         self.stats = {"hits": 0, "misses": 0, "errors": 0}
-
     def _get_key(self, table_name: str, obj_id: Any) -> str:
         return f"{self.namespace}:{table_name}:{obj_id}:{self.version}"
 
@@ -34,7 +34,7 @@ class CacheManager:
         if isinstance(obj, (bytes, bytearray)):
             return obj.decode('utf-8', errors='ignore')
         return str(obj)
-
+    
     # ================= MONITORING (PREMIUM FEATURE) =================
 
     def get_hit_ratio(self) -> dict:
@@ -97,7 +97,7 @@ class CacheManager:
             return {oid: None for oid in obj_ids}
 
     # ================= WRITE OPERATIONS =================
-
+    
     async def set_many(self, table_name: str, mapping: Dict[Any, Any], expire: int = 3600):
         """
         10/10 UPGRADE: 
