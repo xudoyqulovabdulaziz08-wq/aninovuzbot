@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from anyio import Path
+
 import ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from config import config
