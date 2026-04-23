@@ -129,7 +129,7 @@ class CacheManager:
     async def set_model(self, obj: Any, expire: int = 3600, exclude_fields: Optional[set] = None):
         if obj is None: return
         try:
-            state = inspect(obj, raise_err=False)
+            state = inspect(obj, raiseerr=False)
             if state is None or state.detached: return
             
             mapper = state.mapper

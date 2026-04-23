@@ -7,52 +7,64 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from database.connection import AsyncSessionLocal, engine, check_db
 from middlewares.db_middleware import DbSessionMiddleware
-from handlers import start
-from handlers.admin import router as admin_router
-from handlers.user import router as user_router
-from handlers.anime import router as anime_router
-from database.events import *
+from handlers import start, admin, user, anime
+import database.events as events
 from database.models import Base
 from config import config
 from database.cache import valkey
 
-# ================= SOZLAMALAR =================
-# Render sizga bepul domain beradi: https://SIZNING_BOT_NOMI.onrender.com
-WEBHOOK_HOST = config.WEBHOOK_HOST            # .env dan oladi
-WEBHOOK_PATH = f"/webhook/{config.BOT_TOKEN}"
-WEBHOOK_URL  = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-
-WEB_SERVER_HOST = "0.0.0.0"
-WEB_SERVER_PORT = config.PORT                 # Render PORT env o'zgaruvchisini beradi
-
+# ✅ Named Logger (Root logger o'rniga)
+logger = logging.getLogger("Main")
 
 async def create_tables():
+    """Baza jadvallarini sinxronizatsiya qilish."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print("✅ Jadvallar tayyor!")
-
+    logger.info("✅ Database tables are synchronized.")
 
 async def on_startup(bot: Bot):
+    """Bot ishga tushgandagi lifecycle."""
     await check_db()
-    #await valkey.connect()
-    # Eski tiqilib qolgan (pending) startlarni o'chirib yuboradi
+    
+    # ✅ Defensive Redis Ping
+    if hasattr(valkey, "redis"):
+        try:
+            await valkey.redis.ping()
+            logger.info("✅ Valkey (Redis) connection successful.")
+        except Exception as e:
+            logger.warning(f"⚠️ Redis ping failed: {e}. Running without cache.")
+
+    # Webhook sozlash
     await bot.delete_webhook(drop_pending_updates=True)
     await create_tables()
-    await bot.set_webhook(WEBHOOK_URL)
-    print(f"🚀 Webhook o'rnatildi: {WEBHOOK_URL}")
-
+    
+    await bot.set_webhook(
+        url=config.WEBHOOK_URL,
+        allowed_updates=["message", "callback_query", "inline_query"]
+    )
+    logger.info(f"🚀 Webhook set: {config.WEBHOOK_URL}")
 
 async def on_shutdown(bot: Bot):
+    """Bot to'xtatilgandagi cleanup."""
+    logger.info("🛑 Starting shutdown sequence...")
+    
     await bot.delete_webhook()
-    # shutdown handler ichida
+    
+    if bot.session:
+        await bot.session.close()
+    
     await valkey.close()
-    print("🛑 Webhook o'chirildi.")
-
-
-
+    await engine.dispose()
+    
+    logger.info("✅ All connections closed safely. Goodbye!")
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    # Logging konfiguratsiyasi
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
     bot = Bot(
         token=config.BOT_TOKEN,
@@ -60,26 +72,35 @@ def main():
     )
     dp = Dispatcher()
 
-    # Startup va Shutdown
+    # Lifecycle registration
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # Middleware (Middleware barcha update'larga ta'sir qilishi uchun update.middleware to'g'ri)
+    # Middleware integration
     dp.update.middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
 
-    # --- ROUTERLARNI ULASH ---
-    # E'tibor bering: Import qilingan nomning o'zini qo'yamiz
-    dp.include_router(start.router)      # Agar start.py dan 'router' deb import qilingan bo'lsa
-    dp.include_router(user_router)       # Importda 'as user_router' deyilgan
-    dp.include_router(anime_router)      # Importda 'as anime_router' deyilgan
-    dp.include_router(admin_router)      # Importda 'as admin_router' deyilgan
+    # Router registration
+    dp.include_router(start.router)
+    dp.include_router(admin.router)
+    dp.include_router(user.router)
+    dp.include_router(anime.router)
 
-    # Webhook sozlamalari
+    # ✅ Webhook Application setup (Redundancy fix)
     app = web.Application()
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
+    
+    # SimpleRequestHandler orqali webhook yo'lini bog'laymiz
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot
+    )
+    webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
+    
+    # setup_application faqat aiohttp bilan dp lifecycle'ni bog'lash uchun
+    setup_application(app, dp) # Bot bu yerda shart emas, chunki handler ichida bor
 
-    web.run_app(app, host=WEB_SERVER_HOST, port=WEB_SERVER_PORT)
+    # Serverni ishga tushirish
+    logger.info(f"📡 Starting web server on port {config.PORT}")
+    web.run_app(app, host="0.0.0.0", port=config.PORT)
 
 if __name__ == "__main__":
     main()
