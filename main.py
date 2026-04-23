@@ -13,7 +13,7 @@ from database.models import Base
 from config import config
 from database.cache import valkey
 
-# ✅ Named Logger (Root logger o'rniga)
+# ✅ Named Logger
 logger = logging.getLogger("Main")
 
 async def create_tables():
@@ -23,7 +23,10 @@ async def create_tables():
     logger.info("✅ Database tables are synchronized.")
 
 async def on_startup(bot: Bot):
-    """Bot ishga tushgandagi lifecycle."""
+    """
+    Bot ishga tushgandagi lifecycle.
+    TypeError bo'lmasligi uchun setup_application'da bot uzatilgan bo'lishi shart.
+    """
     await check_db()
     
     # ✅ Defensive Redis Ping
@@ -85,18 +88,18 @@ def main():
     dp.include_router(user.router)
     dp.include_router(anime.router)
 
-    # ✅ Webhook Application setup (Redundancy fix)
+    # Webhook Application setup
     app = web.Application()
     
-    # SimpleRequestHandler orqali webhook yo'lini bog'laymiz
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
         bot=bot
     )
     webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
     
-    # setup_application faqat aiohttp bilan dp lifecycle'ni bog'lash uchun
-    setup_application(app, dp) # Bot bu yerda shart emas, chunki handler ichida bor
+    # ✅ MUTLOQ FIX: setup_application ichiga bot=bot qaytarildi. 
+    # Busiz on_startup(bot) ishlamaydi va TypeError beradi.
+    setup_application(app, dp, bot=bot) 
 
     # Serverni ishga tushirish
     logger.info(f"📡 Starting web server on port {config.PORT}")
