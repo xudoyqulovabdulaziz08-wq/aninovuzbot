@@ -8,6 +8,8 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from database.connection import AsyncSessionLocal, engine, check_db
 from middlewares.db_middleware import DbSessionMiddleware
 from handlers import start
+from handlers.admin import creator_panel, admin_panel
+from handlers.user import personal_cabinet, anime_search, rating
 from database.events import *
 from database.models import Base
 from config import config
@@ -56,6 +58,8 @@ def main():
 
     dp.update.middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
     dp.include_router(start.router)
+    dp.include_router(personal_cabinet.router)
+    dp.include_router(rating.router)
 
     app = web.Application()
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
