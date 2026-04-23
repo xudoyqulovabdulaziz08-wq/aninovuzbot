@@ -10,6 +10,6 @@ class Config:
 
     # Webhook uchun (Render avtomatik PORT beradi)
     WEBHOOK_HOST: str = os.getenv("WEBHOOK_HOST", "")   # https://sizning-bot.onrender.com
-    PORT: int         = int(os.getenv("PORT", "27624"))
-
+    PORT: int         = int(os.getenv("PORT", "27624"))  
+    CREATOR_ID: int   = int(os.getenv("CREATOR_ID", "")) 
 config = Config()

@@ -30,11 +30,16 @@ class CacheManager:
         pk_value = getattr(obj, pk_name)
         key = self._get_key(obj.__tablename__, pk_value)
         await self.redis.set(key, json.dumps(data, default=str), ex=expire)
+    
+    async def set_custom(self, key: str, data: any, expire: int = 600):
+        """Ixtiyoriy ma'lumotni keshga saqlash"""
+        await self.redis.set(key, json.dumps(data, default=str), ex=expire)
 
     async def invalidate(self, table_name: str, obj_id):
         """Keshni o'chirish"""
         key = self._get_key(table_name, obj_id)
         await self.redis.delete(key)
+    # CacheManager ichiga qo'shib qo'ying
 
 
 # ✅ URL .env faylidan olinadi (credentials GitHub'da ko'rinmaydi)
