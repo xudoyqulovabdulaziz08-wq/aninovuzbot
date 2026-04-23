@@ -44,7 +44,8 @@ async def on_startup(bot: Bot):
 
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
-    #await valkey.close()
+    # shutdown handler ichida
+    await valkey.close()
     print("🛑 Webhook o'chirildi.")
 
 
