@@ -34,15 +34,17 @@ async def create_tables():
 
 async def on_startup(bot: Bot):
     await check_db()
-    await valkey.connect()
+    #await valkey.connect()
+    # Eski tiqilib qolgan (pending) startlarni o'chirib yuboradi
+    await bot.delete_webhook(drop_pending_updates=True)
     await create_tables()
     await bot.set_webhook(WEBHOOK_URL)
     print(f"🚀 Webhook o'rnatildi: {WEBHOOK_URL}")
 
 
 async def on_shutdown(bot: Bot):
-    # Eski tiqilib qolgan (pending) startlarni o'chirib yuboradi
-    await bot.delete_webhook(drop_pending_updates=True) 
+    await bot.delete_webhook()
+    #await valkey.close()
     print("🛑 Webhook o'chirildi.")
 
 
