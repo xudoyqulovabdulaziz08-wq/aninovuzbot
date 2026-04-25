@@ -16,21 +16,29 @@ class DbSessionMiddleware(BaseMiddleware):
         self.session_pool = session_pool
 
     async def __call__(self, handler, event, data):
+        # 1. Foydalanuvchini aniqlash uchun tezkor sessiya
         async with self.session_pool() as session:
-            # data["session"] emas, data["db"] deb bering (agar handlerda db: AsyncSession bo'lsa)
-            data["db"] = session 
-        
             user_obj: User = data.get("event_from_user")
+            db_user = None
             if user_obj:
                 try:
-                    # 3 soniya ichida foydalanuvchini topolmasa, xato bermasligi uchun
-                    db_user = await asyncio.wait_for(self._resolve_user(session, user_obj), timeout=3.0)
-                    data["user"] = db_user or self._get_emergency_user(user_obj)
-                except asyncio.TimeoutError:
-                    data["user"] = self._get_emergency_user(user_obj)
-                    logger.warning(f"⚠️ User resolve timeout for {user_obj.id}")
-        
-        return await handler(event, data)
+                    db_user = await asyncio.wait_for(
+                        self._resolve_user(session, user_obj), 
+                        timeout=3.0
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ User resolve failed: {e}")
+            
+            # Emergency user fallback
+            data["user"] = db_user or self._get_emergency_user(user_obj)
+            
+            # ❗ BU YERDA sessiya yopildi (context manager tugadi)
+
+        # 2. Handler uchun YANGI sessiya ochamiz
+        # Bu handler tugashi bilan darhol yopilishini kafolatlaydi
+        async with self.session_pool() as handler_session:
+            data["db"] = handler_session
+            return await handler(event, data)
 
     def _get_emergency_user(self, user_obj: User) -> SimpleNamespace:
         """
