@@ -6,8 +6,8 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-from database.connection import AsyncSessionLocal, engine, cache_worker, check_db
-from middlewares.db_middleware import DbSessionMiddleware
+from database.connection import AsyncSessionLocal, engine,  check_db
+from middlewares.db_middleware import DbSessionMiddleware, cache_worker
 from handlers import start, admin, user, anime
 import database.events as events
 from database.models import Base
