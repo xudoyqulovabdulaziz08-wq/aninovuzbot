@@ -1,9 +1,11 @@
 import logging
+from aiogram.types import User
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from redis import asyncio
 
 from database.connection import AsyncSessionLocal, engine, check_db
 from middlewares.db_middleware import DbSessionMiddleware
@@ -22,30 +24,22 @@ async def create_tables():
         await conn.run_sync(Base.metadata.create_all)
     logger.info("✅ Database tables are synchronized.")
 
-async def on_startup(bot: Bot):
-    """
-    Bot ishga tushgandagi lifecycle.
-    TypeError bo'lmasligi uchun setup_application'da bot uzatilgan bo'lishi shart.
-    """
-    await check_db()
-    
-    # ✅ Defensive Redis Ping
-    if hasattr(valkey, "redis"):
-        try:
-            await valkey.redis.ping()
-            logger.info("✅ Valkey (Redis) connection successful.")
-        except Exception as e:
-            logger.warning(f"⚠️ Redis ping failed: {e}. Running without cache.")
-
-    # Webhook sozlash
-    await bot.delete_webhook(drop_pending_updates=True)
-    await create_tables()
-    
-    await bot.set_webhook(
-        url=config.WEBHOOK_URL,
-        allowed_updates=["message", "callback_query", "inline_query"]
-    )
-    logger.info(f"🚀 Webhook set: {config.WEBHOOK_URL}")
+async def __call__(self, handler, event, data):
+    async with self.session_pool() as session:
+        # data["session"] emas, data["db"] deb bering (agar handlerda db: AsyncSession bo'lsa)
+        data["db"] = session 
+        
+        user_obj: User = data.get("event_from_user")
+        if user_obj:
+            try:
+                # 3 soniya ichida foydalanuvchini topolmasa, xato bermasligi uchun
+                db_user = await asyncio.wait_for(self._resolve_user(session, user_obj), timeout=3.0)
+                data["user"] = db_user or self._get_emergency_user(user_obj)
+            except asyncio.TimeoutError:
+                data["user"] = self._get_emergency_user(user_obj)
+                logger.warning(f"⚠️ User resolve timeout for {user_obj.id}")
+        
+        return await handler(event, data)
 
 async def on_shutdown(bot: Bot):
     """Bot to'xtatilgandagi cleanup."""
