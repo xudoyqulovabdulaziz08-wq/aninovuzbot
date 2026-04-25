@@ -15,22 +15,22 @@ class DbSessionMiddleware(BaseMiddleware):
     def __init__(self, session_pool):
         self.session_pool = session_pool
 
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: Dict[str, Any],
-    ) -> Any:
+    async def __call__(self, handler, event, data):
         async with self.session_pool() as session:
-            data["session"] = session
-            user_obj: User = data.get("event_from_user")
+            # data["session"] emas, data["db"] deb bering (agar handlerda db: AsyncSession bo'lsa)
+            data["db"] = session 
         
+            user_obj: User = data.get("event_from_user")
             if user_obj:
-                # ❗ 10/10 PROTECTION: Resolving user with absolute fallback
-                db_user = await self._resolve_user(session, user_obj)
-                data["user"] = db_user or self._get_emergency_user(user_obj)
-
-            return await handler(event, data)
+                try:
+                    # 3 soniya ichida foydalanuvchini topolmasa, xato bermasligi uchun
+                    db_user = await asyncio.wait_for(self._resolve_user(session, user_obj), timeout=3.0)
+                    data["user"] = db_user or self._get_emergency_user(user_obj)
+                except asyncio.TimeoutError:
+                    data["user"] = self._get_emergency_user(user_obj)
+                    logger.warning(f"⚠️ User resolve timeout for {user_obj.id}")
+        
+        return await handler(event, data)
 
     def _get_emergency_user(self, user_obj: User) -> SimpleNamespace:
         """
