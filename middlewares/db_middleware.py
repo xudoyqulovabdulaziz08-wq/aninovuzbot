@@ -2,105 +2,93 @@ import asyncio
 import logging
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, Union
+
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, User
 from sqlalchemy import select
+
 from database.models import DBUser
-from database.cache import valkey 
-from config import config
+from database.cache import valkey
 
 logger = logging.getLogger("DbMiddleware")
+
+# ✅ 1. Kesh uchun global navbat (Limit bilan)
+cache_queue = asyncio.Queue(maxsize=500)
+
+async def cache_worker():
+    """
+    Ushbu worker fonda bitta-bitta keshni yangilaydi. 
+    Bu asosiy Event Loop-ni tasklar bilan to'ldirib yubormaydi.
+    """
+    logger.info("👷 Cache Worker started.")
+    while True:
+        # Navbatdan foydalanuvchini olamiz
+        user_data = await cache_queue.get()
+        try:
+            # ✅ 10/10 FIX: Keshga yozishda qat'iy timeout va shield
+            await asyncio.wait_for(valkey.set_model(user_data), timeout=1.5)
+        except Exception as e:
+            logger.warning(f"🔴 Cache worker error: {e}")
+        finally:
+            cache_queue.task_done()
 
 class DbSessionMiddleware(BaseMiddleware):
     def __init__(self, session_pool):
         self.session_pool = session_pool
 
     async def __call__(self, handler, event, data):
-        # 1. Foydalanuvchini aniqlash uchun tezkor sessiya
         async with self.session_pool() as session:
             user_obj: User = data.get("event_from_user")
-            db_user = None
+            
             if user_obj:
-                try:
-                    db_user = await asyncio.wait_for(
-                        self._resolve_user(session, user_obj), 
-                        timeout=3.0
-                    )
-                except Exception as e:
-                    logger.warning(f"⚠️ User resolve failed: {e}")
+                db_user = await self._resolve_user(session, user_obj)
+                data["user"] = db_user or self._get_emergency_user(user_obj)
             
-            # Emergency user fallback
-            data["user"] = db_user or self._get_emergency_user(user_obj)
-            
-            # ❗ BU YERDA sessiya yopildi (context manager tugadi)
-
-        # 2. Handler uchun YANGI sessiya ochamiz
-        # Bu handler tugashi bilan darhol yopilishini kafolatlaydi
-        async with self.session_pool() as handler_session:
-            data["db"] = handler_session
+            data["db"] = session
             return await handler(event, data)
 
     def _get_emergency_user(self, user_obj: User) -> SimpleNamespace:
-        """
-        ❗ 10/10 LIGHTWEIGHT FALLBACK: 
-        ORM obyekt emas, balki xavfsiz SimpleNamespace qaytaramiz.
-        Bu sessiya bilan konflikt yaratmaydi va xotiradan yutadi.
-        """
-        return SimpleNamespace(
-            user_id=user_obj.id,
-            username=user_obj.username,
-            status="user",
-            is_emergency=True # Handlerlarda tekshirish uchun bayroq
-        )
+        return SimpleNamespace(user_id=user_obj.id, username=user_obj.username, status="user")
 
-    async def _resolve_user(self, session, user_obj: User) -> Union[DBUser, None]:
-        """Userni kesh yoki bazadan aniqlash logikasi."""
-        
-        # 1. KESHNI TEKSHIRISH (v1 namespace bilan)
-        cached_data = await valkey.get("db_users", user_obj.id)
-
-        if cached_data:
-            try:
-                # ORM Mapping protection
-                allowed_columns = DBUser.__table__.columns.keys()
-                filtered_data = {k: v for k, v in cached_data.items() if k in allowed_columns}
-                
-                db_user = DBUser(**filtered_data)
-                
-                # Username sync logic
-                if db_user.username != user_obj.username:
-                    db_user.username = user_obj.username
-                    merged_user = await session.merge(db_user)
-                    await session.commit()
-                    asyncio.create_task(valkey.set_model(merged_user))
-                    return merged_user
-                
-                return db_user
-            except Exception as e:
-                logger.error(f"Cache mapping failed for {user_obj.id}: {e}")
-
-        # 2. DB FALLBACK
+    async def _resolve_user(self, session, user_obj: User):
+        # 1. Keshni tekshirish
         try:
-            result = await session.execute(
-                select(DBUser).where(DBUser.user_id == user_obj.id)
-            )
+            cached_data = await asyncio.wait_for(valkey.get("db_users", user_obj.id), timeout=0.8)
+            if cached_data:
+                # Username o'zgarmagan bo'lsa keshdan beramiz
+                if cached_data.get("username") == user_obj.username:
+                    return SimpleNamespace(**cached_data)
+        except Exception:
+            pass # Keshda yo'q yoki timeout bo'lsa DBga o'tamiz
+
+        # 2. DB Fallback
+        try:
+            result = await session.execute(select(DBUser).where(DBUser.user_id == user_obj.id))
             db_user = result.scalar_one_or_none()
 
-            # 3. DB CREATE (Agar yangi foydalanuvchi bo'lsa)
             if not db_user:
-                db_user = DBUser(
-                    user_id=user_obj.id,
-                    username=user_obj.username,
-                    status="user"
-                )
+                db_user = DBUser(user_id=user_obj.id, username=user_obj.username, status="user")
                 session.add(db_user)
                 await session.commit()
                 await session.refresh(db_user)
-            
-            # Non-blocking cache update
-            asyncio.create_task(valkey.set_model(db_user))
-            return db_user
+            elif db_user.username != user_obj.username:
+                db_user.username = user_obj.username
+                await session.commit()
+                await session.refresh(db_user)
 
+            # ✅ 2. create_task O'RNIGA navbatga qo'shamiz
+            try:
+                # Obyektni emas, dict ko'rinishini navbatga beramiz (DetachedInstanceError bo'lmasligi uchun)
+                user_dict = {
+                    "user_id": db_user.user_id,
+                    "username": db_user.username,
+                    "status": db_user.status
+                }
+                cache_queue.put_nowait(user_dict)
+            except asyncio.QueueFull:
+                logger.warning("⚠️ Cache queue full, skipping update.")
+
+            return db_user
         except Exception as e:
-            logger.critical(f"DATABASE CRITICAL FAILURE: {e}")
-            return None # Emergency user __call__ ichida ishga tushadi
+            logger.error(f"❌ DB Failure: {e}")
+            return None

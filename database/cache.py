@@ -14,11 +14,11 @@ class CacheManager:
     def __init__(self, url: str):
         self.redis = redis.from_url(
             url, 
-            decode_responses=True,
-            socket_timeout=2.0,
+            max_connections=100,         # 🔥 Ulanishlar sonini oshirdik
+            socket_timeout=2.0,          # 2 soniyada uzish
             socket_connect_timeout=2.0,
             retry_on_timeout=True,
-            max_connections=30
+            decode_responses=True
         )
         self.version = "v1"
         self.namespace = "cache"
