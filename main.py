@@ -15,6 +15,8 @@ from handlers import start, admin, user, anime
 # ✅ Global Task Tracker
 background_tasks = set()
 logger = logging.getLogger("Main")
+base_url = config.WEBHOOK_URL.rstrip("/") # Webhook URL ni to'g'ri formatlash
+
 
 async def health_check_handler(request):
     """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
@@ -46,10 +48,11 @@ async def on_startup(bot: Bot):
         await conn.run_sync(Base.metadata.create_all)
 
     # 4. Webhook Setup
+    
     await bot.set_webhook(
-        url=f"{config.WEBHOOK_URL}{config.WEBHOOK_PATH}",
+        url=f"{base_url}{config.WEBHOOK_PATH}", 
         allowed_updates=["message", "callback_query", "inline_query"],
-        drop_pending_updates=True # Har safar startda tozalaydi
+        drop_pending_updates=True
     )
 
     # 5. Managed Worker Lifecycle
