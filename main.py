@@ -15,25 +15,17 @@ from handlers import start, admin, user, anime
 # ✅ Global Task Tracker
 background_tasks = set()
 logger = logging.getLogger("Main")
-base_url = config.WEBHOOK_URL.rstrip("/") # Webhook URL ni to'g'ri formatlash
-
 
 async def health_check_handler(request):
     """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
     return web.Response(text="AniNowuz SaaS Engine is running! 🚀", status=200)
 
 async def on_startup(bot: Bot):
-    """Industrial Startup: Safety First."""
+    """Industrial Startup: Webhook Logic Fix."""
     
-    # 1. Oldingi navbatdagi (spam) xabarlarni tozalash (MUHIM!)
+    # 1. Oldingi navbatdagi barcha xatoliklarni tozalash
     await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("🗑 Pending updates dropped.")
-
-    if not config.WEBHOOK_URL:
-        critical_error = "❌ WEBHOOK_URL is not set! Server cannot start."
-        logger.critical(critical_error)
-        raise ValueError(critical_error)
-
+    
     # 2. Infra Check
     await check_db()
     try:
@@ -47,13 +39,16 @@ async def on_startup(bot: Bot):
         from database.models import Base
         await conn.run_sync(Base.metadata.create_all)
 
-    # 4. Webhook Setup
-    
+    # 4. Webhook Setup (LOGIC FIX)
+    if not config.WEBHOOK_URL:
+        raise ValueError("❌ WEBHOOK_HOST is missing in environment variables!")
+
     await bot.set_webhook(
-        url=f"{base_url}{config.WEBHOOK_PATH}", 
+        url=config.WEBHOOK_URL, # <--- FAQAT SHU!
         allowed_updates=["message", "callback_query", "inline_query"],
         drop_pending_updates=True
     )
+    logger.info(f"🌐 Webhook Live: {config.WEBHOOK_URL}")
 
     # 5. Managed Worker Lifecycle
     for i in range(1, 4):
@@ -64,9 +59,8 @@ async def on_startup(bot: Bot):
     logger.info(f"🔥 AniNowuz Engine Live | Workers: {len(background_tasks)}")
 
 async def on_shutdown(bot: Bot):
-    """Graceful Shutdown: No Ghost Tasks."""
+    """Graceful Shutdown."""
     logger.info("🛑 Shutdown sequence initiated...")
-    
     if background_tasks:
         for task in background_tasks:
             task.cancel()
@@ -89,12 +83,11 @@ def main():
     )
     dp = Dispatcher()
 
-    # --- 🛡 MIDDLEWARE REGISTRATION (Sizda shu yetishmayotgan edi) ---
-    # Barcha update'lar uchun bazani tayyorlaydi
+    # --- 🛡 MIDDLEWARE (Outer middleware ishlatamiz) ---
     dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
 
-    # --- 🔀 ROUTERS REGISTRATION ---
-    dp.include_router(admin.router) # Admin birinchi
+    # --- 🔀 ROUTERS ---
+    dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(anime.router)
     dp.include_router(user.router)
@@ -106,6 +99,7 @@ def main():
     app = web.Application()
     app.router.add_get("/", health_check_handler)
     
+    # SimpleRequestHandler faqat PATH ni so'raydi, to'liq URL ni emas!
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
     
@@ -115,4 +109,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
