@@ -25,10 +25,14 @@ async def creator_panel(message: types.Message):
     )
 
 # ================= admin panel =================
+from sqlalchemy.ext.asyncio import AsyncSession
+
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
-async def admin_panel(message: types.Message, user: DBUser):
+async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession): # <-- session qo'shildi
+    
     # Creator yoki Admin ekanligini tekshiramiz
-    if message.from_user.id == CREATOR_ID or user.status == "admin":
+    # Tavsiya: config.CREATOR_ID ni ishlating
+    if message.from_user.id == config.CREATOR_ID or user.status == "admin":
         await message.answer(
             "⚙️ <b>Admin panel</b>\n\n"
             "• Foydalanuvchilar ro'yxati\n"
@@ -36,4 +40,4 @@ async def admin_panel(message: types.Message, user: DBUser):
             "• Statistika"
         )
     else:
-        await message.answer("❌ Ruxsat yo'q! Bu bo'lim faqat adminlar uchun.") 
+        await message.answer("❌ Ruxsat yo'q! Bu bo'lim faqat adminlar uchun.")

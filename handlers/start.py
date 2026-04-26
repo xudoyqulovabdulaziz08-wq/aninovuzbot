@@ -97,7 +97,8 @@ async def get_sub_keyboard(missing_channels: list) -> types.InlineKeyboardMarkup
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession, bot: Bot):
-    # 1. Privilege Check
+    # 1. Privilege Check (Middleware orqali kelgan 'user' modelidan foydalanamiz)
+    # config.CREATOR_ID bilan tekshirish xavfsizlik uchun qo'shilgan
     is_privileged = (
         user.status in ["creator", "admin", "vip"] or 
         message.from_user.id == config.CREATOR_ID
@@ -110,6 +111,7 @@ async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession,
         )
 
     # 2. Strict Subscription Check
+    # 'session' middleware dan kelgan ulanishni ishlatadi
     is_subbed, missing = await check_subscription(bot, message.from_user.id, session)
     
     if not is_subbed:
@@ -121,19 +123,27 @@ async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession,
 
     # 3. Success Entry
     await message.answer(
-        f"👋 Xush kelibsiz, <b>{message.from_user.full_name}</b>!",
+        f"👋 Xush kelibsiz , <b>{message.from_user.full_name}</b>! Aninov ga",
         reply_markup=get_main_menu(user_id=message.from_user.id, status=user.status)
     )
+    
 
 @router.callback_query(F.data == "check_sub")
 async def check_sub_callback(callback: types.CallbackQuery, user: DBUser, session: AsyncSession, bot: Bot):
+    # Obunani qayta tekshirish
     is_subbed, _ = await check_subscription(bot, callback.from_user.id, session)
 
     if is_subbed:
-        await callback.message.delete()
+        # Xabarni tahrirlash o'rniga o'chirib yuborish (UI/UX uchun yaxshi)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+            
         await callback.message.answer(
             "✅ <b>Tabriklaymiz!</b> Barcha obunalar tasdiqlandi.",
             reply_markup=get_main_menu(user_id=callback.from_user.id, status=user.status)
         )
     else:
+        # Alert orqali foydalanuvchini ogohlantirish
         await callback.answer("❌ Siz hali barcha kanallarga obuna bo'lmadingiz!", show_alert=True)
