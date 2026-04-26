@@ -1,5 +1,6 @@
 from datetime import datetime
 from aiogram import types, F, Router
+from matplotlib.pylab import Any
 from sqlalchemy import select, desc
 from database.models import DBUser
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,33 +12,45 @@ router = Router()
 
 
 @router.message(F.text == "👤 Shaxsiy kabinet")
-async def personal_cabinet(message: types.Message, user: DBUser):
+async def personal_cabinet(message: types.Message, user: Any):
+    # 1. Baza yoki Middleware'dan kelgan user ob'ektini xavfsiz tekshirish
+    # getattr(obj, attr, default) — agar attr bo'lmasa, default qaytaradi va xato bermaydi
+    vip_expire = getattr(user, 'vip_expire_date', None)
+    user_id = getattr(user, 'user_id', message.from_user.id)
+    status = getattr(user, 'status', 'user')
+    points = getattr(user, 'points', 0)
+    ref_count = getattr(user, 'referral_count', 0)
+
     now = datetime.now()
     vip_status = "❌ Faol emas"
     
-    # VIP muddatini tekshirish
-    if user.vip_expire_date:
-        if user.vip_expire_date > now:
-            vip_status = f"✅ {user.vip_expire_date.strftime('%d.%m.%Y')} gacha"
+    # VIP muddatini tekshirish (Endi xavfsiz)
+    if vip_expire:
+        if vip_expire > now:
+            vip_status = f"✅ {vip_expire.strftime('%d.%m.%Y')} gacha"
         else:
             vip_status = "⚠️ Muddati tugagan"
 
-    # 🚀 MUAMMONI YECHIMI: 
-    # Username'ni bazadan emas, hozirgi xabardan olamiz.
-    # Agar foydalanuvchida username bo'lmasa "O'rnatilmagan" deb chiqadi.
+    # Username'ni hozirgi xabardan olish (Sizning zo'r yechimingiz)
     current_username = message.from_user.username
     display_username = f"@{current_username}" if current_username else "O'rnatilmagan"
 
     text = (
         f"👤 <b>Shaxsiy kabinet</b>\n\n"
-        f"🆔 ID: <code>{user.user_id}</code>\n"
-        f"👤 Username: {display_username}\n"  # Jonli username
-        f"🏅 Status: <b>{user.status.upper()}</b>\n"
-        f"⭐ Ballar: <b>{user.points}</b>\n"
-        f"👥 Takliflar: <b>{user.referral_count}</b>\n"
+        f"🆔 ID: <code>{user_id}</code>\n"
+        f"👤 Username: {display_username}\n"
+        f"🏅 Status: <b>{status.upper()}</b>\n"
+        f"⭐ Ballar: <b>{points}</b>\n"
+        f"👥 Takliflar: <b>{ref_count}</b>\n"
         f"💎 VIP: <b>{vip_status}</b>"
     )
-    await message.answer(text)
+    
+    try:
+        await message.answer(text)
+    except Exception as e:
+        # Agar xabar yuborishda kutilmagan xato bo'lsa (masalan, bot bloklangan bo'lsa)
+        # bot o'chib qolmasligi uchun try-except ishlatamiz
+        print(f"Error sending message: {e}")
 
 
 @router.message(F.text == "🌟 Reyting")

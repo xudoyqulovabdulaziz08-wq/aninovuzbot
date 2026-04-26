@@ -156,7 +156,9 @@ class DbSessionMiddleware(BaseMiddleware):
             "user_id": db_user.user_id, 
             "username": db_user.username, 
             "status": db_user.status,
-            "points": getattr(db_user, 'points', 0)
+            "points": getattr(db_user, 'points', 0),
+            "referral_count": getattr(db_user, 'referral_count', 0),
+            "vip_expire_date": getattr(db_user, 'vip_expire_date', None),
         }
         
         # Navbatga qo'shish
@@ -171,5 +173,8 @@ class DbSessionMiddleware(BaseMiddleware):
             username=user_obj.username, 
             status="user", 
             is_emergency=True,
-            points=0
+            points=0,
+            referral_count=0,      # <--- QO'SHILDI
+            vip_expire_date=None,  # <--- QO'SHILDI (Sizdagi xatoni aynan shu davolaydi)
+            is_vip=False           # <--- QO'SHILDI
         )
