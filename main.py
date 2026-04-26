@@ -15,12 +15,18 @@ from handlers import start, admin, user, anime
 # ✅ Global Task Tracker
 background_tasks = set()
 logger = logging.getLogger("Main")
+
 async def health_check_handler(request):
     """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
     return web.Response(text="AniNowuz SaaS Engine is running! 🚀", status=200)
+
 async def on_startup(bot: Bot):
     """Industrial Startup: Safety First."""
-    # 1. Webhook URL Validatsiyasi (Silent Failure protection)
+    
+    # 1. Oldingi navbatdagi (spam) xabarlarni tozalash (MUHIM!)
+    await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("🗑 Pending updates dropped.")
+
     if not config.WEBHOOK_URL:
         critical_error = "❌ WEBHOOK_URL is not set! Server cannot start."
         logger.critical(critical_error)
@@ -40,17 +46,16 @@ async def on_startup(bot: Bot):
         await conn.run_sync(Base.metadata.create_all)
 
     # 4. Webhook Setup
-    await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(
-        url=config.WEBHOOK_URL,
-        allowed_updates=["message", "callback_query", "inline_query"]
+        url=f"{config.WEBHOOK_URL}{config.WEBHOOK_PATH}",
+        allowed_updates=["message", "callback_query", "inline_query"],
+        drop_pending_updates=True # Har safar startda tozalaydi
     )
 
     # 5. Managed Worker Lifecycle
     for i in range(1, 4):
         task = asyncio.create_task(cache_worker(i), name=f"Worker-{i}")
         background_tasks.add(task)
-        # Task o'z-o'zidan tugasa, set'dan o'chirish (Memory safety)
         task.add_done_callback(background_tasks.discard)
 
     logger.info(f"🔥 AniNowuz Engine Live | Workers: {len(background_tasks)}")
@@ -59,22 +64,15 @@ async def on_shutdown(bot: Bot):
     """Graceful Shutdown: No Ghost Tasks."""
     logger.info("🛑 Shutdown sequence initiated...")
     
-    # 1. Cancel Background Workers
     if background_tasks:
-        logger.info(f"Closing {len(background_tasks)} background workers...")
         for task in background_tasks:
             task.cancel()
-        # Workerlar yopilishini kutish
         await asyncio.gather(*background_tasks, return_exceptions=True)
     
-    # 2. Webhook Cleanup
     await bot.delete_webhook()
-    
-    # 3. Connections Cleanup
     await valkey.close()
     await engine.dispose()
-    
-    logger.info("✨ Clean shutdown complete. System offline.")
+    logger.info("✨ Clean shutdown complete.")
 
 def main():
     logging.basicConfig(
@@ -88,16 +86,23 @@ def main():
     )
     dp = Dispatcher()
 
-    # Registration
-    # Routers Registration
-    dp.include_router(admin.router) # Admin har doim birinchi
+    # --- 🛡 MIDDLEWARE REGISTRATION (Sizda shu yetishmayotgan edi) ---
+    # Barcha update'lar uchun bazani tayyorlaydi
+    dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
+
+    # --- 🔀 ROUTERS REGISTRATION ---
+    dp.include_router(admin.router) # Admin birinchi
     dp.include_router(start.router)
-    dp.include_router(anime.router) # Anime qidiruv va ro'yxat
-    dp.include_router(user.router)  # Profil va sozlamalar
-    # ... qolgan routerlar
+    dp.include_router(anime.router)
+    dp.include_router(user.router)
+
+    # --- 🚀 LIFECYCLE ---
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
 
     app = web.Application()
-    app.router.add_get("/", health_check_handler) # Health Check Endpoint
+    app.router.add_get("/", health_check_handler)
+    
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
     
@@ -107,3 +112,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
