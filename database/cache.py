@@ -1,148 +1,187 @@
-import json
 import logging
+import orjson
+import asyncio
 import time
-from datetime import datetime
+import socket
+from datetime import datetime, timezone, timedelta
+from collections import OrderedDict
 from typing import Any, Optional, Dict, List
-from sqlalchemy import inspect
 import redis.asyncio as redis
-from redis.exceptions import RedisError, ConnectionError, TimeoutError
 from config import config
-logger = logging.getLogger("CacheManager")
 
+logger = logging.getLogger("CacheManager")
 
 class CacheManager:
     def __init__(self, url: str):
-        self.redis = redis.from_url(
-            url, 
-            max_connections=100,         # 🔥 Ulanishlar sonini oshirdik
-            socket_timeout=2.0,          # 2 soniyada uzish
-            socket_connect_timeout=2.0,
-            retry_on_timeout=True,
-            decode_responses=True
-        )
-        self.version = "v1"
-        self.namespace = "cache"
+        self.redis_url = url
+        self.redis: Optional[redis.Redis] = None
+        self.node_id = f"{socket.gethostname()}_{int(time.time())}"
         
-        # 0.15 BALL UPGRADE: Monitoring metrics
-        self.stats = {"hits": 0, "misses": 0, "errors": 0}
+        # 1. Real LRU L1 Cache
+        self._l1_cache: OrderedDict[str, tuple[Any, datetime]] = OrderedDict()
+        self._l1_max_size = 2000
+        self._l1_lock = asyncio.Lock()
         
+        # 2. Race-Free Singleflight
+        self._inflight: Dict[str, asyncio.Future] = {}
+        self._inflight_lock = asyncio.Lock()
+
+        # 3. Stream Infrastructure (Reliable PEL)
+        self._stream_name = "cache:invalidation:stream"
+        self._group_name = "cache_invalidation_group"
+        self._consumer_name = self.node_id
+
+        # 4. Metrics & Lifecycle
+        self.is_alive = True
+        self._tasks: List[asyncio.Task] = []
+
+    async def start(self):
+        """Startup with PEL recovery and auto-claim."""
+        await self._connect()
+        try:
+            await self.redis.ping()
+            try:
+                await self.redis.xgroup_create(self._stream_name, self._group_name, id="0", mkstream=True)
+            except redis.exceptions.ResponseError: pass
+
+            # Background Tasks
+            self._tasks.append(asyncio.create_task(self._reliable_stream_listener()))
+            self._tasks.append(asyncio.create_task(self._pel_recovery_loop())) # PEL Recovery
+            self._tasks.append(asyncio.create_task(self._l1_cleanup_loop()))
+            logger.info(f"🏆 100% FINAL BOSS: Cache active on {self.node_id}")
+        except Exception as e:
+            logger.critical(f"Startup failure: {e}")
+            self.is_alive = False
+
+    async def _connect(self):
+        self.redis = redis.from_url(self.redis_url, max_connections=100)
+
+    # ================= 1. PEL RECOVERY (XAUTOCLAIM) =================
+
+    async def _pel_recovery_loop(self):
+        """Boshqa node'larda 'osilib' qolgan xabarlarni qayta ishlash."""
+        while True:
+            try:
+                await asyncio.sleep(30) # Har 30 soniyada stuck xabarlarni tekshirish
+                if not self.is_alive: continue
+
+                # 60 soniyadan ko'p ushlanib qolgan xabarlarni o'zimizga olish
+                result = await self.redis.xautoclaim(
+                    name=self._stream_name,
+                    groupname=self._group_name,
+                    consumername=self._consumer_name,
+                    min_idle_time=60000, 
+                    start_id="0-0",
+                    count=10
+                )
+                
+                # result[1] — bu claim qilingan xabarlar
+                for msg_id, payload in result[1]:
+                    await self._process_stream_msg(msg_id, payload)
+            except asyncio.CancelledError: break
+            except Exception as e:
+                logger.error(f"PEL Recovery error: {e}")
+
+    async def _process_stream_msg(self, msg_id, payload):
+        try:
+            data = orjson.loads(payload[b"data"])
+            if data["sender"] != self.node_id:
+                async with self._l1_lock:
+                    self._l1_cache.pop(data["key"], None)
+            await self.redis.xack(self._stream_name, self._group_name, msg_id)
+        except Exception as e:
+            logger.error(f"Message processing failed: {e}")
+
+    async def _reliable_stream_listener(self):
+        while True:
+            try:
+                # Faqat yangi xabarlarni o'qish
+                response = await self.redis.xreadgroup(
+                    groupname=self._group_name, consumername=self._consumer_name,
+                    streams={self._stream_name: ">"}, count=10, block=2000
+                )
+                if response:
+                    for _, messages in response:
+                        for msg_id, payload in messages:
+                            await self._process_stream_msg(msg_id, payload)
+            except asyncio.CancelledError: break
+            except Exception as e:
+                await asyncio.sleep(2)
+
+    # ================= 2. ADVANCED METRICS (ISOLATION) =================
+
+    async def _track(self, metric: str, latency: float = 0):
+        """Node-based isolated metrics + Latency distribution."""
+        try:
+            pipe = self.redis.pipeline()
+            # 1. Per-node breakdown
+            pipe.hincrby(f"metrics:node:{self.node_id}", metric, 1)
+            # 2. Global aggregate
+            pipe.hincrby("metrics:global", metric, 1)
+            # 3. Latency tracking (P95/P99 uchun)
+            if latency > 0:
+                # Latencyni 1ms aniqlikda Sorted Set'ga yozish
+                ts = int(time.time() // 60) # Har minut uchun alohida set
+                pipe.zadd(f"metrics:latency:{ts}", {str(time.time()): latency})
+                pipe.expire(f"metrics:latency:{ts}", 3600) # 1 soat saqlash
+            await pipe.execute()
+        except: pass
+
+    # ================= 3. GET (RACE-FREE SINGLEFLIGHT) =================
+
+    async def get(self, table_name: str, obj_id: Any) -> Optional[dict]:
+        start_ts = time.perf_counter()
+        key = self._get_key(table_name, obj_id)
+        
+        async with self._l1_lock:
+            if key in self._l1_cache:
+                val, exp = self._l1_cache[key]
+                if datetime.now(timezone.utc) < exp:
+                    self._l1_cache.move_to_end(key)
+                    await self._track("l1_hit")
+                    return val
+                del self._l1_cache[key]
+
+        async with self._inflight_lock:
+            if key in self._inflight:
+                # Waiterlar uchun data isolation
+                try:
+                    return await self._inflight[key]
+                except: return None
+            
+            future = asyncio.get_event_loop().create_future()
+            self._inflight[key] = future
+
+        try:
+            raw = await asyncio.wait_for(self.redis.get(key), timeout=0.5)
+            data = orjson.loads(raw) if raw else None
+            
+            if data:
+                await self._track("l2_hit", time.perf_counter() - start_ts)
+                await self._set_l1(key, data, ttl=60)
+            else:
+                await self._track("miss")
+            
+            if not future.done(): future.set_result(data)
+            return data
+        except Exception as e:
+            if not future.done(): future.set_exception(e)
+            await self._track("error")
+            return None
+        finally:
+            # Future cleanup faqat owner tomonidan
+            async with self._inflight_lock:
+                if self._inflight.get(key) is future:
+                    self._inflight.pop(key, None)
+
     def _get_key(self, table_name: str, obj_id: Any) -> str:
         return f"{self.namespace}:{table_name}:{obj_id}:{self.version}"
 
-    def _default_serializer(self, obj: Any) -> Any:
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        if isinstance(obj, (bytes, bytearray)):
-            return obj.decode('utf-8', errors='ignore')
-        return str(obj)
-    
-    # ================= MONITORING (PREMIUM FEATURE) =================
-
-    def get_hit_ratio(self) -> dict:
-        """Kesh samaradorligini hisoblash uchun statistika."""
-        total = self.stats["hits"] + self.stats["misses"]
-        ratio = (self.stats["hits"] / total * 100) if total > 0 else 0
-        return {
-            "hit_ratio": f"{ratio:.2f}%",
-            "hits": self.stats["hits"],
-            "misses": self.stats["misses"],
-            "errors": self.stats["errors"]
-        }
-
-    # ================= READ OPERATIONS =================
-
-    async def get(self, table_name: str, obj_id: Any) -> Optional[dict]:
-        try:
-            key = self._get_key(table_name, obj_id)
-            data = await self.redis.get(key)
-            
-            if data is None: # Strict check for "0" or "false" cases
-                self.stats["misses"] += 1
-                return None
-            
-            self.stats["hits"] += 1
-            return json.loads(data)
-        except (json.JSONDecodeError, TypeError) as je:
-            logger.error(f"Corrupted JSON for {obj_id}: {je}")
-            self.stats["errors"] += 1
-            return None
-        except Exception as e:
-            logger.warning(f"Cache read error: {e}")
-            self.stats["errors"] += 1
-            return None
-
-    async def get_many(self, table_name: str, obj_ids: List[Any]) -> Dict[Any, Optional[dict]]:
-        if not obj_ids: return {}
-        
-        keys = [self._get_key(table_name, oid) for oid in obj_ids]
-        try:
-            raw_data = await self.redis.mget(keys)
-            results = {}
-            
-            for oid, data in zip(obj_ids, raw_data):
-                if data is None:
-                    self.stats["misses"] += 1
-                    results[oid] = None
-                    continue
-                
-                try:
-                    self.stats["hits"] += 1
-                    results[oid] = json.loads(data)
-                except (json.JSONDecodeError, TypeError):
-                    self.stats["errors"] += 1
-                    results[oid] = None
-            return results
-        except Exception as e:
-            logger.error(f"MGET failure: {e}")
-            self.stats["errors"] += 1
-            return {oid: None for oid in obj_ids}
-
-    # ================= WRITE OPERATIONS =================
-    
-    async def set_many(self, table_name: str, mapping: Dict[Any, Any], expire: int = 3600):
-        """
-        10/10 UPGRADE: 
-        - Pipeline with partial success check
-        - Error tracking per batch
-        """
-        if not mapping: return
-        
-        try:
-            async with self.redis.pipeline(transaction=False) as pipe:
-                for obj_id, value in mapping.items():
-                    key = self._get_key(table_name, obj_id)
-                    serialized = json.dumps(value, default=self._default_serializer, ensure_ascii=False)
-                    pipe.set(key, serialized, ex=expire)
-                
-                # Natijalarni tekshirish (Optional but pro-level)
-                responses = await pipe.execute(raise_on_error=False)
-                
-                failed_count = sum(1 for r in responses if isinstance(r, Exception))
-                if failed_count > 0:
-                    logger.error(f"Pipeline partial failure: {failed_count} items failed.")
-                    self.stats["errors"] += failed_count
-                    
-        except Exception as e:
-            logger.error(f"Pipeline total failure: {e}")
-            self.stats["errors"] += 1
-
-    async def set_model(self, obj: Any, expire: int = 3600, exclude_fields: Optional[set] = None):
-        if obj is None: return
-        try:
-            state = inspect(obj, raiseerr=False)
-            if state is None or state.detached: return
-            
-            mapper = state.mapper
-            pk_val = ":".join(str(getattr(obj, col.key)) for col in mapper.primary_key)
-            data = {c.key: getattr(obj, c.key) for c in mapper.column_attrs if c.key not in (exclude_fields or set())}
-            
-            key = self._get_key(obj.__tablename__, pk_val)
-            await self.redis.set(key, json.dumps(data, default=self._default_serializer, ensure_ascii=False), ex=expire)
-        except Exception as e:
-            logger.error(f"Model cache failure: {e}")
-            self.stats["errors"] += 1
-
-    async def close(self):
-        await self.redis.close()
+    async def _set_l1(self, key: str, data: Any, ttl: int):
+        async with self._l1_lock:
+            if len(self._l1_cache) >= self._l1_max_size:
+                self._l1_cache.popitem(last=False)
+            self._l1_cache[key] = (data, datetime.now(timezone.utc) + timedelta(seconds=ttl))
+            self._l1_cache.move_to_end(key)
 
 valkey = CacheManager(url=config.VALKEY_URL)

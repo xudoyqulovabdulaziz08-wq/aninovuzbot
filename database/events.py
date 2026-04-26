@@ -1,98 +1,41 @@
-import redis
 import logging
-from sqlalchemy import event
-from config import config
-from database.models import (
-    DBUser, Anime, Genre, Episode, Comment, Favorite,
-    History, Ticket, Channel, HelpPage, FanGroup,
-    Advertisement, AdminSettings
-)
-# database/cache.py faylining oxirgi qatori
-VALKEY_URL = config.VALKEY_URL
-# ================= LOGGING =================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+import uuid
+from sqlalchemy import event, inspect
+from database.models import OutboxEvent, MODELS_TO_WATCH
+from datetime import datetime, timezone
+from uuid import uuid4
 
-logger = logging.getLogger("CacheSystem")
+logger = logging.getLogger("OutboxEmitter")
 
-# ================= REDIS (SAFE) =================
-sync_redis = redis.from_url(
-    VALKEY_URL,
-    socket_timeout=1,
-    socket_connect_timeout=1,
-    retry_on_timeout=True,
-    decode_responses=True
-)
-
-CACHE_VERSION = "v1"
-
-
-# ================= PK EXTRACTOR =================
 def get_pk_value(target):
-    """Universal PK extractor (supports composite keys)."""
     try:
-        mapper = target.__mapper__
-        pk_values = [getattr(target, col.key) for col in mapper.primary_key]
-        return ":".join(str(v) for v in pk_values)
+        state = inspect(target)
+        pk_values = [str(getattr(target, attr.key)) for attr in state.mapper.primary_key]
+        return ":".join(pk_values)
     except Exception as e:
-        logger.error(f"PK extraction failed for {target.__class__.__name__}: {e}")
+        logger.error(f"PK extraction failed: {e}")
         return None
 
+def attach_cache_listeners():
+    """Modellarda o'zgarish bo'lsa, Outbox jadvaliga belgi qo'yish."""
+    
+    for model_class in MODELS_TO_WATCH:
+        @event.listens_for(model_class, "after_insert")
+        @event.listens_for(model_class, "after_update")
+        @event.listens_for(model_class, "after_delete")
+        def on_model_change(mapper, connection, target):
+            pk_val = get_pk_value(target)
+            if not pk_val: return
 
-# ================= CACHE INVALIDATION =================
-def clear_valkey_cache(target):
-    """
-    Safe cache invalidation layer.
-    DB NEVER affected even if Redis fails.
-    """
-    pk_val = get_pk_value(target)
-    if not pk_val:
-        return
-
-    table_name = target.__tablename__
-
-    obj_key = f"{table_name}:{pk_val}:obj:{CACHE_VERSION}"
-
-    try:
-        pipe = sync_redis.pipeline()
-        pipe.delete(obj_key)
-
-        # special cases
-        if table_name == "anime_list":
-            pipe.delete(f"anime_list:all:list:{CACHE_VERSION}")
-
-        pipe.execute()
-
-        logger.info(f"Cache invalidated: {obj_key}")
-
-    except redis.exceptions.RedisError as e:
-        logger.warning(f"Redis unavailable, skipping cache invalidation: {e}")
-
-
-# ================= MODELS REGISTRY =================
-MODELS_TO_WATCH = [
-    DBUser, Anime, Genre, Episode,
-    Comment, Favorite, History, Ticket,
-    Channel, HelpPage, FanGroup,
-    Advertisement, AdminSettings
-]
-
-
-# ================= EVENT BINDING =================
-def attach_cache_invalidation_listener(model_class):
-    """
-    Bind SQLAlchemy events to cache invalidation.
-    Lightweight event layer (no heavy logic here).
-    """
-
-    @event.listens_for(model_class, "after_update")
-    @event.listens_for(model_class, "after_delete")
-    def on_model_change(mapper, connection, target):
-        clear_valkey_cache(target)
-
-
-# ================= INIT =================
-for model in MODELS_TO_WATCH:
-    attach_cache_invalidation_listener(model)
+            # Xabarni tranzaksiya ichida Outbox'ga yozamiz
+            # SQLAlchemy connection'dan foydalanamiz (Session emas)
+            connection.execute(
+                OutboxEvent.__table__.insert().values(
+                    id=str(uuid4()),
+                    aggregate=target.__tablename__,
+                    aggregate_id=pk_val,
+                    processed=False,
+                    created_at=datetime.now(timezone.utc)
+                )
+            )
+    logger.info("✅ Outbox listeners attached successfully.")

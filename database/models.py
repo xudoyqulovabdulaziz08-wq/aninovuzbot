@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
+import uuid
 
 from sqlalchemy import (
     CheckConstraint, Numeric, String, Integer, BigInteger, Boolean,
@@ -206,3 +207,13 @@ class AdminSettings(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), unique=True)
     role: Mapped[str] = mapped_column(String(20), default="moderator")
     user: Mapped["DBUser"] = relationship(back_populates="admin_settings")
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    aggregate = Column(String, nullable=False)   # Jadval nomi
+    aggregate_id = Column(String, nullable=False) # PK qiymati
+    processed = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
