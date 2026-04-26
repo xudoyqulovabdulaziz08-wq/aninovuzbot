@@ -15,7 +15,9 @@ from handlers import start, admin, user, anime
 # ✅ Global Task Tracker
 background_tasks = set()
 logger = logging.getLogger("Main")
-
+async def health_check_handler(request):
+    """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
+    return web.Response(text="AniNowuz SaaS Engine is running! 🚀", status=200)
 async def on_startup(bot: Bot):
     """Industrial Startup: Safety First."""
     # 1. Webhook URL Validatsiyasi (Silent Failure protection)
@@ -87,16 +89,15 @@ def main():
     dp = Dispatcher()
 
     # Registration
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
-    dp.update.middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
-    
-    # Routers
+    # Routers Registration
+    dp.include_router(admin.router) # Admin har doim birinchi
     dp.include_router(start.router)
-    dp.include_router(admin.router)
+    dp.include_router(anime.router) # Anime qidiruv va ro'yxat
+    dp.include_router(user.router)  # Profil va sozlamalar
     # ... qolgan routerlar
 
     app = web.Application()
+    app.router.add_get("/", health_check_handler) # Health Check Endpoint
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
     
