@@ -101,8 +101,7 @@ def main():
     
     # SimpleRequestHandler faqat PATH ni so'raydi, to'liq URL ni emas!
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
-    
+    webhook_requests_handler.register(app, path=config.WEBHOOK_PATH) # /webhook/TOKEN
     setup_application(app, dp, bot=bot)
     
     web.run_app(app, host="0.0.0.0", port=config.PORT)
