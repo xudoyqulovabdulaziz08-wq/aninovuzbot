@@ -27,45 +27,57 @@ CB_RECOVERY_TIME = 15 # 15 sekundga DB dam oladi
 # ✅ Industrial Batch Queue
 cache_queue = asyncio.Queue(maxsize=5000)
 
-async def cache_worker():
+async def cache_worker(worker_id: int): # ✅ FIX: worker_id argumenti qo'shildi
     """
     SaaS Overkill Worker: Redis Pipeline & Batch Processing.
     Har 50ms da yoki 50 ta item yig'ilganda Redis-ga paketlab yozadi.
     """
-    logger.info("👷 Master Cache Worker: READY")
+    logger.info(f"👷 Worker-{worker_id}: DEPLOYED") 
     batch = []
     
     while True:
         try:
             # Navbatdan itemni olish (50ms kutish bilan)
             try:
+                # wait_for orqali biz event loopni bloklamasdan kutamiz
                 item = await asyncio.wait_for(cache_queue.get(), timeout=0.05)
                 batch.append(item)
             except asyncio.TimeoutError:
-                pass # Batch'ni yozish vaqti keldi
+                pass # Timeout bo'lsa, demak navbatda xozircha narsa yo'q, batchni yozishga o'tamiz
 
-            if batch and (len(batch) >= 50 or batch[-1] is None):
-                # 🔥 FIX: Redis Pipeline (Batch Write)
+            # Agar batch yig'ilgan bo'lsa yoki navbat tugagan bo'lsa
+            if batch:
+                # Redis Pipeline: Tarmoq yuklamasini kamaytirish uchun paketlab yozish
                 async with valkey.redis.pipeline(transaction=False) as pipe:
                     for entry in batch:
                         if entry:
                             pipe.set(f"db_users:{entry['user_id']}", orjson.dumps(entry), ex=3600)
                     await pipe.execute()
                 
-                # L1 Cache-ni ham yangilaymiz
+                # L1 Cache (In-memory) yangilash
                 for entry in batch:
                     if entry:
                         L1_CACHE[entry['user_id']] = entry
-                        if len(L1_CACHE) > L1_MAX_SIZE: # FIFO evict
-                            L1_CACHE.pop(next(iter(L1_CACHE)))
+                        # FIFO: L1 cache hajmini nazorat qilish
+                        if len(L1_CACHE) > L1_MAX_SIZE:
+                            try:
+                                L1_CACHE.pop(next(iter(L1_CACHE)))
+                            except (StopIteration, KeyError):
+                                pass
                 
-                batch.clear()
-                for _ in range(len(batch)): cache_queue.task_done()
+                # Tasklarni yakunlangan deb belgilash
+                for _ in range(len(batch)):
+                    try:
+                        cache_queue.task_done()
+                    except ValueError:
+                        pass
+                
+                batch.clear() # Keyingi tsikl uchun batchni tozalaymiz
                 
         except Exception as e:
-            logger.error(f"🔴 Pipeline Worker error: {e}")
+            logger.error(f"🔴 Pipeline Worker-{worker_id} error: {e}")
             batch.clear()
-            await asyncio.sleep(1)
+            await asyncio.sleep(1) # Xatolik bo'lsa, sistemaga dam beramiz
 
 class DbSessionMiddleware(BaseMiddleware):
     def __init__(self, session_pool: async_sessionmaker):
