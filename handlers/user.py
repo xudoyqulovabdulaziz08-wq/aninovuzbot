@@ -1,6 +1,6 @@
 from datetime import datetime
 from aiogram import types, F, Router
-from matplotlib.pylab import Any
+from typing import Any  # ✅ To'g'risi shu
 from sqlalchemy import select, desc
 from database.models import DBUser
 from sqlalchemy.ext.asyncio import AsyncSession
