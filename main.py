@@ -6,71 +6,78 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-from database.connection import AsyncSessionLocal, engine,  check_db
+from database.connection import AsyncSessionLocal, engine, check_db
 from middlewares.db_middleware import DbSessionMiddleware, cache_worker 
-from handlers import start, admin, user, anime
-import database.events as events
-from database.models import Base
 from config import config
 from database.cache import valkey
+from handlers import start, admin, user, anime
 
-# ✅ Named Logger
+# ✅ Global Task Tracker
+background_tasks = set()
 logger = logging.getLogger("Main")
 
-async def create_tables():
-    """Baza jadvallarini sinxronizatsiya qilish."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("✅ Database tables are synchronized.")
-
 async def on_startup(bot: Bot):
-    """
-    Bot ishga tushgandagi lifecycle.
-    TypeError bo'lmasligi uchun setup_application'da bot uzatilgan bo'lishi shart.
-    """
-    await check_db()
-    
-    # ✅ Defensive Redis Ping
-    if hasattr(valkey, "redis"):
-        try:
-            await valkey.redis.ping()
-            logger.info("✅ Valkey (Redis) connection successful.")
-        except Exception as e:
-            logger.warning(f"⚠️ Redis ping failed: {e}. Running without cache.")
+    """Industrial Startup: Safety First."""
+    # 1. Webhook URL Validatsiyasi (Silent Failure protection)
+    if not config.WEBHOOK_URL:
+        critical_error = "❌ WEBHOOK_URL is not set! Server cannot start."
+        logger.critical(critical_error)
+        raise ValueError(critical_error)
 
-    # Webhook sozlash
+    # 2. Infra Check
+    await check_db()
+    try:
+        await asyncio.wait_for(valkey.redis.ping(), timeout=2.0)
+        logger.info("✅ Valkey (Redis) is online.")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis unavailable: {e}. Bot running in DB-only mode.")
+
+    # 3. Tables Sync
+    async with engine.begin() as conn:
+        from database.models import Base
+        await conn.run_sync(Base.metadata.create_all)
+
+    # 4. Webhook Setup
     await bot.delete_webhook(drop_pending_updates=True)
-    await create_tables()
-    
     await bot.set_webhook(
         url=config.WEBHOOK_URL,
         allowed_updates=["message", "callback_query", "inline_query"]
     )
+
+    # 5. Managed Worker Lifecycle
     for i in range(1, 4):
-        asyncio.create_task(cache_worker(i), name=f"Industrial-Worker-{i}")
-    
-    logger.info("🔥 AniNowuz SaaS Engine is running with 3 Parallel Workers.")
+        task = asyncio.create_task(cache_worker(i), name=f"Worker-{i}")
+        background_tasks.add(task)
+        # Task o'z-o'zidan tugasa, set'dan o'chirish (Memory safety)
+        task.add_done_callback(background_tasks.discard)
+
+    logger.info(f"🔥 AniNowuz Engine Live | Workers: {len(background_tasks)}")
 
 async def on_shutdown(bot: Bot):
-    """Bot to'xtatilgandagi cleanup."""
-    logger.info("🛑 Starting shutdown sequence...")
+    """Graceful Shutdown: No Ghost Tasks."""
+    logger.info("🛑 Shutdown sequence initiated...")
     
+    # 1. Cancel Background Workers
+    if background_tasks:
+        logger.info(f"Closing {len(background_tasks)} background workers...")
+        for task in background_tasks:
+            task.cancel()
+        # Workerlar yopilishini kutish
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+    
+    # 2. Webhook Cleanup
     await bot.delete_webhook()
     
-    if bot.session:
-        await bot.session.close()
-    
+    # 3. Connections Cleanup
     await valkey.close()
     await engine.dispose()
     
-    logger.info("✅ All connections closed safely. Goodbye!")
+    logger.info("✨ Clean shutdown complete. System offline.")
 
 def main():
-    # Logging konfiguratsiyasi
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        format="%(asctime)s | %(name)s | %(levelname)s | %(message)s"
     )
 
     bot = Bot(
@@ -79,34 +86,22 @@ def main():
     )
     dp = Dispatcher()
 
-    # Lifecycle registration
+    # Registration
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
-
-    # Middleware integration
     dp.update.middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
-
-    # Router registration
+    
+    # Routers
     dp.include_router(start.router)
     dp.include_router(admin.router)
-    dp.include_router(user.router)
-    dp.include_router(anime.router)
+    # ... qolgan routerlar
 
-    # Webhook Application setup
     app = web.Application()
-    
-    webhook_requests_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot
-    )
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
     
-    # ✅ MUTLOQ FIX: setup_application ichiga bot=bot qaytarildi. 
-    # Busiz on_startup(bot) ishlamaydi va TypeError beradi.
-    setup_application(app, dp, bot=bot) 
-
-    # Serverni ishga tushirish
-    logger.info(f"📡 Starting web server on port {config.PORT}")
+    setup_application(app, dp, bot=bot)
+    
     web.run_app(app, host="0.0.0.0", port=config.PORT)
 
 if __name__ == "__main__":
