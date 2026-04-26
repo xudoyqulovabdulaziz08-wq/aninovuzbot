@@ -7,7 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from database.connection import AsyncSessionLocal, engine,  check_db
-from middlewares.db_middleware import DbSessionMiddleware, cache_worker
+from middlewares.db_middleware import DbSessionMiddleware, cache_worker 
 from handlers import start, admin, user, anime
 import database.events as events
 from database.models import Base
@@ -46,9 +46,10 @@ async def on_startup(bot: Bot):
         url=config.WEBHOOK_URL,
         allowed_updates=["message", "callback_query", "inline_query"]
     )
-    asyncio.create_task(cache_worker())
-    logger.info("🚀 Background workers are active.")
-    logger.info(f"🚀 Background workers are active.,🚀 Webhook set: {config.WEBHOOK_URL}")
+    for i in range(1, 4):
+        asyncio.create_task(cache_worker(i), name=f"Industrial-Worker-{i}")
+    
+    logger.info("🔥 AniNowuz SaaS Engine is running with 3 Parallel Workers.")
 
 async def on_shutdown(bot: Bot):
     """Bot to'xtatilgandagi cleanup."""
