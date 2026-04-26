@@ -83,15 +83,32 @@ async def help_page(message: types.Message):
 
 
 @router.message(F.text == "💎 VIP sotib olish")
-async def buy_vip(message: types.Message):
-    await message.answer(
-        "💎 <b>VIP rejim</b>\n\n"
-        "✅ Reklamasiz ko'rish\n"
-        "✅ Barcha kanallar\n"
-        "✅ Maxsus kontentlar\n\n"
-        "Tez kunda..."
+async def buy_vip(message: types.Message, user: DBUser, session: AsyncSession = None):
+    """
+    VIP menyusi: Foydalanuvchi statusini tekshiradi va takliflarni ko'rsatadi.
+    """
+    # 1. Baza holatini tekshirish (Circuit Breaker xavfsizligi)
+    if session is None or user is None:
+        return await message.answer(
+            "⚠️ <b>VIP tizimi vaqtincha faol emas.</b>\n"
+            "Texnik ishlar olib borilmoqda, birozdan so'ng urinib ko'ring."
+        )
+
+    # 2. Foydalanuvchining hozirgi statusiga qarab matn tayyorlash
+    status_text = "✨ Sizning status: <b>VIP</b>" if user.is_vip else "🌑 Sizning status: <b>Oddiy foydalanuvchi</b>"
+    
+    text = (
+        f"💎 <b>VIP REJIM</b>\n\n"
+        f"{status_text}\n\n"
+        f"<b>VIP imkoniyatlari:</b>\n"
+        f"✅ Reklamasiz va cheklovsiz ko'rish\n"
+        f"✅ Barcha yopiq kanallarga kirish\n"
+        f"✅ Maxsus va pre-reliz kontentlar\n"
+        f"✅ Tezkor yuklab olish tezligi\n\n"
+        f"⏳ <b>To'lov tizimi tez kunda ishga tushadi!</b>"
     )
 
+    await message.answer(text)
 
 @router.message(F.text == "📢 Reklama berish")
 async def advertisement(message: types.Message):
