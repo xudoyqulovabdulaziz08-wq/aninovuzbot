@@ -25,7 +25,13 @@ async def health_check_handler(request):
 async def on_startup(bot: Bot):
     """Industrial Startup: Infra & Worker Sync."""
     
-    # 1. Baza va Keshni tekshirish
+    # 1. ESKI XABARLARNI TOZALASH (Drop Pending Updates)
+    # Bu qator bot o'chig'ida kelgan barcha xabarlarni o'chirib yuboradi.
+    # Shunda bot "toza sahifa" bilan ish boshlaydi.
+    await bot.delete_webhook(drop_pending_updates=True)
+    logger.info("🗑 Eski xabarlar tozalandi (Pending updates dropped).")
+    
+    # 2. Infra Check & Start
     await check_db()
     await valkey.start()
     
@@ -35,7 +41,7 @@ async def on_startup(bot: Bot):
     except Exception as e:
         logger.warning(f"⚠️ Redis unavailable: {e}. Bot running in DB-only mode.")
 
-    # 2. Modellarni sinxron qilish
+    # 3. Tables Sync
     async with engine.begin() as conn:
         from database.models import Base
         await conn.run_sync(Base.metadata.create_all)
