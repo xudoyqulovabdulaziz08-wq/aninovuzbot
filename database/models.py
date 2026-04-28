@@ -49,6 +49,13 @@ class DBUser(Base):
     comments: Mapped[List["Comment"]] = relationship(back_populates="user")
     tickets: Mapped[List["Ticket"]] = relationship(back_populates="user")
     admin_settings: Mapped[Optional["AdminSettings"]] = relationship(back_populates="user", uselist=False)
+    @property
+    def is_vip(self) -> bool:
+        if self.status != "vip":
+            return False
+        if self.vip_expire_date and self.vip_expire_date < datetime.now():
+            return False
+        return True
 # ================= GENRE =================
 class Genre(Base):
     __tablename__ = "genres"
