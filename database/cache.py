@@ -1,3 +1,4 @@
+#database/cache.py
 import logging
 import orjson
 import asyncio
@@ -7,10 +8,11 @@ from datetime import datetime, timezone, timedelta
 from collections import OrderedDict
 from typing import Any, Optional, Dict, List
 import redis.asyncio as redis
+# Asosiy xatolikni mana bu yerda to'g'irlaymiz:
+from redis.exceptions import ResponseError, RedisError 
 from config import config
 
 logger = logging.getLogger("CacheManager")
-
 class CacheManager:
     def __init__(self, url: str):
         self.namespace = "app"   # qo'shish kerak
@@ -46,7 +48,7 @@ class CacheManager:
             await self.redis.ping()
             try:
                 await self.redis.xgroup_create(self._stream_name, self._group_name, id="0", mkstream=True)
-            except redis.exceptions.ResponseError: pass
+            except ResponseError: pass
 
             # Background Tasks
             self._tasks.append(asyncio.create_task(self._reliable_stream_listener()))
