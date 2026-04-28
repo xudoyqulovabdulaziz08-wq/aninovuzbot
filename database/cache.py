@@ -1,4 +1,3 @@
-#database/cache.py
 import logging
 import orjson
 import asyncio
@@ -8,14 +7,14 @@ from datetime import datetime, timezone, timedelta
 from collections import OrderedDict
 from typing import Any, Optional, Dict, List
 import redis.asyncio as redis
-# Asosiy xatolikni mana bu yerda to'g'irlaymiz:
 from redis.exceptions import ResponseError, RedisError 
 from config import config
 
 logger = logging.getLogger("CacheManager")
+
 class CacheManager:
     def __init__(self, url: str):
-        self.namespace = "app"   # qo'shish kerak
+        self.namespace = "app"
         self.version = "v1" 
         self.redis_url = url
         self.redis: Optional[redis.Redis] = None
@@ -39,8 +38,6 @@ class CacheManager:
         self.is_alive = True
         self._tasks: List[asyncio.Task] = []
 
-        
-
     async def start(self):
         """Startup with PEL recovery and auto-claim."""
         await self._connect()
@@ -52,7 +49,7 @@ class CacheManager:
 
             # Background Tasks
             self._tasks.append(asyncio.create_task(self._reliable_stream_listener()))
-            self._tasks.append(asyncio.create_task(self._pel_recovery_loop())) # PEL Recovery
+            self._tasks.append(asyncio.create_task(self._pel_recovery_loop())) 
             self._tasks.append(asyncio.create_task(self._l1_cleanup_loop()))
             logger.info(f"🏆 100% FINAL BOSS: Cache active on {self.node_id}")
         except Exception as e:
@@ -60,18 +57,15 @@ class CacheManager:
             self.is_alive = False
 
     async def _connect(self):
-        self.redis = redis.from_url(self.redis_url, max_connections=100)
-
-    # ================= 1. PEL RECOVERY (XAUTOCLAIM) =================
+        # max_connections'ni Render Free uchun 20 ga tushirdik
+        self.redis = redis.from_url(self.redis_url, max_connections=20, decode_responses=False)
 
     async def _pel_recovery_loop(self):
-        """Boshqa node'larda 'osilib' qolgan xabarlarni qayta ishlash."""
-        while True:
+        while self.is_alive: # is_alive qo'shildi
             try:
-                await asyncio.sleep(30) # Har 30 soniyada stuck xabarlarni tekshirish
-                if not self.is_alive: continue
+                await asyncio.sleep(30)
+                if not self.is_alive: break
 
-                # 60 soniyadan ko'p ushlanib qolgan xabarlarni o'zimizga olish
                 result = await self.redis.xautoclaim(
                     name=self._stream_name,
                     groupname=self._group_name,
@@ -81,9 +75,9 @@ class CacheManager:
                     count=10
                 )
                 
-                # result[1] — bu claim qilingan xabarlar
-                for msg_id, payload in result[1]:
-                    await self._process_stream_msg(msg_id, payload)
+                if result and len(result) > 1:
+                    for msg_id, payload in result[1]:
+                        await self._process_stream_msg(msg_id, payload)
             except asyncio.CancelledError: break
             except Exception as e:
                 logger.error(f"PEL Recovery error: {e}")
@@ -99,9 +93,8 @@ class CacheManager:
             logger.error(f"Message processing failed: {e}")
 
     async def _reliable_stream_listener(self):
-        while True:
+        while self.is_alive: # is_alive qo'shildi
             try:
-                # Faqat yangi xabarlarni o'qish
                 response = await self.redis.xreadgroup(
                     groupname=self._group_name, consumername=self._consumer_name,
                     streams={self._stream_name: ">"}, count=10, block=2000
@@ -112,28 +105,20 @@ class CacheManager:
                             await self._process_stream_msg(msg_id, payload)
             except asyncio.CancelledError: break
             except Exception as e:
-                await asyncio.sleep(2)
-
-    # ================= 2. ADVANCED METRICS (ISOLATION) =================
+                if self.is_alive:
+                    await asyncio.sleep(2)
 
     async def _track(self, metric: str, latency: float = 0):
-        """Node-based isolated metrics + Latency distribution."""
         try:
             pipe = self.redis.pipeline()
-            # 1. Per-node breakdown
             pipe.hincrby(f"metrics:node:{self.node_id}", metric, 1)
-            # 2. Global aggregate
             pipe.hincrby("metrics:global", metric, 1)
-            # 3. Latency tracking (P95/P99 uchun)
             if latency > 0:
-                # Latencyni 1ms aniqlikda Sorted Set'ga yozish
-                ts = int(time.time() // 60) # Har minut uchun alohida set
+                ts = int(time.time() // 60)
                 pipe.zadd(f"metrics:latency:{ts}", {str(time.time()): latency})
-                pipe.expire(f"metrics:latency:{ts}", 3600) # 1 soat saqlash
+                pipe.expire(f"metrics:latency:{ts}", 3600)
             await pipe.execute()
         except: pass
-
-    # ================= 3. GET (RACE-FREE SINGLEFLIGHT) =================
 
     async def get(self, table_name: str, obj_id: Any) -> Optional[dict]:
         start_ts = time.perf_counter()
@@ -150,7 +135,6 @@ class CacheManager:
 
         async with self._inflight_lock:
             if key in self._inflight:
-                # Waiterlar uchun data isolation
                 try:
                     return await self._inflight[key]
                 except: return None
@@ -175,7 +159,6 @@ class CacheManager:
             await self._track("error")
             return None
         finally:
-            # Future cleanup faqat owner tomonidan
             async with self._inflight_lock:
                 if self._inflight.get(key) is future:
                     self._inflight.pop(key, None)
@@ -200,20 +183,25 @@ class CacheManager:
                     for k in expired:
                         del self._l1_cache[k]
             except Exception as e:
-                logger.error(f"L1 Cleanup error: {e}")
-
+                if self.is_alive:
+                    logger.error(f"L1 Cleanup error: {e}")
 
     async def stop(self):
-            """Cleanup tasks and close redis connection."""
-            self.is_alive = False
-            # Background tasklarni to'xtatish
-            for task in self._tasks:
+        """Cleanup tasks and close redis connection."""
+        self.is_alive = False
+        logger.info("🛑 Shutting down CacheManager...")
+        
+        # Fondagi vazifalarni to'xtatish
+        for task in self._tasks:
+            if not task.done():
                 task.cancel()
         
-            if self.redis:
-                await self.redis.close()
-                logger.info("Valkey connection closed safely.")
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        
+        # Redis ulanishini yopish
+        if self.redis:
+            await self.redis.close()
+            logger.info("✅ Valkey (Redis) connection closed safely.")
 
-
-                
 valkey = CacheManager(url=config.VALKEY_URL)
