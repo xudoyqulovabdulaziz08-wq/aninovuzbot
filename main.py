@@ -101,7 +101,7 @@ def main():
 
     # --- 🛡 MIDDLEWARE ---
     dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
-    dp.error_signal.connect(lambda e: logger.error(f"DB Error: {e}"))
+    
     
     # --- 🔀 ROUTERS ---
     dp.include_router(admin.router)
