@@ -36,7 +36,8 @@ class Config:
     DB_MAX_OVERFLOW: int = safe_cast("DB_MAX_OVERFLOW", 10)
     
     # --- SERVER SETTINGS ---
-    PORT: int = safe_cast("PORT", 8000)
+    
+    PORT: int = safe_cast("PORT", 10000) 
     WEBHOOK_HOST: str = os.getenv("WEBHOOK_HOST", "").strip()
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
 
