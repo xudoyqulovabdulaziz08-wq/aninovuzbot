@@ -13,6 +13,7 @@ from services.cache_worker import CacheInvalidationWorker
 from config import config
 from database.cache import valkey
 from handlers import start, admin, user, anime
+from handlers import search
 
 # ✅ Global Task Tracker
 background_tasks = set()
@@ -99,6 +100,7 @@ def main():
     dp.include_router(start.router)
     dp.include_router(anime.router)
     dp.include_router(user.router)
+    dp.include_router(search.router)
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)

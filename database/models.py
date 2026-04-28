@@ -53,8 +53,10 @@ class DBUser(Base):
     def is_vip(self) -> bool:
         if self.status != "vip":
             return False
-        if self.vip_expire_date and self.vip_expire_date < datetime.now():
-            return False
+        # datetime.now(timezone.utc) ishlatish xavfsizroq
+        if self.vip_expire_date:
+            # expire_date timezone-aware bo'lishi kerak
+            return self.vip_expire_date.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
         return True
 # ================= GENRE =================
 class Genre(Base):

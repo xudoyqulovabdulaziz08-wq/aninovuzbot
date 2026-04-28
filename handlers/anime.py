@@ -15,9 +15,6 @@ def average_rating(self):
         return round(float(self.rating_sum) / self.rating_count, 1)
     return 0.0
 
-@router.message(F.text == "🔍 Anime qidirish")
-async def anime_search(message: types.Message):
-    await message.answer("🔍 Qidirmoqchi bo'lgan anime nomini yozing:")
 
 # bu yerda qidiruv natijalarini ko'rsatish va reyting berish funksiyalarini qo'shish mumkin.
 # tez oerda ishga tushadi...
