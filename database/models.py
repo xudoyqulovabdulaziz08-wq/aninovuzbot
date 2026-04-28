@@ -10,6 +10,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from decimal import Decimal
 
+
+
+
 # ================= BASE =================
 class Base(DeclarativeBase):
     pass
@@ -31,23 +34,21 @@ class DBUser(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="user", index=True, nullable=False)
+    points: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="user", index=True)
     vip_expire_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    health_mode: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    referral_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+    referral_count: Mapped[int] = mapped_column(Integer, default=0)
     referred_by: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
     )
-    referrer: Mapped[Optional["DBUser"]] = relationship(remote_side=[user_id])
-
+    
+    # Relationships
     favorites: Mapped[List["Favorite"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     history: Mapped[List["History"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     comments: Mapped[List["Comment"]] = relationship(back_populates="user")
     tickets: Mapped[List["Ticket"]] = relationship(back_populates="user")
-    admin_settings: Mapped["AdminSettings"] = relationship(back_populates="user", uselist=False)
-
-
+    admin_settings: Mapped[Optional["AdminSettings"]] = relationship(back_populates="user", uselist=False)
 # ================= GENRE =================
 class Genre(Base):
     __tablename__ = "genres"
@@ -58,7 +59,6 @@ class Genre(Base):
 # ================= ANIME =================
 class Anime(Base):
     __tablename__ = "anime_list"
-
     __table_args__ = (
         Index("idx_anime_title", "title"),
         Index("idx_anime_year", "year"),
@@ -68,21 +68,26 @@ class Anime(Base):
     title: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     poster_id: Mapped[Optional[str]] = mapped_column(String(255))
     lang: Mapped[Optional[str]] = mapped_column(String(100))
-    genres: Mapped[List["Genre"]] = relationship(secondary=anime_genre, backref="animes")
     year: Mapped[Optional[int]] = mapped_column(Integer)
     fandub: Mapped[Optional[str]] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text)
-    rating_sum: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
-    rating_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    views_week: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    rating_sum: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+    rating_count: Mapped[int] = mapped_column(Integer, default=0)
+    views_week: Mapped[int] = mapped_column(Integer, default=0)
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Relationships
+    genres: Mapped[List["Genre"]] = relationship(secondary=anime_genre, backref="animes")
     episodes: Mapped[List["Episode"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
     favorites: Mapped[List["Favorite"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
     history: Mapped[List["History"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
     comments: Mapped[List["Comment"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
 
-
+    @property
+    def average_rating(self) -> float:
+        if self.rating_count > 0:
+            return round(float(self.rating_sum / self.rating_count), 1)
+        return 0.0
 # ================= EPISODE =================
 class Episode(Base):
     __tablename__ = "anime_episodes"
@@ -111,23 +116,23 @@ class Favorite(Base):
     anime: Mapped["Anime"] = relationship(back_populates="favorites")
 
 
+
 # ================= HISTORY =================
 class History(Base):
     __tablename__ = "history"
     __table_args__ = (
-        Index("idx_history_user_anime", "user_id", "anime_id"),
-        UniqueConstraint("user_id", "anime_id", "last_episode")
+        UniqueConstraint("user_id", "anime_id", name="uix_user_anime_history"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"))
     anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
-    last_episode: Mapped[int] = mapped_column(Integer)
-    watched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    last_episode: Mapped[int] = mapped_column(Integer, default=1)
+    # onupdate qo'shildi!
+    watched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user: Mapped["DBUser"] = relationship(back_populates="history")
     anime: Mapped["Anime"] = relationship(back_populates="history")
-
 
 # ================= COMMENT =================
 class Comment(Base):
@@ -212,8 +217,13 @@ class AdminSettings(Base):
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    aggregate = Column(String, nullable=False)   # Jadval nomi
-    aggregate_id = Column(String, nullable=False) # PK qiymati
-    processed = Column(Boolean, default=False, index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    aggregate: Mapped[str] = mapped_column(String, nullable=False)   # Jadval nomi
+    aggregate_id: Mapped[str] = mapped_column(String, nullable=False) # PK qiymati
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+
+
+MODELS_TO_WATCH = [Anime, DBUser, Episode, Channel, Favorite, History, Comment]

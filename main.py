@@ -22,6 +22,8 @@ async def health_check_handler(request):
     """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
     return web.Response(text="AniNowuz SaaS Engine is running! 🚀", status=200)
 
+
+
 async def on_startup(bot: Bot):
     """Industrial Startup: Infra & Worker Sync."""
     
@@ -99,7 +101,8 @@ def main():
 
     # --- 🛡 MIDDLEWARE ---
     dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
-
+    dp.error_signal.connect(lambda e: logger.error(f"DB Error: {e}"))
+    
     # --- 🔀 ROUTERS ---
     dp.include_router(admin.router)
     dp.include_router(start.router)

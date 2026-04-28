@@ -58,17 +58,13 @@ class DbSessionMiddleware(BaseMiddleware):
                 logger.info("🔧 Circuit Breaker: Recovery attempt...")
 
         # --- 4. DB READ (L3 Fallback) ---
-        async with self.session_pool() as session:
+        session = await self.session_pool().__aenter__() # Sessiyani ochamiz
+        try:
             try:
                 async with asyncio.timeout(2.5):
-                    # Repozitoriy orqali Userni olish yoki yaratish
                     db_user = await UserRepository.get_or_create(session, user_obj)
                 
-                # DB Health Reset
-                async with state.db_lock:
-                    state.db_status, state.db_fail_count = True, 0
-                
-                # Keshni yangilash uchun dict tayyorlash
+                # DB Health Reset & Cache Logic...
                 user_data = self._model_to_dict(db_user)
                 await self._enqueue_cache_update(user_data)
                 
@@ -79,8 +75,10 @@ class DbSessionMiddleware(BaseMiddleware):
             except Exception as e:
                 await self._handle_db_failure(e)
                 data["user"] = self._get_emergency_user(user_obj)
-                data["session"] = session # Session mavjud bo'lishi mumkin (timeout bo'lmasa)
+                data["session"] = session
                 return await handler(event, data)
+        finally:
+            await session.__aexit__(None, None, None) # Handler tugagach sessiyani yopamiz
 
     async def _enqueue_cache_update(self, user_data: dict):
         """Backpressure & Drop Policy bilan navbatga qo'shish."""

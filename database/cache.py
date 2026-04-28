@@ -13,6 +13,8 @@ logger = logging.getLogger("CacheManager")
 
 class CacheManager:
     def __init__(self, url: str):
+        self.namespace = "app"   # qo'shish kerak
+        self.version = "v1" 
         self.redis_url = url
         self.redis: Optional[redis.Redis] = None
         self.node_id = f"{socket.gethostname()}_{int(time.time())}"
@@ -34,6 +36,8 @@ class CacheManager:
         # 4. Metrics & Lifecycle
         self.is_alive = True
         self._tasks: List[asyncio.Task] = []
+
+        
 
     async def start(self):
         """Startup with PEL recovery and auto-claim."""
@@ -183,5 +187,17 @@ class CacheManager:
                 self._l1_cache.popitem(last=False)
             self._l1_cache[key] = (data, datetime.now(timezone.utc) + timedelta(seconds=ttl))
             self._l1_cache.move_to_end(key)
+
+    async def _l1_cleanup_loop(self):
+        while self.is_alive:
+            try:
+                await asyncio.sleep(60)
+                now = datetime.now(timezone.utc)
+                async with self._l1_lock:
+                    expired = [k for k, v in self._l1_cache.items() if now > v[1]]
+                    for k in expired:
+                        del self._l1_cache[k]
+            except Exception as e:
+                logger.error(f"L1 Cleanup error: {e}")
 
 valkey = CacheManager(url=config.VALKEY_URL)

@@ -1,3 +1,5 @@
+# handlers/anime.py
+
 from datetime import datetime
 from aiogram import types, F, Router
 from sqlalchemy import select, desc
@@ -16,3 +18,7 @@ def average_rating(self):
 @router.message(F.text == "🔍 Anime qidirish")
 async def anime_search(message: types.Message):
     await message.answer("🔍 Qidirmoqchi bo'lgan anime nomini yozing:")
+
+# bu yerda qidiruv natijalarini ko'rsatish va reyting berish funksiyalarini qo'shish mumkin.
+# tez oerda ishga tushadi...
+# sabab bot hozircha faqat ishga tushish bosqichida va bu bo'lim hali tayyor emas.

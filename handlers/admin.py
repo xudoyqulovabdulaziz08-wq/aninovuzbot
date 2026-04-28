@@ -1,3 +1,4 @@
+# handlers/admin.py
 import logging
 from aiogram import Router, types, F
 from database.models import DBUser
@@ -21,7 +22,9 @@ async def creator_panel(message: types.Message):
         "• Barcha adminlarni boshqarish\n"
         "• To'liq statistika\n"
         "• Bazani tahrirlash\n\n"
-        "<i>Sizning huquqlaringiz cheksiz.</i>"
+        "<i>Sizning huquqlaringiz cheksiz.</i>" \
+        "\n\n⚠️ Diqqat! Bu bo'limda ehtiyotkorlik bilan harakat qiling!"
+        "\n \n Tez orada ishga tushadi..."
     )
 
 # ================= admin panel =================
@@ -38,6 +41,8 @@ async def admin_panel(message: types.Message, user: DBUser, session: AsyncSessio
             "• Foydalanuvchilar ro'yxati\n"
             "• Reklama yuborish\n"
             "• Statistika"
+            "\n\n⚠️ Diqqat! Bu bo'limda ehtiyotkorlik bilan harakat qiling!"
+            "\n\nTez orada ishga tushadi..."
         )
     else:
         await message.answer("❌ Ruxsat yo'q! Bu bo'lim faqat adminlar uchun.")
