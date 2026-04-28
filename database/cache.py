@@ -202,4 +202,18 @@ class CacheManager:
             except Exception as e:
                 logger.error(f"L1 Cleanup error: {e}")
 
+
+    async def stop(self):
+            """Cleanup tasks and close redis connection."""
+            self.is_alive = False
+            # Background tasklarni to'xtatish
+            for task in self._tasks:
+                task.cancel()
+        
+            if self.redis:
+                await self.redis.close()
+                logger.info("Valkey connection closed safely.")
+
+
+                
 valkey = CacheManager(url=config.VALKEY_URL)
