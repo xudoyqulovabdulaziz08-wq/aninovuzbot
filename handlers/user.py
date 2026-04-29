@@ -1,11 +1,12 @@
 import logging
 from datetime import datetime, timezone
 from aiogram import types, F, Router
-from typing import Any  # ✅ To'g'risi shu
+from typing import Any, Union  # ✅ To'g'risi shu
 from sqlalchemy import select, desc
 from database.models import DBUser
 from sqlalchemy.ext.asyncio import AsyncSession
 from config import config
+from database.cache import valkey
 router = Router()
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], u
         logger.error(f"Cabinet error: {e}")
 
 
-        
+
 @router.message(F.text == "🌟 Reyting")
 async def rating(message: types.Message, session: AsyncSession, user: DBUser):
     # 1. Bazadan TOP 10 ni olamiz
