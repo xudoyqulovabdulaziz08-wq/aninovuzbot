@@ -65,7 +65,7 @@ async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], u
     )
     
     kb_list = [
-        [types.InlineKeyboardButton(text="💎 VIP sotib olish", callback_data="buy_vip")],
+        [types.InlineKeyboardButton(text="💎 VIP sotib olish", callback_data="buy_vip_menu")],
         [types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link")],
         [types.InlineKeyboardButton(text="👤 Saytdagi profilim", url="https://aninowuz.uz/profile")]
     ]

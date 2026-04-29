@@ -54,7 +54,7 @@ async def buy_vip(event: Union[types.Message, types.CallbackQuery], user: DBUser
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=btn_text, callback_data="buy_vip_start")],
         [types.InlineKeyboardButton(text="🎁 Do'stlarni taklif qilib ball yig'ish", callback_data="get_ref_link")],
-        [types.InlineKeyboardButton(text="👤 <b>SHAXSIY KABINET", callback_data="personal_cabinet")]
+        [types.InlineKeyboardButton(text="👤 SHAXSIY KABINET", callback_data="back_to_cabinet")]
         
     ])
 
