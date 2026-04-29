@@ -1,7 +1,7 @@
+import logging
 from datetime import datetime, timezone
 from aiogram import types, F, Router
 from typing import Any  # ✅ To'g'risi shu
-from flask import logging
 from sqlalchemy import select, desc
 from database.models import DBUser
 from sqlalchemy.ext.asyncio import AsyncSession

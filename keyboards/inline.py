@@ -1,9 +1,9 @@
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
-from handlers.user import Creator_ID
+from config import config
 
-
+CREATOR_ID = config.CREATOR_ID
 
 
 # Search bo'limidagi inline klaviaturani yaratish funksiyasi
@@ -45,7 +45,7 @@ def admin_panel_kb(is_admin : bool) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
     # Faqat admin yoki creator bo'lsa tugmalarni qo'shish
-    if is_admin or Creator_ID == config.CREATOR_ID:
+    if is_admin or CREATOR_ID == config.CREATOR_ID:
         # Har bir row alohida qator yaratadi
         builder.row(
             types.InlineKeyboardButton(text="📢 Kanallarni boshqarish", callback_data="admin_channels"),

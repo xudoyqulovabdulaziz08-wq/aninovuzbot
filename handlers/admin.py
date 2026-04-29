@@ -5,7 +5,7 @@ from database.models import DBUser
 from config import config
 from sqlalchemy.ext.asyncio import AsyncSession
 from keyboards.inline import admin_panel_kb, creator_panel_kb
-from handlers.user import Creator_ID
+
 # Dispatcher o'rniga Router ishlatamiz
 router = Router()
 
