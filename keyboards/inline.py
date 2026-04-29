@@ -48,19 +48,22 @@ def admin_panel_kb(is_admin : bool) -> types.InlineKeyboardMarkup:
     if is_admin or CREATOR_ID == config.CREATOR_ID:
         # Har bir row alohida qator yaratadi
         builder.row(
-            types.InlineKeyboardButton(text="📢 Kanallarni boshqarish", callback_data="admin_channels"),
-            types.InlineKeyboardButton(text="🎛️ Anime control panel", callback_data="admin_anime_panel")
+            types.InlineKeyboardButton(text="🎛️ Anime boshqaruv paneli", callback_data="admin_anime_panel")
+            ) # Katta tugma
+        builder.row(
+            types.InlineKeyboardButton(text="📢 Kanallar", callback_data="admin_channels"),
+            types.InlineKeyboardButton(text="📣 Reklama", callback_data="admin_advertisement")
         )
         builder.row(
-            types.InlineKeyboardButton(text="📣 Reklama", callback_data="admin_advertisement"),
-            types.InlineKeyboardButton(text="📊 Statistika", callback_data="admin_statistics")
+            types.InlineKeyboardButton(text="📊 Statistika", callback_data="admin_statistics"),
+            types.InlineKeyboardButton(text="💎 VIP", callback_data="admin_vip_panel")
         )
         builder.row(
-            types.InlineKeyboardButton(text="💎 Vip control", callback_data="admin_vip_panel"),
-            types.InlineKeyboardButton(text="📃 Murojaatlar", callback_data="admin_reports")
-        )
-    
-    return builder.as_markup()
+            types.InlineKeyboardButton(text="📃 Murojaatlar", callback_data="admin_reports"),
+            types.InlineKeyboardButton(text="👥 Users control", callback_data="admin_users_panel")
+                    
+        ) # Katta tugma
+        return builder.as_markup()
 
 
 def creator_panel_kb(Creator_ID: str) -> types.InlineKeyboardMarkup:

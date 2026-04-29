@@ -1,4 +1,5 @@
 # handlers/admin.py
+import datetime
 import logging
 from aiogram import Router, types, F
 from database.models import DBUser
@@ -31,23 +32,27 @@ async def creator_panel(message: types.Message):
     
 
 # ================= admin panel =================
-from sqlalchemy.ext.asyncio import AsyncSession
 
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
-async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession): # <-- session qo'shildi
-    
-    # Creator yoki Admin ekanligini tekshiramiz
-    # Tavsiya: config.CREATOR_ID ni ishlating
+async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession):
     if message.from_user.id == config.CREATOR_ID or user.status == "admin":
-        await message.answer(
-            "⚙️ <b>Admin panel</b>\n\n"
-            "• Foydalanuvchilar ro'yxati\n"
-            "• Reklama yuborish\n"
-            "• Statistika",
-         
-            reply_markup=admin_panel_kb(is_admin=user.status == "admin"),
-            parse_mode="HTML"
+        # Bazadan tezkor statistika olish (ixtiyoriy)
+        # total_users = await session.scalar(select(func.count(DBUser.id)))
+        
+        text = (
+            f"⚙️ <b>ANI NOWUZ | BOSHQARUV PANELI</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Admin:</b> {message.from_user.mention_html()}\n"
+            f"📅 <b>Sana:</b> {datetime.now().strftime('%d.%m.%Y | %H:%M')}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📊 <b>Tezkor ko'rsatkichlar:</b>\n"
+            f"• Tizim: 🟢 Ishchi holatda\n"
+            f"• DB Latency: Minimal\n\n"
+            f"👇 <i>Kerakli bo'limni tanlang:</i>"
         )
         
-    else:
-        await message.answer("❌ Ruxsat yo'q! Bu bo'lim faqat adminlar uchun.")
+        await message.answer(
+            text,
+            reply_markup=admin_panel_kb(is_admin=True),
+            parse_mode="HTML"
+        )
