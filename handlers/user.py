@@ -135,35 +135,48 @@ async def help_page(message: types.Message):
     await message.answer(text)
 
 
+
+
 @router.message(F.text == "💎 VIP sotib olish")
 async def buy_vip(message: types.Message, user: DBUser, session: AsyncSession = None):
-    """
-    VIP menyusi: Foydalanuvchi statusini tekshiradi va takliflarni ko'rsatadi.
-    """
-    # 1. Baza holatini tekshirish (Circuit Breaker xavfsizligi)
     if session is None or user is None:
-        return await message.answer(
-            "⚠️ <b>VIP tizimi vaqtincha faol emas.</b>\n"
-            "Texnik ishlar olib borilmoqda, birozdan so'ng urinib ko'ring."
-        )
+        return await message.answer("⚠️ Tizimda vaqtincha uzilish bor.")
 
-    # 2. Foydalanuvchining hozirgi statusiga qarab matn tayyorlash
-    status_text = "✨ Sizning status: <b>VIP</b>" if user.is_vip else "🌑 Sizning status: <b>Oddiy foydalanuvchi</b>"
+    # 1. Vaqtni hisoblash
+    uzb_tz = pytz.timezone('Asia/Tashkent')
     
+    # 2. Status matnini tayyorlash
+    if user.is_vip and user.vip_expire_date:
+        # Mintaqaga moslash
+        ve_aware = user.vip_expire_date.replace(tzinfo=pytz.UTC).astimezone(uzb_tz)
+        status_info = f"🌟 <b>Siz hozirda VIP foydalanuvchisiz!</b>\n⏳ Muddat: <b>{ve_aware.strftime('%d.%m.%Y | %H:%M')}</b> gacha."
+        btn_text = "🔄 VIP muddatini uzaytirish"
+    else:
+        status_info = "🌑 Siz hozirda <b>Oddiy</b> rejimdasiz."
+        btn_text = "💳 VIP sotib olish"
+
     text = (
-        f"💎 <b>VIP REJIM</b>\n\n"
-        f"{status_text}\n\n"
-        f"<b>VIP imkoniyatlari:</b>\n"
-        f"✅ Reklamasiz va cheklovsiz ko'rish\n"
-        f"✅ Barcha yopiq kanallarga kirish\n"
-        f"✅ Maxsus va pre-reliz kontentlar\n"
-        f"✅ Tezkor yuklab olish tezligi\n\n"
+        f"💎 <b>VIP PREMIYUM TIZIMI</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"{status_info}\n\n"
+        f"<b>✨ VIP imkoniyatlari:</b>\n"
+        f"🚀 <b>Yuqori tezlik:</b> Videolarni maksimal tezlikda ko'rish\n"
+        f"🚫 <b>Reklamasiz:</b> Botdan hech qanday reklamalarsiz foydalanish\n"
+        f"📂 <b>Eksklyuziv:</b> Faqat VIP uchun ochiq pre-relizlar\n"
+        f"👑 <b>Maxsus status:</b> Ismingiz yonida oltin belgi\n\n"
+        f"💰 <b>Bonus vip:</b> 100 ball = 30 kunlik VIP\n"
         
+        f"━━━━━━━━━━━━━━\n"
+        f"👇 <i>Pastdagi tugma orqali ballaringizni VIP'ga almashtirishingiz mumkin:</i>"
     )
+
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="💳 VIP sotib olish", callback_data="purchase_vip")],
+        [types.InlineKeyboardButton(text=btn_text, callback_data="exchange_points")], # Referal qismidagi handlerga bog'laymiz
+        [types.InlineKeyboardButton(text="🎁 Do'stlarni taklif qilib ball yig'ish", callback_data="get_ref_link")],
+        [types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_cabinet")]
     ])
-    await message.answer(text, reply_markup=kb)
+
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 @router.message(F.text == "📢 Reklama berish")
 async def advertisement(message: types.Message):
