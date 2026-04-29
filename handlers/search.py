@@ -43,7 +43,7 @@ async def anime_search(message: types.Message, session: AsyncSession):
 async def start_name_search(callback: types.CallbackQuery, state: FSMContext):
     # Bekor qilish tugmasini qo'shsak yaxshi bo'ladi
     cancel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_search")]
+        [types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="cancel_search")]
     ])
     
     await callback.message.edit_text(
@@ -57,7 +57,7 @@ async def start_name_search(callback: types.CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "search_by_id")
 async def start_id_search(callback: types.CallbackQuery, state: FSMContext):
     cancel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_search")]
+        [types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="cancel_search")]
     ])
     
     await callback.message.edit_text(
@@ -66,6 +66,20 @@ async def start_id_search(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(SearchStates.waiting_for_id)
+    await callback.answer()
+
+@router.callback_query(F.data == "search_by_genre")
+async def start_genre_search(callback: types.CallbackQuery, state: FSMContext):
+    cancel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="cancel_search")]
+    ])
+    
+    await callback.message.edit_text(
+        "🎭 Anime <b>janrini</b> kiriting:",
+        reply_markup=cancel_kb,
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_genre)
     await callback.answer()
 
 # Bekor qilish handlerini optimallashtiramiz

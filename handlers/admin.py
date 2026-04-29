@@ -3,7 +3,9 @@ import logging
 from aiogram import Router, types, F
 from database.models import DBUser
 from config import config
-
+from sqlalchemy.ext.asyncio import AsyncSession
+from keyboards.inline import admin_panel_kb, creator_panel_kb
+from handlers.user import Creator_ID
 # Dispatcher o'rniga Router ishlatamiz
 router = Router()
 
@@ -22,10 +24,11 @@ async def creator_panel(message: types.Message):
         "• Barcha adminlarni boshqarish\n"
         "• To'liq statistika\n"
         "• Bazani tahrirlash\n\n"
-        "<i>Sizning huquqlaringiz cheksiz.</i>" \
-        "\n\n⚠️ Diqqat! Bu bo'limda ehtiyotkorlik bilan harakat qiling!"
-        "\n \n Tez orada ishga tushadi..."
+        "<i>Sizning huquqlaringiz cheksiz.</i>" ,
+        reply_markup=creator_panel_kb(Creator_ID=message.from_user.id),
+        parse_mode="HTML"
     )
+    
 
 # ================= admin panel =================
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,9 +43,11 @@ async def admin_panel(message: types.Message, user: DBUser, session: AsyncSessio
             "⚙️ <b>Admin panel</b>\n\n"
             "• Foydalanuvchilar ro'yxati\n"
             "• Reklama yuborish\n"
-            "• Statistika"
-            "\n\n⚠️ Diqqat! Bu bo'limda ehtiyotkorlik bilan harakat qiling!"
-            "\n\nTez orada ishga tushadi..."
+            "• Statistika",
+         
+            reply_markup=admin_panel_kb(is_admin=user.status == "admin"),
+            parse_mode="HTML"
         )
+        
     else:
         await message.answer("❌ Ruxsat yo'q! Bu bo'lim faqat adminlar uchun.")

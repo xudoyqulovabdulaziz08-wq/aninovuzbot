@@ -1,6 +1,12 @@
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
+from handlers.user import Creator_ID
+
+
+
+
+# Search bo'limidagi inline klaviaturani yaratish funksiyasi
 def search_inline_kb(is_vip: bool = False) -> types.InlineKeyboardMarkup:
     """
     is_vip: Handlerdan keladigan foydalanuvchi statusi.
@@ -28,4 +34,47 @@ def search_inline_kb(is_vip: bool = False) -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton(text="🔗 Rasmiy sayt", url="https://aninovuz.uz")
     )
 
+    return builder.as_markup()
+
+
+
+
+
+
+def admin_panel_kb(is_admin : bool) -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    
+    # Faqat admin yoki creator bo'lsa tugmalarni qo'shish
+    if is_admin or Creator_ID == config.CREATOR_ID:
+        # Har bir row alohida qator yaratadi
+        builder.row(
+            types.InlineKeyboardButton(text="📢 Kanallarni boshqarish", callback_data="admin_channels"),
+            types.InlineKeyboardButton(text="🎛️ Anime control panel", callback_data="admin_anime_panel")
+        )
+        builder.row(
+            types.InlineKeyboardButton(text="📣 Reklama", callback_data="admin_advertisement"),
+            types.InlineKeyboardButton(text="📊 Statistika", callback_data="admin_statistics")
+        )
+        builder.row(
+            types.InlineKeyboardButton(text="💎 Vip control", callback_data="admin_vip_panel"),
+            types.InlineKeyboardButton(text="📃 Murojaatlar", callback_data="admin_reports")
+        )
+    
+    return builder.as_markup()
+
+
+def creator_panel_kb(Creator_ID: str) -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    
+    if Creator_ID == config.CREATOR_ID:
+        # Katta tugma alohida qatorda
+        builder.row(
+            types.InlineKeyboardButton(text="👑 Barcha adminlarni boshqarish", callback_data="creator_manage_admins")
+        )
+        # Kichikroq tugmalar yonma-yon bitta qatorda
+        builder.row(
+            types.InlineKeyboardButton(text="📊 To'liq statistika", callback_data="creator_statistics"),
+            types.InlineKeyboardButton(text="🗄️ Baza control", callback_data="creator_db_panel")
+        )
+    
     return builder.as_markup()

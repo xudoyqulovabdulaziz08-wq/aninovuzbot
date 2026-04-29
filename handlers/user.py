@@ -1,56 +1,69 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from aiogram import types, F, Router
 from typing import Any  # ✅ To'g'risi shu
+from flask import logging
 from sqlalchemy import select, desc
 from database.models import DBUser
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from config import config
 router = Router()
+logger = logging.getLogger(__name__)
 
-
+now = datetime.now(timezone.utc)
+Creator_ID = getattr(config, 'CREATOR_ID', None)
 
 
 
 @router.message(F.text == "👤 Shaxsiy kabinet")
 async def personal_cabinet(message: types.Message, user: Any):
-    # 1. Baza yoki Middleware'dan kelgan user ob'ektini xavfsiz tekshirish
-    # getattr(obj, attr, default) — agar attr bo'lmasa, default qaytaradi va xato bermaydi
-    vip_expire = getattr(user, 'vip_expire_date', None)
+    # Xavfsiz olish
     user_id = getattr(user, 'user_id', message.from_user.id)
-    status = getattr(user, 'status', 'user')
     points = getattr(user, 'points', 0)
+    status = getattr(user, 'status', 'user')
     ref_count = getattr(user, 'referral_count', 0)
-
-    now = datetime.now()
-    vip_status = "❌ Faol emas"
+    vip_expire = getattr(user, 'vip_expire_date', None)
     
-    # VIP muddatini tekshirish (Endi xavfsiz)
+    # VIP status hisoblash (UTC bilan)
+    now = datetime.now(timezone.utc)
     if vip_expire:
+        # Bazadan kelgan vaqtni UTC ga moslash
+        if vip_expire.tzinfo is None:
+            vip_expire = vip_expire.replace(tzinfo=timezone.utc)
+            
         if vip_expire > now:
             vip_status = f"✅ {vip_expire.strftime('%d.%m.%Y')} gacha"
         else:
             vip_status = "⚠️ Muddati tugagan"
+    else:
+        vip_status = "❌ Faol emas"
 
-    # Username'ni hozirgi xabardan olish (Sizning zo'r yechimingiz)
-    current_username = message.from_user.username
-    display_username = f"@{current_username}" if current_username else "O'rnatilmagan"
+    # Username
+    display_username = f"@{message.from_user.username}" if message.from_user.username else "O'rnatilmagan"
 
     text = (
-        f"👤 <b>Shaxsiy kabinet</b>\n\n"
+        f"👤 <b>SHAXSIY KABINET</b>\n"
+        f"━━━━━━━━━━━━━━\n"
         f"🆔 ID: <code>{user_id}</code>\n"
         f"👤 Username: {display_username}\n"
         f"🏅 Status: <b>{status.upper()}</b>\n"
         f"⭐ Ballar: <b>{points}</b>\n"
-        f"👥 Takliflar: <b>{ref_count}</b>\n"
-        f"💎 VIP: <b>{vip_status}</b>"
+        f"👥 Takliflar: <b>{ref_count}</b> ta\n"
+        f"💎 VIP: <b>{vip_status}</b>\n"
+        f"━━━━━━━━━━━━━━"
     )
     
+    # Tugmalar (UX uchun)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="💎 VIP sotib olish", callback_data="buy_vip")],
+        [types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link")],
+        [types.InlineKeyboardButton(text="👤 Saytdagi profilim", url="https://aninovuz.uz/profile")]
+        
+    ])
+
     try:
-        await message.answer(text)
+        await message.answer(text, reply_markup=kb)
     except Exception as e:
-        # Agar xabar yuborishda kutilmagan xato bo'lsa (masalan, bot bloklangan bo'lsa)
-        # bot o'chib qolmasligi uchun try-except ishlatamiz
-        print(f"Error sending message: {e}")
+        logger.error(f"Cabinet error for user {user_id}: {e}", exc_info=True)
 
 
 @router.message(F.text == "🌟 Reyting")
