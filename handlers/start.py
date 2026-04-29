@@ -1,10 +1,13 @@
 # handlers/start.py
+import pytz
 import logging
 import asyncio
+from time import timezone
 from aiogram import types, Bot, F, Router
 from aiogram.filters import CommandStart
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from datetime import datetime
 
 from database.cache import valkey
 from database.models import Channel, DBUser 
@@ -98,9 +101,17 @@ async def get_sub_keyboard(missing_channels: list) -> types.InlineKeyboardMarkup
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession, bot: Bot):
+    # 1. REFERAL TIZIMI (Faqat yangi foydalanuvchilar uchun)
+    # user.joined_at va func.now() o'rtasidagi farq juda kichik bo'lsa, demak u yangi user
     args = message.text.split()
+    uzb_tz = pytz.timezone('Asia/Tashkent')
+    now = datetime.now(uzb_tz)
+    user_joined = user.joined_at.replace(tzinfo=pytz.UTC) if user.joined_at.tzinfo is None else user.joined_at
+    now_utc = datetime.now(pytz.UTC)
     
-    if len(args) > 1 and user.referred_by is None:
+    is_new_user = (now_utc - user_joined).total_seconds() < 60
+    
+    if len(args) > 1 and user.referred_by is None and is_new_user:
         try:
             referrer_id = int(args[1])
             
@@ -140,6 +151,48 @@ async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession,
                         
         except (ValueError, IndexError) as e:
             logger.error(f"Referral ID format error: {e}")
+
+    # 2. PRIVILEGE CHECK (Creator/Admin/VIP)
+    # Sizning is_vip property'ingizdan foydalanamiz
+    is_privileged = (
+        user.status in ["creator", "admin"] or 
+        user.is_vip or 
+        user.user_id == config.CREATOR_ID
+    )
+
+    if is_privileged:
+        return await message.answer(
+            f"👑 Xush kelibsiz, <b>{message.from_user.full_name}</b>!",
+            reply_markup=get_main_menu(
+                user_id=user.user_id, 
+                is_vip=user.is_vip, 
+                status=user.status
+            )
+        )
+
+    # 3. KANALLARGA OBUNA TEKSHIRUVI
+    is_subbed, missing = await check_subscription(bot, user.user_id, session)
+    
+    if not is_subbed:
+        kb = await get_sub_keyboard(missing)
+        return await message.answer(
+            "📢 <b>Botdan foydalanish uchun quyidagi kanallarga obuna bo'lishingiz shart:</b>",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+
+    # 4. SUCCESS ENTRY
+    await message.answer(
+        f"👋 Xush kelibsiz, <b>{message.from_user.full_name}</b>!\n"
+        f"<b>AniNowuz</b> botiga xush kelibsiz. Maroqli hordiq tilaymiz!",
+        reply_markup=get_main_menu(
+            user_id=user.user_id, 
+            is_vip=user.is_vip, 
+            status=user.status
+        ),
+        parse_mode="HTML"
+    )
+    
 
 @router.callback_query(F.data == "check_sub")
 async def check_sub_callback(callback: types.CallbackQuery, user: DBUser, session: AsyncSession, bot: Bot):
