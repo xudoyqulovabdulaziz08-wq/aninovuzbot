@@ -2,6 +2,7 @@
 import datetime
 import logging
 from aiogram import Router, types, F
+import pytz
 from database.models import DBUser
 from config import config
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,14 +38,14 @@ async def creator_panel(message: types.Message):
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
 async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession):
     if message.from_user.id == config.CREATOR_ID or user.status == "admin":
-        # Bazadan tezkor statistika olish (ixtiyoriy)
-        # total_users = await session.scalar(select(func.count(DBUser.id)))
+        uzb_tz = pytz.timezone('Asia/Tashkent')
+        now = datetime.now(uzb_tz)
         
         text = (
             f"⚙️ <b>ANI NOWUZ | BOSHQARUV PANELI</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"👤 <b>Admin:</b> {message.from_user.mention_html()}\n"
-            f"📅 <b>Sana:</b> {datetime.now().strftime('%d.%m.%Y | %H:%M')}\n"
+            f"📅 <b>Sana:</b> {now.strftime('%d.%m.%Y | %H:%M')}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📊 <b>Tezkor ko'rsatkichlar:</b>\n"
             f"• Tizim: 🟢 Ishchi holatda\n"

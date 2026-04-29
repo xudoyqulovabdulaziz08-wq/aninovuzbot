@@ -1,3 +1,4 @@
+import pytz
 import logging
 from datetime import datetime, timezone
 from aiogram import types, F, Router
@@ -17,10 +18,12 @@ Creator_ID = getattr(config, 'CREATOR_ID', None)
 
 @router.message(F.text == "👤 Shaxsiy kabinet")
 async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], user: DBUser):
-    # CallbackQuery kelsa, uning ichidagi xabarni olamiz
     target = message.message if isinstance(message, types.CallbackQuery) else message
     
-    # Ma'lumotlarni olish
+    # Toshkent vaqt mintaqasi
+    uzb_tz = pytz.timezone('Asia/Tashkent')
+    now = datetime.now(uzb_tz)
+
     user_id = user.user_id
     points = user.points
     status = user.status
@@ -28,19 +31,26 @@ async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], u
     vip_expire = user.vip_expire_date
     
     # VIP status hisoblash
-    now = datetime.now(timezone.utc)
     if vip_expire:
+        # 1. Bazadan kelgan vaqtni Toshkent vaqtiga moslaymiz
         if vip_expire.tzinfo is None:
-            vip_expire = vip_expire.replace(tzinfo=timezone.utc)
+            # Agar bazada timezone saqlanmagan bo'lsa, uni Toshkent vaqti deb qabul qilamiz
+            ve_aware = uzb_tz.localize(vip_expire)
+        else:
+            # Agar timezone bo'lsa, uni Toshkent vaqtiga o'giramiz
+            ve_aware = vip_expire.astimezone(uzb_tz)
             
-        if vip_expire > now:
-            vip_status = f"✅ {vip_expire.strftime('%d.%m.%Y')} gacha"
+        # 2. Solishtirish
+        if ve_aware > now:
+            vip_status = f"✅ {ve_aware.strftime('%d.%m.%Y | %H:%M')} gacha"
         else:
             vip_status = "⚠️ Muddati tugagan"
     else:
         vip_status = "❌ Faol emas"
 
-    display_username = f"@{target.chat.username}" if target.chat.username else "O'rnatilmagan"
+    # Username (target xabardan emas, messagedan olingani ma'qul)
+    user_info = message.from_user if isinstance(message, types.Message) else message.from_user
+    display_username = f"@{user_info.username}" if user_info.username else "O'rnatilmagan"
 
     text = (
         f"👤 <b>SHAXSIY KABINET</b>\n"

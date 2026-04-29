@@ -1,3 +1,5 @@
+import pytz
+
 import asyncio
 import logging
 from aiohttp import web
@@ -5,6 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from datetime import datetime, timedelta, timezone
 
 from database.connection import AsyncSessionLocal, engine, check_db
 from database.events import attach_cache_listeners 
@@ -23,6 +26,17 @@ logger = logging.getLogger("Main")
 async def health_check_handler(request):
     """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
     return web.Response(text="AniNowuz SaaS Engine is running! 🚀", status=200)
+
+
+
+def get_now():
+    # O'zbekiston vaqt mintaqasini belgilash
+    tashkent_tz = pytz.timezone('Asia/Tashkent')
+    # Hozirgi UTC vaqtni olib, Toshkent vaqtiga o'tkazish
+    return datetime.now(tashkent_tz)
+
+# Handler ichida foydalanish:
+now = get_now()
 
 async def on_startup(bot: Bot):
     """Industrial Startup: Infra & Worker Sync."""
