@@ -15,18 +15,20 @@ Creator_ID = getattr(config, 'CREATOR_ID', None)
 
 
 @router.message(F.text == "👤 Shaxsiy kabinet")
-async def personal_cabinet(message: types.Message, user: Any):
-    # Xavfsiz olish
-    user_id = getattr(user, 'user_id', message.from_user.id)
-    points = getattr(user, 'points', 0)
-    status = getattr(user, 'status', 'user')
-    ref_count = getattr(user, 'referral_count', 0)
-    vip_expire = getattr(user, 'vip_expire_date', None)
+async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], user: DBUser):
+    # CallbackQuery kelsa, uning ichidagi xabarni olamiz
+    target = message.message if isinstance(message, types.CallbackQuery) else message
     
-    # VIP status hisoblash (UTC bilan)
+    # Ma'lumotlarni olish
+    user_id = user.user_id
+    points = user.points
+    status = user.status
+    ref_count = user.referral_count
+    vip_expire = user.vip_expire_date
+    
+    # VIP status hisoblash
     now = datetime.now(timezone.utc)
     if vip_expire:
-        # Bazadan kelgan vaqtni UTC ga moslash
         if vip_expire.tzinfo is None:
             vip_expire = vip_expire.replace(tzinfo=timezone.utc)
             
@@ -37,8 +39,7 @@ async def personal_cabinet(message: types.Message, user: Any):
     else:
         vip_status = "❌ Faol emas"
 
-    # Username
-    display_username = f"@{message.from_user.username}" if message.from_user.username else "O'rnatilmagan"
+    display_username = f"@{target.chat.username}" if target.chat.username else "O'rnatilmagan"
 
     text = (
         f"👤 <b>SHAXSIY KABINET</b>\n"
@@ -52,20 +53,30 @@ async def personal_cabinet(message: types.Message, user: Any):
         f"━━━━━━━━━━━━━━"
     )
     
-    # Tugmalar (UX uchun)
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+    kb_list = [
         [types.InlineKeyboardButton(text="💎 VIP sotib olish", callback_data="buy_vip")],
         [types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link")],
-        [types.InlineKeyboardButton(text="👤 Saytdagi profilim", url="https://aninovuz.uz/profile")]
-        
-    ])
+        [types.InlineKeyboardButton(text="👤 Saytdagi profilim", url="https://aninowuz.uz/profile")]
+    ]
+    
+    # 💡 Agar ballar yetsa, ballarni almashtirish tugmasini ham shu yerda ko'rsatish mumkin
+    if points >= 100:
+        kb_list.insert(0, [types.InlineKeyboardButton(text="💎 Ballarni VIP'ga almashtirish", callback_data="exchange_points")])
+
+    kb = types.InlineKeyboardMarkup(inline_keyboard=kb_list)
 
     try:
-        await message.answer(text, reply_markup=kb)
+        # Agar bu callback bo'lsa (ya'ni almashtirishdan keyin chaqirilsa) - EDIT qilamiz
+        if isinstance(message, types.CallbackQuery):
+            await message.message.edit_text(text, reply_markup=kb)
+        else:
+            # Agar oddiy matnli xabar bo'lsa - yangi xabar yuboramiz
+            await message.answer(text, reply_markup=kb)
     except Exception as e:
-        logger.error(f"Cabinet error for user {user_id}: {e}", exc_info=True)
+        logger.error(f"Cabinet error: {e}")
 
 
+        
 @router.message(F.text == "🌟 Reyting")
 async def rating(message: types.Message, session: AsyncSession, user: DBUser):
     # 1. Bazadan TOP 10 ni olamiz
@@ -98,13 +109,18 @@ async def rating(message: types.Message, session: AsyncSession, user: DBUser):
 @router.message(F.text == "❓ Qo'llanma")
 async def help_page(message: types.Message):
     text = (
-        "❓ <b>Qo'llanma</b>\n\n"
-        "🔍 <b>Anime qidirish</b> — anime nomini yozing\n"
-        "👤 <b>Shaxsiy kabinet</b> — profilingizni ko'ring\n"
-        "🌟 <b>Reyting</b> — eng mashhur animalar\n"
-        "💎 <b>VIP</b> — maxsus imkoniyatlar\n\n"
-        "Savollar uchun: @admin"
+        "❓ <b>QO'LLANMA</b>\n\n"
+        "Bu bot orqali siz quyidagi imkoniyatlardan foydalanishingiz mumkin:\n\n"
+        "1️⃣ <b>Shaxsiy kabinet</b>: O'z profilingizni ko'rish va VIP sotib olish.\n"
+        "2️⃣ <b>Reyting</b>: Eng faol foydalanuvchilar ro'yxatini ko'rish.\n"
+        "3️⃣ <b>Qo'llanma</b>: Botning imkoniyatlari haqida ma'lumot olish.\n"
+        "4️⃣ <b>VIP sotib olish</b>: Maxsus imkoniyatlarga ega bo'lish uchun VIP rejimini sotib olish.\n"
+        "5️⃣ <b>Reklama berish</b>: O'z mahsulotingiz yoki xizmatlaringizni reklama qilish imkoniyati.\n\n"
+        "Agar sizda savollar bo'lsa, admin bilan bog'laning"
     )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url= "https://t.me/Khudoyqulov_pg")]
+    ])
     await message.answer(text)
 
 
@@ -131,13 +147,26 @@ async def buy_vip(message: types.Message, user: DBUser, session: AsyncSession = 
         f"✅ Barcha yopiq kanallarga kirish\n"
         f"✅ Maxsus va pre-reliz kontentlar\n"
         f"✅ Tezkor yuklab olish tezligi\n\n"
-        f"⏳ <b>To'lov tizimi tez kunda ishga tushadi!</b>"
+        
     )
-
-    await message.answer(text)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="💳 VIP sotib olish", callback_data="purchase_vip")],
+    ])
+    await message.answer(text, reply_markup=kb)
 
 @router.message(F.text == "📢 Reklama berish")
 async def advertisement(message: types.Message):
-    await message.answer("📢Reklama xizmati tez kunda...")
-
+    text = (
+        "📢 <b>Reklama berish</b>\n\n"
+        "Agar sizda reklama berish istagi bo'lsa, iltimos, quyidagi ma'lumotlarni admin ga yuboring:\n\n"
+        "1️⃣ Reklama matni (qisqa va aniq)\n"
+        "2️⃣ Rasm yoki video (agar mavjud bo'lsa)\n"
+        "3️⃣ Maqsadli auditoriya (agar kerak bo'lsa)\n\n"
+        "Admin siz bilan bog'lanib, tafsilotlarni muhokama qiladi."
+    )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url= "https://t.me/Khudoyqulov_pg")]
+    ])
+    await message.answer(text, reply_markup=kb)
+    
 

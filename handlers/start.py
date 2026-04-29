@@ -98,34 +98,90 @@ async def get_sub_keyboard(missing_channels: list) -> types.InlineKeyboardMarkup
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession, bot: Bot):
-    # 1. Privilege Check (Middleware orqali kelgan 'user' modelidan foydalanamiz)
-    # config.CREATOR_ID bilan tekshirish xavfsizlik uchun qo'shilgan
+    # 1. REFERAL TIZIMI (Faqat yangi foydalanuvchilar uchun)
+    # user.joined_at va func.now() o'rtasidagi farq juda kichik bo'lsa, demak u yangi user
+    args = message.text.split()
+    
+    # Agar foydalanuvchi hali hech kim tomonidan taklif qilinmagan bo'lsa (referred_by is None)
+    # va /start buyrug'ida argument bo'lsa (ya'ni kimdir taklif qilgan bo'lsa)
+    if len(args) > 1 and user.referred_by is None:
+        try:
+            referrer_id = int(args[1])
+            
+            # O'z-o'zini taklif qilishni oldini olish
+            if referrer_id != user.user_id:
+                # Taklif qilgan odamni (referrer) bazadan qidiramiz
+                stmt = select(DBUser).where(DBUser.user_id == referrer_id)
+                res = await session.execute(stmt)
+                referrer = res.scalar_one_or_none()
+
+                if referrer:
+                    # Yangi foydalanuvchiga kim taklif qilganini yozamiz
+                    user.referred_by = referrer_id
+                    
+                    # Taklif qilgan odamga (referrer) mukofot beramiz
+                    referrer.points += 10  # 10 ball qo'shish
+                    referrer.referral_count += 1  # Takliflar sonini 1 taga oshirish
+                    
+                    # session.add() qilish shart emas, chunki obyektlar session'da bor
+                    # faqat o'zgarishlarni commit qilish kifoya (agar middleware qilmasa)
+                    
+                    # Taklif qilgan odamga xushxabar yuboramiz
+                    try:
+                        await bot.send_message(
+                            chat_id=referrer_id,
+                            text=(
+                                f"🎊 <b>Yangi taklif!</b>\n"
+                                f"Sizning havolangiz orqali yangi foydalanuvchi qo'shildi.\n"
+                                f"Hisobingizga <b>10 ball</b> qo'shildi. Rahmat! 🔥"
+                            ),
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Referrer'ga xabar yuborib bo'lmadi: {e}")
+                        
+        except (ValueError, IndexError) as e:
+            logger.error(f"Referral ID format error: {e}")
+
+    # 2. PRIVILEGE CHECK (Creator/Admin/VIP)
+    # Sizning is_vip property'ingizdan foydalanamiz
     is_privileged = (
-        user.status in ["creator", "admin", "vip"] or 
-        message.from_user.id == config.CREATOR_ID
+        user.status in ["creator", "admin"] or 
+        user.is_vip or 
+        user.user_id == config.CREATOR_ID
     )
 
     if is_privileged:
         return await message.answer(
             f"👑 Xush kelibsiz, <b>{message.from_user.full_name}</b>!",
-            reply_markup=get_main_menu(user_id=message.from_user.id, status=user.status)
+            reply_markup=get_main_menu(
+                user_id=user.user_id, 
+                is_vip=user.is_vip, 
+                status=user.status
+            )
         )
 
-    # 2. Strict Subscription Check
-    # 'session' middleware dan kelgan ulanishni ishlatadi
-    is_subbed, missing = await check_subscription(bot, message.from_user.id, session)
+    # 3. KANALLARGA OBUNA TEKSHIRUVI
+    is_subbed, missing = await check_subscription(bot, user.user_id, session)
     
     if not is_subbed:
         kb = await get_sub_keyboard(missing)
         return await message.answer(
             "📢 <b>Botdan foydalanish uchun quyidagi kanallarga obuna bo'lishingiz shart:</b>",
-            reply_markup=kb
+            reply_markup=kb,
+            parse_mode="HTML"
         )
 
-    # 3. Success Entry
+    # 4. SUCCESS ENTRY
     await message.answer(
-        f"👋 Xush kelibsiz , <b>{message.from_user.full_name}</b>! Aninov ga",
-        reply_markup=get_main_menu(user_id=message.from_user.id, status=user.status)
+        f"👋 Xush kelibsiz, <b>{message.from_user.full_name}</b>!\n"
+        f"<b>AniNowuz</b> botiga xush kelibsiz. Maroqli hordiq tilaymiz!",
+        reply_markup=get_main_menu(
+            user_id=user.user_id, 
+            is_vip=user.is_vip, 
+            status=user.status
+        ),
+        parse_mode="HTML"
     )
     
 
