@@ -68,9 +68,26 @@ async def start_id_search(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(SearchStates.waiting_for_id)
     await callback.answer()
 
-# Bekor qilish handlerini ham qo'shib qo'yamiz
+# Bekor qilish handlerini optimallashtiramiz
 @router.callback_query(F.data == "cancel_search")
-async def cancel_search(callback: types.CallbackQuery, state: FSMContext):
+async def cancel_search(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    # 1. Holatni tozalaymiz
     await state.clear()
-    await callback.message.edit_text("Qidiruv bekor qilindi. Qayta qidirish uchun menyudan foydalaning.")
-    await callback.answer()
+    
+    # 2. Foydalanuvchining VIP statusini qayta tekshiramiz 
+    # (Chunki menyuni qayta chiqarish uchun bu kerak)
+    stmt = select(DBUser).where(DBUser.user_id == callback.from_user.id)
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
+    is_vip = user.is_vip if user else False
+
+    # 3. Xabarni o'chirib yangi xabar yubormaymiz, balki o'zini tahrirlaymiz
+    await callback.message.edit_text(
+        "🔍 <b>Anime qidiruv bo'limiga qaytdingiz.</b>\n\n"
+        "Quyidagi qidiruv usullaridan birini tanlang:",
+        reply_markup=search_inline_kb(is_vip=is_vip),
+        parse_mode="HTML"
+    )
+    
+    # 4. Bildirishnoma (Toast) yuboramiz
+    await callback.answer("Qidiruv bekor qilindi")
