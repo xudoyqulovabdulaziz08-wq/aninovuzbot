@@ -98,35 +98,33 @@ async def get_sub_keyboard(missing_channels: list) -> types.InlineKeyboardMarkup
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession, bot: Bot):
-    # 1. REFERAL TIZIMI (Faqat yangi foydalanuvchilar uchun)
-    # user.joined_at va func.now() o'rtasidagi farq juda kichik bo'lsa, demak u yangi user
     args = message.text.split()
     
-    # Agar foydalanuvchi hali hech kim tomonidan taklif qilinmagan bo'lsa (referred_by is None)
-    # va /start buyrug'ida argument bo'lsa (ya'ni kimdir taklif qilgan bo'lsa)
     if len(args) > 1 and user.referred_by is None:
         try:
             referrer_id = int(args[1])
             
-            # O'z-o'zini taklif qilishni oldini olish
             if referrer_id != user.user_id:
-                # Taklif qilgan odamni (referrer) bazadan qidiramiz
                 stmt = select(DBUser).where(DBUser.user_id == referrer_id)
                 res = await session.execute(stmt)
                 referrer = res.scalar_one_or_none()
 
                 if referrer:
-                    # Yangi foydalanuvchiga kim taklif qilganini yozamiz
+                    # 1. O'zgarishlarni kiritamiz
                     user.referred_by = referrer_id
+                    referrer.points += 10
+                    referrer.referral_count += 1
                     
-                    # Taklif qilgan odamga (referrer) mukofot beramiz
-                    referrer.points += 10  # 10 ball qo'shish
-                    referrer.referral_count += 1  # Takliflar sonini 1 taga oshirish
+                    # 2. BAZAGA SAQLASH (Eng muhim joyi!)
+                    await session.commit()
                     
-                    # session.add() qilish shart emas, chunki obyektlar session'da bor
-                    # faqat o'zgarishlarni commit qilish kifoya (agar middleware qilmasa)
-                    
-                    # Taklif qilgan odamga xushxabar yuboramiz
+                    # 3. KESHNI TOZALASH
+                    # Taklif qilgan odamning keshini o'chiramiz, shunda u kabinetda yangi ballni ko'radi
+                    from database.cache import valkey # Kesh modulini import qiling
+                    if 'valkey' in locals() or 'valkey' in globals():
+                        await valkey.delete("db_users", referrer_id)
+
+                    # 4. Xabar yuborish
                     try:
                         await bot.send_message(
                             chat_id=referrer_id,
@@ -142,48 +140,6 @@ async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession,
                         
         except (ValueError, IndexError) as e:
             logger.error(f"Referral ID format error: {e}")
-
-    # 2. PRIVILEGE CHECK (Creator/Admin/VIP)
-    # Sizning is_vip property'ingizdan foydalanamiz
-    is_privileged = (
-        user.status in ["creator", "admin"] or 
-        user.is_vip or 
-        user.user_id == config.CREATOR_ID
-    )
-
-    if is_privileged:
-        return await message.answer(
-            f"👑 Xush kelibsiz, <b>{message.from_user.full_name}</b>!",
-            reply_markup=get_main_menu(
-                user_id=user.user_id, 
-                is_vip=user.is_vip, 
-                status=user.status
-            )
-        )
-
-    # 3. KANALLARGA OBUNA TEKSHIRUVI
-    is_subbed, missing = await check_subscription(bot, user.user_id, session)
-    
-    if not is_subbed:
-        kb = await get_sub_keyboard(missing)
-        return await message.answer(
-            "📢 <b>Botdan foydalanish uchun quyidagi kanallarga obuna bo'lishingiz shart:</b>",
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
-
-    # 4. SUCCESS ENTRY
-    await message.answer(
-        f"👋 Xush kelibsiz, <b>{message.from_user.full_name}</b>!\n"
-        f"<b>AniNowuz</b> botiga xush kelibsiz. Maroqli hordiq tilaymiz!",
-        reply_markup=get_main_menu(
-            user_id=user.user_id, 
-            is_vip=user.is_vip, 
-            status=user.status
-        ),
-        parse_mode="HTML"
-    )
-    
 
 @router.callback_query(F.data == "check_sub")
 async def check_sub_callback(callback: types.CallbackQuery, user: DBUser, session: AsyncSession, bot: Bot):

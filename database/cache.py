@@ -165,7 +165,31 @@ class CacheManager:
 
     def _get_key(self, table_name: str, obj_id: Any) -> str:
         return f"{self.namespace}:{table_name}:{obj_id}:{self.version}"
+    # CacheManager sinfi ichiga qo'shing:
 
+    async def delete(self, table_name: str, obj_id: Any):
+        key = self._get_key(table_name, obj_id)
+        async with self._l1_lock:
+            self._l1_cache.pop(key, None)
+        if self.redis:
+            try:
+                pipe = self.redis.pipeline()
+                pipe.delete(key)
+                # Stream orqali boshqa instansiyalarga invalidatsiya yuborish
+                payload = {"key": key, "sender": self.node_id}
+                pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)})
+                await pipe.execute()
+            except Exception as e:
+                logger.error(f"Cache delete error: {e}")
+
+    async def set(self, table_name: str, obj_id: Any, data: Any, ttl: int = 3600):
+        key = self._get_key(table_name, obj_id)
+        if self.redis:
+            try:
+                await self.redis.setex(key, ttl, orjson.dumps(data))
+                await self._set_l1(key, data, ttl=min(ttl, 60))
+            except Exception as e:
+                logger.error(f"Cache set error: {e}")
     async def _set_l1(self, key: str, data: Any, ttl: int):
         async with self._l1_lock:
             if len(self._l1_cache) >= self._l1_max_size:
