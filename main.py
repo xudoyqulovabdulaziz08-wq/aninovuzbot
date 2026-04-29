@@ -15,7 +15,7 @@ from middlewares.db_middleware import DbSessionMiddleware
 from services.cache_worker import CacheInvalidationWorker 
 from config import config
 from database.cache import valkey
-from handlers import start, admin, user, anime
+from handlers import start, admin, user, anime, vip
 from handlers import search
 from handlers import referral
 
@@ -115,6 +115,7 @@ def main():
     dp.include_router(start.router)
     dp.include_router(anime.router)
     dp.include_router(user.router)
+    dp.include_router(vip.router)
     dp.include_router(referral.router)
     dp.include_router(search.router)
 
