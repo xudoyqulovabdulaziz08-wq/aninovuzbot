@@ -7,5 +7,5 @@ redis
 python-dotenv
 pydantic
 orjson
-
+pytz
 
