@@ -140,7 +140,7 @@ async def help_page(message: types.Message):
 
 
 @router.message(F.text == "📢 Reklama berish")
-async def advertisement(message: types.Message):
+async def advertisement(message: types.Message, user: DBUser):
     text = (
         "📢 <b>Reklama berish</b>\n\n"
         "Agar sizda reklama berish istagi bo'lsa, iltimos, quyidagi ma'lumotlarni admin ga yuboring:\n\n"
@@ -149,8 +149,10 @@ async def advertisement(message: types.Message):
         "3️⃣ Maqsadli auditoriya (agar kerak bo'lsa)\n\n"
         "Admin siz bilan bog'lanib, tafsilotlarni muhokama qiladi."
     )
+    admin_username = "Khudoyqulov_pg"
+    admin_url = f"https://t.me/{admin_username}?text=Assalomu+alaykum+men+reklama+bermoqchiman"
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url= "https://t.me/Khudoyqulov_pg")]
+        [types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url= admin_url)]
     ])
     await message.answer(text, reply_markup=kb)
     
