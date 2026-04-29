@@ -11,7 +11,7 @@ from database.models import Channel, DBUser
 from handlers import user
 from keyboards.reply import get_main_menu
 from config import config
-from user import personal_cabinet
+from handlers.user import personal_cabinet
 from middlewares.db_middleware import DbSessionMiddleware
 logger = logging.getLogger("StartHandler")
 router = Router()
@@ -44,6 +44,15 @@ async def get_ref_link_callback(callback: types.CallbackQuery, user: DBUser):
         await callback.message.edit_text(text, reply_markup=kb)
     except Exception:
         pass
+    await callback.answer()
+
+# handlers/referral.py ichida
+
+@router.callback_query(F.data == "back_to_cabinet")
+async def back_to_cabinet(callback: types.CallbackQuery, user: DBUser):
+    # Funksiya ichida import qilish circular import'dan qutqaradi
+    from handlers.user import personal_cabinet 
+    await personal_cabinet(callback, user)
     await callback.answer()
 
 @router.callback_query(F.data == "exchange_points")
