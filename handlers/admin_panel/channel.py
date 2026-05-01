@@ -125,28 +125,37 @@ async def check_channel_info(message: types.Message, state: FSMContext, bot: Bot
 
 @router.callback_query(F.data == "confirm_add_channel")
 async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    # 1. Eng muhim to'siq: Session None bo'lsa darhol to'xtatamiz
+    # Bu AttributeError: 'NoneType' object has no attribute 'execute' xatosini oldini oladi
+    if session is None:
+        return await callback.answer(
+            "⚠️ Ma'lumotlar bazasi bilan aloqa vaqtincha uzilgan (Circuit Breaker).\n"
+            "Iltimos, bir ozdan so'ng qayta urinib ko'ring.", 
+            show_alert=True
+        )
 
     data = await state.get_data()
 
+    # Ma'lumotlar borligini tekshirish
     if not all(k in data for k in ("c_id", "c_title", "c_link")):
         await state.clear()
         return await callback.answer("⚠️ Ma'lumotlar eskirgan.", show_alert=True)
 
-    # DUPLICATE CHECK
-    existing = await session.execute(
-        select(Channel).where(Channel.channel_id == data['c_id'])
-    )
-
-    if existing.scalar():
-        await state.clear()
-        return await callback.answer("⚠️ Bu kanal allaqachon mavjud!", show_alert=True)
-
     try:
+        # 2. DUPLICATE CHECK - Endi session.execute xavfsiz
+        existing = await session.execute(
+            select(Channel).where(Channel.channel_id == data['c_id'])
+        )
+
+        if existing.scalar():
+            await state.clear()
+            return await callback.answer("⚠️ Bu kanal allaqachon mavjud!", show_alert=True)
+
         # URL FIX
-        if data['c_link'].startswith("http"):
+        if str(data['c_link']).startswith("http"):
             final_url = data['c_link']
         else:
-            final_url = f"https://t.me/{data['c_link'].replace('@','')}"
+            final_url = f"https://t.me/{str(data['c_link']).replace('@','')}"
 
         new_ch = Channel(
             channel_id=data['c_id'],
@@ -154,12 +163,9 @@ async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, 
             url=final_url,
             is_active=True
         )
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🔙 Admin kanallar bo‘limi", callback_data="admin_channels")]
-        ])
+        
         session.add(new_ch)
         await session.commit()
-
         await state.clear()
 
         await callback.message.edit_text(
@@ -171,9 +177,14 @@ async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, 
             ]),
             parse_mode="HTML"
         )
-    except Exception as e:
-        await session.rollback()
-        logging.error(f"Kanal qo‘shishda xatolik: {e}")
-        await callback.answer("❌ Xatolik yuz berdi!", show_alert=True)
 
-    await callback.answer()
+    except Exception as e:
+        # DB xatosi bo'lsa rollback qilish
+        if session:
+            await session.rollback()
+        logging.error(f"Kanal qo‘shishda xatolik: {e}")
+        await callback.answer("❌ Ma'lumotlar bazasiga saqlashda xatolik yuz berdi!", show_alert=True)
+
+    finally:
+        # Har qanday holatda ham callback query'ni yopish
+        await callback.answer()
