@@ -17,6 +17,13 @@ router = Router()
 class AddChannel(StatesGroup):
     waiting_for_info = State()  # ID va Linkni kutish
 
+
+def paginate(data: list, page: int, limit: int = 5):
+    """Ro'yxatni sahifalarga bo'lib beruvchi yordamchi funksiya"""
+    start = (page - 1) * limit
+    end = start + limit
+    return data[start:end]
+
 @router.callback_query(F.data == "admin_channels")
 async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
     await state.clear()
@@ -198,4 +205,111 @@ async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, 
         logging.error(f"Kanal qo‘shishda xatolik: {e}")
         await callback.answer("❌ Saqlashda xatolik yuz berdi!", show_alert=True)
 
+    await callback.answer()
+
+
+
+
+
+
+@router.callback_query(F.data.startswith("full_channel"))
+async def show_all_channels(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
+    await state.clear()
+    
+    # Callback data'dan sahifa raqamini olamiz, agar bo'lmasa 1-sahifa
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+    limit = 5 # Har bir sahifada 5 ta kanal
+
+    # Bazadan barcha kanallarni olish
+    result = await session.execute(select(Channel).order_by(Channel.id))
+    channels = result.scalars().all()
+
+    if not channels:
+        return await callback.answer("⚠️ Hozircha hech qanday kanal qo'shilmagan.", show_alert=True)
+
+    # Umumiy sahifalar sonini hisoblash
+    total_pages = (len(channels) + limit - 1) // limit
+    current_page_data = paginate(channels, page, limit)
+
+    keyboard = []
+    
+    # Kanallar tugmalari
+    for ch in current_page_data:
+        status_emoji = "✅" if ch.is_active else "❌"
+        keyboard.append([InlineKeyboardButton(text=f"{status_emoji} {ch.title}", callback_data=f"info_ch_{ch.channel_id}:{page}")])
+
+    # Navigatsiya tugmalari (Oldingi, Sahifa raqami, Keyingi)
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"full_channel:{page-1}"))
+    
+    nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="ignore"))
+    
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"full_channel:{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    # Orqaga qaytish tugmasi (Asosiy admin kanallar menyusiga)
+    keyboard.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_channels")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    text = (
+        "📋 <b>BARCHA KANALLAR RO'YXATI</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "Batafsil ma'lumot olish uchun kanal ustiga bosing:\n"
+        f"<i>Jami kanallar: {len(channels)} ta</i>"
+    )
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: # Agar xabar o'zgarmagan bo'lsa xato bermasligi uchun
+        pass
+    
+    await callback.answer()
+
+
+
+@router.callback_query(F.data.startswith("info_ch_"))
+async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSession):
+    # Callback data format: "info_ch_{id}:{page}"
+    data_parts = callback.data.split(":")
+    ch_id = int(data_parts[0].replace("info_ch_", ""))
+    # Agar sahifa raqami kelmasa, standart 1-sahifa deb olamiz
+    current_page = data_parts[1] if len(data_parts) > 1 else "1"
+
+    # Kanal ma'lumotlarini bazadan olish
+    result = await session.execute(select(Channel).where(Channel.channel_id == ch_id))
+    channel = result.scalar_one_or_none()
+
+    if not channel:
+        return await callback.answer("❌ Kanal topilmadi!", show_alert=True)
+
+    # Statistika hisoblash
+    from database.models import DBUser
+    user_count_query = await session.execute(
+        select(func.count(DBUser.user_id)).where(DBUser.referred_by_channel == str(ch_id))
+    )
+    user_count = user_count_query.scalar()
+
+    text = (
+        f"📊 <b>Kanal statistikasi: {channel.title}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"🆔 <b>ID:</b> <code>{channel.channel_id}</code>\n"
+        f"🔗 <b>Link:</b> {channel.url}\n"
+        f"👤 <b>Kelgan foydalanuvchilar:</b> {user_count} ta\n"
+        f"⚙️ <b>Holati:</b> {'Faol ✅' if channel.is_active else 'O‘chirilgan ❌'}\n"
+        f"📅 <b>Qo'shilgan vaqt:</b> {channel.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+    )
+
+    # Sahifani saqlagan holda orqaga qaytish tugmasi
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Kanalni o'chirish", callback_data=f"del_ch_{channel.channel_id}")],
+        [InlineKeyboardButton(text="🔙 Ro'yxatga qaytish", callback_data=f"full_channel:{current_page}")]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     await callback.answer()
