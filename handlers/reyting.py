@@ -19,37 +19,57 @@ Creator_ID = getattr(config, 'CREATOR_ID', None)
 
 
 #======== reyting_menu =========
-
 @router.message(F.text == "🌟 Reyting")
 @router.callback_query(F.data == "reyting_menu")
-async def ranked_full(event: Union[types.Message, types.CallbackQuery], user: DBUser, session: AsyncSession = None):
-    # Event turini aniqlaymiz
+async def ranked_full(event: Union[types.Message, types.CallbackQuery], user: DBUser = None):
     is_callback = isinstance(event, types.CallbackQuery)
     message = event.message if is_callback else event
 
+    if not message:
+        if is_callback:
+            await event.answer("Eski xabarni o'zgartirib bo'lmadi.", show_alert=True)
+        return
+
     text = (
-        f"🌟 <b>REYTING BO'LIMI</b>\n"
-        f"━━━━━━━━━━━━━━\n\n"
-        f"Kerakli bo'limni tanlang:\n"
-        f"▫️ <b>Anime reyting</b> — Eng ko'p ko'rilgan animelar\n"
-        f"▫️ <b>User reyting</b> — Eng ko'p do'stini taklif qilganlar"
-        f"Tez orada juda ko'plab foydalnuvchilar istagan <b>Reyting</b> qishiladi"
+        "🌟 <b>REYTING BO'LIMI</b>\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "Kerakli bo‘limni tanlang:\n\n"
+        "🎬 <b>Anime reyting</b>\n"
+        "   └ Eng mashhur animelar\n\n"
+        "🏆 <b>User reyting</b>\n"
+        "   └ Eng faol foydalanuvchilar\n\n"
+        "🚀 Tez orada yangi tizimlar qo‘shiladi..."
     )
 
+    if user and getattr(user, "is_vip", False):
+        text += "\n\n👑 Siz VIP foydalanuvchisiz!"
+
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🎬 Anime reyting", callback_data="Anime_ranked")],
-        [types.InlineKeyboardButton(text="🏆 Top foydalanuvchilar", callback_data="User_ranked")],
-        
+        [
+            types.InlineKeyboardButton(text="🎬 Anime reyting", callback_data="Anime_ranked"),
+            types.InlineKeyboardButton(text="🏆 User reyting", callback_data="User_ranked"),
+        ]
     ])
 
-    if is_callback:
-        try:
-            await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
-        await event.answer()
-    else:
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    try:
+        if is_callback:
+            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            await event.answer()
+        else:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+    except TelegramBadRequest as e:
+        error_text = str(e).lower()
+
+        if "message is not modified" in error_text:
+            if is_callback:
+                await event.answer()
+
+        elif "message can't be edited" in error_text:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+        else:
+            raise
 
 
 
