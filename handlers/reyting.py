@@ -3,11 +3,13 @@ import logging
 from datetime import datetime, timezone
 from aiogram import types, F, Router
 from typing import Any, Union  # ✅ To'g'risi shu
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func, cast, Float, case
 from database.models import DBUser, Anime
 from sqlalchemy.ext.asyncio import AsyncSession
 from config import config
 from database.cache import valkey
+from aiogram.exceptions import TelegramBadRequest
+from html import escape
 router = Router()
 logger = logging.getLogger(__name__)
 
@@ -16,7 +18,7 @@ Creator_ID = getattr(config, 'CREATOR_ID', None)
 
 
 
-from typing import Union
+#======== reyting_menu =========
 
 @router.message(F.text == "🌟 Reyting")
 @router.callback_query(F.data == "reyting_menu")
@@ -51,8 +53,8 @@ async def ranked_full(event: Union[types.Message, types.CallbackQuery], user: DB
 
 
 
-from sqlalchemy import select, desc, func, cast, Float, case
-from aiogram.exceptions import TelegramBadRequest
+
+
 
 @router.callback_query(F.data == "Anime_ranked")
 async def anime_rank(callback: types.CallbackQuery, session: AsyncSession):
@@ -133,4 +135,99 @@ async def anime_rank(callback: types.CallbackQuery, session: AsyncSession):
             raise
     
     await callback.answer()
+
+
+
+
+
+@router.callback_query(F.data == "User_ranked")
+async def user_rank(callback: types.CallbackQuery, session: AsyncSession):
+    # 1. Pro Algoritm: Universal LN (Natural Log) va Window Functions
+    # ln() ko'plab zamonaviy DB'larda (PostgreSQL, MySQL 8+) barqaror ishlaydi
+    log_p = func.ln(func.coalesce(DBUser.points, 0) + 1)
+    log_r = func.ln(func.coalesce(DBUser.referral_count, 0) + 1)
+    
+    # Skor formulasi (Normalizatsiya bilan)
+    score_f = (
+        (log_p / func.nullif(func.max(log_p).over(), 0) * 0.7) +
+        (log_r / func.nullif(func.max(log_r).over(), 0) * 0.3)
+    )
+    score_label = score_f.label("score")
+
+    # 2. Asosiy Query: Top 10 talik
+    stmt = (
+        select(
+            DBUser.user_id,
+            DBUser.username,
+            DBUser.points,
+            DBUser.referral_count,
+            DBUser.status,
+            score_label
+        )
+        .order_by(desc("score"))
+        .limit(10)
+    )
+    
+    top_users = (await session.execute(stmt)).fetchall()
+
+    if not top_users:
+        return await callback.answer("Hozircha reyting ma'lumotlari yo'q.", show_alert=True)
+
+    # 3. PRO UX: Foydalanuvchining real o'rnini (Rank) hisoblash
+    # Bu foydalanuvchi TOP 10 da bo'lmasa ham o'z o'rnini ko'rishi uchun
+    user_score_sub = select(score_f).where(DBUser.user_id == callback.from_user.id).scalar_subquery()
+    user_rank_stmt = select(func.count()).where(score_f > user_score_sub)
+    user_rank_val = (await session.execute(user_rank_stmt)).scalar() + 1
+
+    # 4. Matnni shakllantirish (UX & HTML Safety)
+    text = "🏆 <b>TOP FOYDALANUVCHILAR</b>\n"
+    text += "━━━━━━━━━━━━━━\n\n"
+    
+    medals = ["🥇", "🥈", "🥉"]
+    user_in_top = False
+    
+    for i, row in enumerate(top_users, 1):
+        if row.user_id == callback.from_user.id:
+            user_in_top = True
+            
+        medal = medals[i-1] if i <= 3 else f"<b>{i}.</b>"
+        
+        # Username Fallback UX
+        safe_name = (
+            f"@{escape(row.username)}" 
+            if row.username 
+            else f"<code>ID:{row.user_id}</code>"
+        )
+        
+        # VIP Badge & Styling
+        vip_badge = "✨ " if row.status == "vip" else ""
+        fmt_points = f"{row.points:,}".replace(",", " ")
+        
+        line = f"<u>{vip_badge}{safe_name}</u>" if row.user_id == callback.from_user.id else f"{vip_badge}{safe_name}"
+        
+        text += (
+            f"{medal} {line}\n"
+            f"   💰 {fmt_points} ball | 👥 {row.referral_count} ta\n\n"
+        )
+
+    # 5. User Rank Upgrade
+    if not user_in_top:
+        text += "━━━━━━━━━━━━━━\n"
+        text += f"👤 Siz: <b>{user_rank_val}-o'rinda</b>\n"
+        text += "<i>Yana biroz harakat qiling!</i>"
+
+    # 6. Tugmalar va Yuborish
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔄 Yangilash", callback_data="User_ranked")],
+        [types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="reyting_menu")]
+    ])
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            raise
+    
+    await callback.answer()
+
 

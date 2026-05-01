@@ -49,14 +49,28 @@ class DBUser(Base):
     comments: Mapped[List["Comment"]] = relationship(back_populates="user")
     tickets: Mapped[List["Ticket"]] = relationship(back_populates="user")
     admin_settings: Mapped[Optional["AdminSettings"]] = relationship(back_populates="user", uselist=False)
+
+    # Indexlar query'larni tezlatish uchun (Ranking uchun juda muhim)
+    __table_args__ = (
+        Index("idx_points", "points"),
+        Index("idx_referral_count", "referral_count"),
+    )
+
     @property
     def is_vip(self) -> bool:
+        """Foydalanuvchi VIP statusini tekshirish (muddati bilan)"""
         if self.status != "vip":
             return False
-        # datetime.now(timezone.utc) ishlatish xavfsizroq
+        
         if self.vip_expire_date:
-            # expire_date timezone-aware bo'lishi kerak
-            return self.vip_expire_date.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
+            # Bazadagi vaqtni UTC ga o'tkazib, hozirgi UTC vaqt bilan solishtiramiz
+            expire_date = self.vip_expire_date
+            if expire_date.tzinfo is None:
+                expire_date = expire_date.replace(tzinfo=timezone.utc)
+            
+            return expire_date > datetime.now(timezone.utc)
+        
+        # Agar status VIP bo'lib, muddati belgilanmagan bo'lsa - muddatsiz VIP
         return True
 # ================= GENRE =================
 class Genre(Base):
