@@ -139,7 +139,7 @@ async def buy_vip_start_handler(callback: types.CallbackQuery, user: DBUser):
         ],
         [
             # Agar ball orqali olish funksiyasi bo'lsa:
-            types.InlineKeyboardButton(text="🎁 Ball orqali olish (100 ball)", callback_data="buy_vip_points")
+            types.InlineKeyboardButton(text="🎁 Ball orqali olish (100 ball)", callback_data="exchange_points_handler")
         ],
         [
             types.InlineKeyboardButton(text="💬 Adminga yozish", url=admin_url)

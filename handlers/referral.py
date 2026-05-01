@@ -104,10 +104,10 @@ async def check_referrals_callback(callback: types.CallbackQuery, user: DBUser, 
         exchange_text = "✅ VIP ga almashtirish (TAYYOR)"
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=exchange_text, callback_data="buy_vip_points")], # Avvalgi buy_vip_points handleriga yo'naltiramiz
+        [types.InlineKeyboardButton(text=exchange_text, callback_data="exchange_points_handler")], # Avvalgi buy_vip_points handleriga yo'naltiramiz
         [types.InlineKeyboardButton(text="🔗 Taklif havolasi", callback_data="get_ref_link")],
-        [types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="back_to_cabinet")],
-        [types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link")],
+        [types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="back_to_cabinet")]
+        
     ])
 
     try:
