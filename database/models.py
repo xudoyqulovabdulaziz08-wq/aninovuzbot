@@ -39,6 +39,7 @@ class DBUser(Base):
     vip_expire_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
     health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
     referral_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     referred_by: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
     )
@@ -49,6 +50,7 @@ class DBUser(Base):
     comments: Mapped[List["Comment"]] = relationship(back_populates="user")
     tickets: Mapped[List["Ticket"]] = relationship(back_populates="user")
     admin_settings: Mapped[Optional["AdminSettings"]] = relationship(back_populates="user", uselist=False)
+    
 
     # Indexlar query'larni tezlatish uchun (Ranking uchun juda muhim)
     __table_args__ = (

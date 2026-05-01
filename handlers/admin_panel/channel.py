@@ -9,6 +9,7 @@ from config import config
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 from datetime import datetime
+from sqlalchemy import update
 import pytz
 
 router = Router()
@@ -275,41 +276,121 @@ async def show_all_channels(callback: types.CallbackQuery, session: AsyncSession
 
 @router.callback_query(F.data.startswith("info_ch_"))
 async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSession):
-    # Callback data format: "info_ch_{id}:{page}"
-    data_parts = callback.data.split(":")
-    ch_id = int(data_parts[0].replace("info_ch_", ""))
-    # Agar sahifa raqami kelmasa, standart 1-sahifa deb olamiz
-    current_page = data_parts[1] if len(data_parts) > 1 else "1"
 
-    # Kanal ma'lumotlarini bazadan olish
-    result = await session.execute(select(Channel).where(Channel.channel_id == ch_id))
+    if session is None:
+        return await callback.answer("⚠️ DB ulanmagan!", show_alert=True)
+
+    # SAFE PARSING
+    try:
+        parts = callback.data.split(":")
+        ch_id = int(parts[0].replace("info_ch_", ""))
+        current_page = int(parts[1]) if len(parts) > 1 else 1
+    except (ValueError, IndexError):
+        return await callback.answer("❌ Xato callback!", show_alert=True)
+
+    try:
+        result = await session.execute(
+            select(Channel).where(Channel.channel_id == ch_id)
+        )
+        channel = result.scalar_one_or_none()
+
+        if not channel:
+            return await callback.answer("❌ Kanal topilmadi!", show_alert=True)
+
+        from html import escape
+        safe_title = escape(channel.title)
+
+        # STAT
+        from database.models import DBUser
+        try:
+            user_count = await session.scalar(
+                select(func.count()).where(DBUser.referred_by_channel == str(ch_id))
+            )
+            user_count = user_count or 0
+        except Exception:
+            user_count = "Noma'lum"
+
+        created = channel.created_at.strftime('%Y-%m-%d %H:%M') if channel.created_at else "Noma'lum"
+
+        text = (
+            f"📊 <b>Kanal statistikasi: {safe_title}</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            f"🆔 <code>{channel.channel_id}</code>\n"
+            f"🔗 {channel.url}\n"
+            f"👤 Yo‘naltirilganlar: <b>{user_count}</b>\n"
+            f"⚙️ Holati: {'Faol ✅' if channel.is_active else 'O‘chirilgan ❌'}\n"
+            f"📅 {created}\n"
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 O‘chirish", callback_data=f"del_ch_{channel.channel_id}")],
+            [InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"full_channel:{current_page}")]
+        ])
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=kb,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+
+    except Exception as e:
+        print(f"Xatolik: {e}")
+        return await callback.answer("❌ Yuklashda xatolik!", show_alert=True)
+
+    await callback.answer()
+
+
+
+
+
+
+
+
+
+
+
+
+@router.callback_query(F.data.startswith("go_to_channel:"))
+async def track_channel_redirect(callback: types.CallbackQuery, session: AsyncSession):
+
+    try:
+        _, ch_id = callback.data.split(":")
+        ch_id = int(ch_id)
+    except (ValueError, IndexError):
+        return await callback.answer("❌ Xato callback!", show_alert=True)
+
+    user_id = callback.from_user.id
+
+    # DB update (optional tracking)
+    await session.execute(
+        update(DBUser)
+        .where(DBUser.user_id == user_id)
+        .values(last_redirected_channel=str(ch_id))
+    )
+    await session.commit()
+
+    # Channel olish
+    result = await session.execute(
+        select(Channel).where(Channel.channel_id == ch_id)
+    )
     channel = result.scalar_one_or_none()
 
     if not channel:
         return await callback.answer("❌ Kanal topilmadi!", show_alert=True)
 
-    # Statistika hisoblash
-    from database.models import DBUser
-    user_count_query = await session.execute(
-        select(func.count(DBUser.user_id)).where(DBUser.referred_by_channel == str(ch_id))
-    )
-    user_count = user_count_query.scalar()
-
     text = (
-        f"📊 <b>Kanal statistikasi: {channel.title}</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🆔 <b>ID:</b> <code>{channel.channel_id}</code>\n"
-        f"🔗 <b>Link:</b> {channel.url}\n"
-        f"👤 <b>Kelgan foydalanuvchilar:</b> {user_count} ta\n"
-        f"⚙️ <b>Holati:</b> {'Faol ✅' if channel.is_active else 'O‘chirilgan ❌'}\n"
-        f"📅 <b>Qo'shilgan vaqt:</b> {channel.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+        "📢 <b>Kanalga obuna bo‘ling</b>\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "1️⃣ Kanalga o‘ting\n"
+        "2️⃣ Obuna bo‘ling\n"
+        "3️⃣ 'Tasdiqlash' tugmasini bosing"
     )
 
-    # Sahifani saqlagan holda orqaga qaytish tugmasi
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Kanalni o'chirish", callback_data=f"del_ch_{channel.channel_id}")],
-        [InlineKeyboardButton(text="🔙 Ro'yxatga qaytish", callback_data=f"full_channel:{current_page}")]
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📢 Kanalga o‘tish", url=channel.url)],
+        [types.InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"check_sub:{ch_id}")]
     ])
 
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
