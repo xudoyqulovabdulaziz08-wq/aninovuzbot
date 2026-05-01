@@ -104,7 +104,7 @@ async def check_referrals_callback(callback: types.CallbackQuery, user: DBUser, 
         exchange_text = "✅ VIP ga almashtirish (TAYYOR)"
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=exchange_text, callback_data="exchange_points_handler")], # Avvalgi buy_vip_points handleriga yo'naltiramiz
+        [types.InlineKeyboardButton(text=exchange_text, callback_data="exchange_points")], # Avvalgi buy_vip_points handleriga yo'naltiramiz
         [types.InlineKeyboardButton(text="🔗 Taklif havolasi", callback_data="get_ref_link")],
         [types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="back_to_cabinet")]
         
@@ -128,50 +128,62 @@ async def back_to_cabinet(callback: types.CallbackQuery, user: DBUser):
     await callback.answer()
 
 @router.callback_query(F.data == "exchange_points")
-async def exchange_points_handler(callback: types.CallbackQuery, user: DBUser, session: AsyncSession):
+async def exchange_points(callback: types.CallbackQuery, user: DBUser, session: AsyncSession):
+    # 0. Session xavfsizligi
+    if session is None:
+        return await callback.answer("⚠️ Baza bilan aloqa yo'q.", show_alert=True)
 
     now = datetime.now(timezone.utc)
 
+    # 1. Ballarni tekshirish
     if user.points < 100:
         needed = 100 - user.points
-
         text = (
-            "⚠️ <b>BALL YETARLI EMAS</b>\n\n"
-            f"Sizda: <b>{user.points}</b>\n"
-            f"Kerak: <b>{needed}</b>\n\n"
-            "💡 Do‘stlarni taklif qilib ball yig‘ing!"
+            "⚠️ <b>BALL YETARLI EMAS</b>\n"
+            "━━━━━━━━━━━━━━\n\n"
+            f"Sizda: <b>{user.points} ball</b>\n"
+            f"Kerak: <b>{needed} ball</b>\n\n"
+            "💡 Do‘stlarni taklif qilib ball yig‘ing yoki VIP sotib oling!"
         )
 
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="📊 Takliflarim ro'yxati", callback_data="check_referrals")],
             [types.InlineKeyboardButton(text="💳 VIP sotib olish", callback_data="buy_vip_start")],
-
+            [types.InlineKeyboardButton(text="👤 Kabinet", callback_data="back_to_cabinet")]
         ])
 
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         return await callback.answer()
 
     try:
-        # VIP logic
-        base = user.vip_expire_date if user.vip_expire_date and user.vip_expire_date > now else now
+        # 2. VIP vaqtini hisoblash (Stacking logic)
+        # Ma'lumotlar bazasidagi vaqtni UTC aware qilish (xatolikni oldini olish uchun)
+        expire_date = user.vip_expire_date
+        if expire_date and expire_date.tzinfo is None:
+            expire_date = expire_date.replace(tzinfo=timezone.utc)
+
+        base = expire_date if expire_date and expire_date > now else now
         user.vip_expire_date = base + timedelta(days=30)
 
+        # 3. Ballarni yechish va statusni yangilash
         user.points -= 100
         user.status = "vip"
 
+        # 4. Saqlash
         await session.commit()
 
         await callback.answer(
-            "🎉 VIP faollashtirildi! 30 kun qo‘shildi 👑",
+            "🎉 VIP faollashtirildi! Muddat 30 kunga uzaytirildi 👑",
             show_alert=True
         )
 
+        # 5. Kabinetni yangilab ko'rsatish
         from handlers.user import personal_cabinet
-        await personal_cabinet(callback, user)
+        await personal_cabinet(callback, user, session)
 
-    except Exception:
+    except Exception as e:
         await session.rollback()
-        logger.exception("VIP exchange failed for user_id=%s", user.user_id)
-        await callback.answer("❌ Xatolik yuz berdi.", show_alert=True)
-
+        # logger obyektini import qilganingizga ishonch hosil qiling
+        print(f"Xatolik yuz berdi: {e}") 
+        await callback.answer("❌ Amaliyot bajarilmadi. Keyinroq urinib ko'ring.", show_alert=True)
 
