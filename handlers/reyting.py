@@ -142,96 +142,90 @@ async def anime_rank(callback: types.CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data == "User_ranked")
 async def user_rank(callback: types.CallbackQuery, session: AsyncSession = None):
-    # 0. Session himoyasi
+    # 1. Session himoyasi (Middleware None qaytarsa)
     if session is None:
         return await callback.answer(
             "⚠️ Ma'lumotlar bazasi vaqtincha ishlamayapti.\nIltimos, birozdan so'ng urinib ko'ring.", 
             show_alert=True
         )
-    log_p = func.ln(func.coalesce(DBUser.points, 0) + 1)
-    log_r = func.ln(func.coalesce(DBUser.referral_count, 0) + 1)
-    
-    # Skor formulasi (Normalizatsiya bilan)
-    score_f = (
-        (log_p / func.nullif(func.max(log_p).over(), 0) * 0.7) +
-        (log_r / func.nullif(func.max(log_r).over(), 0) * 0.3)
-    )
-    score_label = score_f.label("score")
-
-    # 2. Asosiy Query: Top 10 talik
-    stmt = (
-        select(
-            DBUser.user_id,
-            DBUser.username,
-            DBUser.points,
-            DBUser.referral_count,
-            DBUser.status,
-            score_label
-        )
-        .order_by(desc("score"))
-        .limit(10)
-    )
-    
-    top_users = (await session.execute(stmt)).fetchall()
-
-    if not top_users:
-        return await callback.answer("Hozircha reyting ma'lumotlari yo'q.", show_alert=True)
-
-    # 3. PRO UX: Foydalanuvchining real o'rnini (Rank) hisoblash
-    # Bu foydalanuvchi TOP 10 da bo'lmasa ham o'z o'rnini ko'rishi uchun
-    user_score_sub = select(score_f).where(DBUser.user_id == callback.from_user.id).scalar_subquery()
-    user_rank_stmt = select(func.count()).where(score_f > user_score_sub)
-    user_rank_val = (await session.execute(user_rank_stmt)).scalar() + 1
-
-    # 4. Matnni shakllantirish (UX & HTML Safety)
-    text = "🏆 <b>TOP FOYDALANUVCHILAR</b>\n"
-    text += "━━━━━━━━━━━━━━\n\n"
-    
-    medals = ["🥇", "🥈", "🥉"]
-    user_in_top = False
-    
-    for i, row in enumerate(top_users, 1):
-        if row.user_id == callback.from_user.id:
-            user_in_top = True
-            
-        medal = medals[i-1] if i <= 3 else f"<b>{i}.</b>"
-        
-        # Username Fallback UX
-        safe_name = (
-            f"@{escape(row.username)}" 
-            if row.username 
-            else f"<code>ID:{row.user_id}</code>"
-        )
-        
-        # VIP Badge & Styling
-        vip_badge = "✨ " if row.status == "vip" else ""
-        fmt_points = f"{row.points:,}".replace(",", " ")
-        
-        line = f"<u>{vip_badge}{safe_name}</u>" if row.user_id == callback.from_user.id else f"{vip_badge}{safe_name}"
-        
-        text += (
-            f"{medal} {line}\n"
-            f"   💰 {fmt_points} ball | 👥 {row.referral_count} ta\n\n"
-        )
-
-    # 5. User Rank Upgrade
-    if not user_in_top:
-        text += "━━━━━━━━━━━━━━\n"
-        text += f"👤 Siz: <b>{user_rank_val}-o'rinda</b>\n"
-        text += "<i>Yana biroz harakat qiling!</i>"
-
-    # 6. Tugmalar va Yuborish
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🔄 Yangilash", callback_data="User_ranked")],
-        [types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="reyting_menu")]
-    ])
 
     try:
+        # 2. Asosiy Reyting Algoritmi (Top 10)
+        # log() va max() OVER() faqat SELECT ichida ishlatiladi
+        log_p = func.ln(func.coalesce(DBUser.points, 0) + 1)
+        log_r = func.ln(func.coalesce(DBUser.referral_count, 0) + 1)
+        
+        score_f = (
+            (log_p / func.nullif(func.max(log_p).over(), 0) * 0.7) +
+            (log_r / func.nullif(func.max(log_r).over(), 0) * 0.3)
+        )
+        score_label = score_f.label("score")
+
+        stmt = (
+            select(
+                DBUser.user_id,
+                DBUser.username,
+                DBUser.points,
+                DBUser.referral_count,
+                DBUser.status,
+                score_label
+            )
+            .order_by(desc("score"))
+            .limit(10)
+        )
+        
+        result = await session.execute(stmt)
+        top_users = result.fetchall()
+
+        if not top_users:
+            return await callback.answer("Hozircha reyting ma'lumotlari yo'q.", show_alert=True)
+
+        # 3. Foydalanuvchi o'rnini hisoblash (Xavfsiz usul - Window function'siz)
+        user_data_stmt = select(DBUser.points, DBUser.referral_count).where(DBUser.user_id == callback.from_user.id)
+        u_res = (await session.execute(user_data_stmt)).fetchone()
+        
+        user_rank_val = "1000+"
+        if u_res:
+            # Oddiy ballar bo'yicha hisoblash bazaga yuklama bermaydi
+            rank_stmt = select(func.count()).select_from(DBUser).where(
+                (DBUser.points > u_res.points) | 
+                ((DBUser.points == u_res.points) & (DBUser.referral_count > u_res.referral_count))
+            )
+            user_rank_val = (await session.execute(rank_stmt)).scalar() + 1
+
+        # 4. Matn shakllantirish
+        text = "🏆 <b>TOP FOYDALANUVCHILAR</b>\n"
+        text += "━━━━━━━━━━━━━━\n\n"
+        
+        medals = ["🥇", "🥈", "🥉"]
+        user_in_top = False
+        
+        for i, row in enumerate(top_users, 1):
+            if row.user_id == callback.from_user.id:
+                user_in_top = True
+            
+            medal = medals[i-1] if i <= 3 else f"<b>{i}.</b>"
+            safe_name = f"@{escape(row.username)}" if row.username else f"<code>ID:{row.user_id}</code>"
+            vip_badge = "✨ " if row.status == "vip" else ""
+            fmt_points = f"{row.points:,}".replace(",", " ")
+            
+            line = f"<u>{vip_badge}{safe_name}</u>" if row.user_id == callback.from_user.id else f"{vip_badge}{safe_name}"
+            text += f"{medal} {line}\n   💰 {fmt_points} ball | 👥 {row.referral_count} ta\n\n"
+
+        if not user_in_top:
+            text += "━━━━━━━━━━━━━━\n"
+            text += f"👤 Siz: <b>{user_rank_val}-o'rinda</b>\n"
+
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🔄 Yangilash", callback_data="User_ranked")],
+            [types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="reyting_menu")]
+        ])
+
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e).lower():
-            raise
+
+    except Exception as e:
+        print(f"Reyting xatosi: {e}")
+        await callback.answer("❌ Ma'lumotlarni yuklashda xatolik yuz berdi.", show_alert=True)
     
     await callback.answer()
-
 
