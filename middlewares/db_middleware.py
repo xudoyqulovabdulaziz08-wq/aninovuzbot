@@ -58,27 +58,34 @@ class DbSessionMiddleware(BaseMiddleware):
                 logger.info("🔧 Circuit Breaker: Recovery attempt...")
 
         # --- 4. DB READ (L3 Fallback) ---
-        session = await self.session_pool().__aenter__() # Sessiyani ochamiz
+        # Middleware ichida DB READ qismi:
         try:
-            try:
-                async with asyncio.timeout(2.5):
-                    db_user = await UserRepository.get_or_create(session, user_obj)
+            async with self.session_pool() as session: 
+                try:
+                    async with asyncio.timeout(2.5):
+                        db_user = await UserRepository.get_or_create(session, user_obj)
                 
-                # DB Health Reset & Cache Logic...
-                user_data = self._model_to_dict(db_user)
-                await self._enqueue_cache_update(user_data)
+                    user_data = self._model_to_dict(db_user)
+                    await self._enqueue_cache_update(user_data)
                 
-                data["user"] = db_user
-                data["session"] = session
-                return await handler(event, data)
+                    data["user"] = db_user
+                    data["session"] = session
+                    
+                    # Handler sessiya ochiqligida chaqiriladi
+                    return await handler(event, data) 
 
-            except Exception as e:
-                await self._handle_db_failure(e)
-                data["user"] = self._get_emergency_user(user_obj)
-                data["session"] = session
-                return await handler(event, data)
-        finally:
-            await session.__aexit__(None, None, None) # Handler tugagach sessiyani yopamiz
+                except Exception as e:
+                    # DB xatosi bo'lsa, handle_db_failure chaqiriladi
+                    await self._handle_db_failure(e)
+                    data["user"] = self._get_emergency_user(user_obj)
+                    data["session"] = None 
+                    return await handler(event, data)
+        except Exception as global_e:
+            # session_pool() o'zi xato bersa (masalan, ulanishlar to'lib ketgan bo'lsa)
+            logger.error(f"Global DB Pool Error: {global_e}")
+            data["user"] = self._get_emergency_user(user_obj)
+            data["session"] = None
+            return await handler(event, data)
 
     async def _enqueue_cache_update(self, user_data: dict):
         """Backpressure & Drop Policy bilan navbatga qo'shish."""

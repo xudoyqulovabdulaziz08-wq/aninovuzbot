@@ -23,8 +23,8 @@ ssl_context = ssl.create_default_context(
 engine = create_async_engine(
     config.DATABASE_URL,
     echo=False,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=20,
+    max_overflow=40,
     pool_pre_ping=True,
     pool_recycle=1800,  # 🔥 connection eskirmasligi uchun
     connect_args={"ssl": ssl_context}

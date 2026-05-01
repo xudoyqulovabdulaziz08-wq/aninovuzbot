@@ -141,9 +141,13 @@ async def anime_rank(callback: types.CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data == "User_ranked")
-async def user_rank(callback: types.CallbackQuery, session: AsyncSession):
-    # 1. Pro Algoritm: Universal LN (Natural Log) va Window Functions
-    # ln() ko'plab zamonaviy DB'larda (PostgreSQL, MySQL 8+) barqaror ishlaydi
+async def user_rank(callback: types.CallbackQuery, session: AsyncSession = None):
+    # 0. Session himoyasi
+    if session is None:
+        return await callback.answer(
+            "⚠️ Ma'lumotlar bazasi vaqtincha ishlamayapti.\nIltimos, birozdan so'ng urinib ko'ring.", 
+            show_alert=True
+        )
     log_p = func.ln(func.coalesce(DBUser.points, 0) + 1)
     log_r = func.ln(func.coalesce(DBUser.referral_count, 0) + 1)
     
