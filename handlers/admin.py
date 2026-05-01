@@ -4,6 +4,7 @@ import logging
 from aiogram import Router, types, F
 import pytz
 from database.models import DBUser, Channel
+from aiogram.fsm.context import FSMContext
 from config import config
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
@@ -18,7 +19,8 @@ CREATOR_ID = config.CREATOR_ID
 
 # ================= creator panel =================
 @router.message(F.text == "👑 CREATOR PANEL")
-async def creator_panel(message: types.Message):
+async def creator_panel(message: types.Message, state: FSMContext):
+    await state.clear()
     # ID bo'yicha qat'iy tekshiruv
     if message.from_user.id != CREATOR_ID:
         return await message.answer("❌ Bu bo'lim faqat bot egasi uchun!")
@@ -37,7 +39,8 @@ async def creator_panel(message: types.Message):
 # ================= admin panel =================
 
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
-async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession):
+async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession, state: FSMContext):
+    await state.clear()
     # Xavfsizlik tekshiruvi: Faqat Creator yoki Admin kira oladi
     if message.from_user.id == config.CREATOR_ID or user.status == "admin":
         uzb_tz = pytz.timezone('Asia/Tashkent')
@@ -59,6 +62,7 @@ async def admin_panel(message: types.Message, user: DBUser, session: AsyncSessio
         kb = admin_panel_kb(user_id=message.from_user.id, user_status=user.status)
         
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        
     else:
         # Oddiy user kirmoqchi bo'lsa javob bermaslik yoki xato deyish
         await message.answer("⚠️ Kechirasiz, bu bo'limga kirish huquqingiz yo'q.")

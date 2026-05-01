@@ -25,6 +25,7 @@ router = Router()
 # Shaxsiy kabinet ichidagi callback handler (get_ref_link uchun)
 @router.callback_query(F.data == "get_ref_link")
 async def get_ref_link_callback(callback: types.CallbackQuery, user: DBUser):
+    await state.clear()
     # User obyektini tekshirish (Middleware xavfsizligi)
     if user is None:
         return await callback.answer("⚠️ Ma'lumot topilmadi.", show_alert=True)

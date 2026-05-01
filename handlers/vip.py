@@ -10,7 +10,7 @@ from config import config
 from database.cache import valkey
 from aiogram.exceptions import TelegramBadRequest
 from urllib.parse import quote
-
+from aiogram.fsm.context import FSMContext
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -27,7 +27,8 @@ Creator_ID = getattr(config, 'CREATOR_ID', None)
 
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
-async def buy_vip(event: Union[types.Message, types.CallbackQuery], user: DBUser, session: AsyncSession = None):
+async def buy_vip(event: Union[types.Message, types.CallbackQuery], user: DBUser, state: FSMContext ,session: AsyncSession = None):
+    await state.clear()
     is_callback = isinstance(event, types.CallbackQuery)
     message = event.message if is_callback else event
 
@@ -104,6 +105,7 @@ async def buy_vip(event: Union[types.Message, types.CallbackQuery], user: DBUser
 
 @router.callback_query(F.data == "buy_vip_start")
 async def buy_vip_start_handler(callback: types.CallbackQuery, user: DBUser):
+    
     # User obyektini tekshirish
     if user is None:
         return await callback.answer("Foydalanuvchi topilmadi.", show_alert=True)
@@ -165,6 +167,7 @@ async def buy_vip_start_handler(callback: types.CallbackQuery, user: DBUser):
 
 @router.callback_query(F.data.startswith("vip_"))
 async def vip_choice_handler(callback: types.CallbackQuery, user: DBUser):
+    
     if user is None:
         return await callback.answer("Foydalanuvchi topilmadi.", show_alert=True)
 

@@ -7,6 +7,7 @@ from sqlalchemy import select, desc
 from database.models import DBUser
 from sqlalchemy.ext.asyncio import AsyncSession
 from config import config
+from aiogram.fsm.context import FSMContext
 from database.cache import valkey
 router = Router()
 logger = logging.getLogger(__name__)
@@ -17,7 +18,8 @@ Creator_ID = getattr(config, 'CREATOR_ID', None)
 
 
 @router.message(F.text == "👤 Shaxsiy kabinet")
-async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], user: DBUser):
+async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], user: DBUser, state: FSMContext):
+    await state.clear()
     target = message.message if isinstance(message, types.CallbackQuery) else message
     
     # Toshkent vaqt mintaqasi
@@ -91,8 +93,8 @@ async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], u
 
 
 @router.message(F.text == "❓ Qo'llanma")
-async def help_page(message: types.Message):
-
+async def help_page(message: types.Message, state: FSMContext):
+    await state.clear()
     text = (
         "❓ <b>QO‘LLANMA</b>\n"
         "━━━━━━━━━━━━━━\n\n"
@@ -125,8 +127,8 @@ async def help_page(message: types.Message):
 
 
 @router.message(F.text == "📢 Reklama berish")
-async def advertisement(message: types.Message, user: DBUser):
-
+async def advertisement(message: types.Message, user: DBUser, state: FSMContext):
+    await state.clear()
     text = (
         "📢 <b>REKLAMA BO‘LIMI</b>\n"
         "━━━━━━━━━━━━━━\n\n"

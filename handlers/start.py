@@ -8,6 +8,7 @@ from aiogram.filters import CommandStart
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
+from aiogram.fsm.context import FSMContext
 
 from database.cache import valkey
 from database.models import Channel, DBUser 
@@ -100,7 +101,8 @@ async def get_sub_keyboard(missing_channels: list) -> types.InlineKeyboardMarkup
 # ================= HANDLERS =================
 
 @router.message(CommandStart())
-async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession, bot: Bot):
+async def cmd_start(message: types.Message, user: DBUser, session: AsyncSession, bot: Bot, state: FSMContext):
+    await state.clear()
     # 1. REFERAL TIZIMI (Faqat yangi foydalanuvchilar uchun)
     # user.joined_at va func.now() o'rtasidagi farq juda kichik bo'lsa, demak u yangi user
     args = message.text.split()

@@ -7,6 +7,7 @@ from sqlalchemy import select, desc, func, cast, Float, case
 from database.models import DBUser, Anime
 from sqlalchemy.ext.asyncio import AsyncSession
 from config import config
+from aiogram.fsm.context import FSMContext
 from database.cache import valkey
 from aiogram.exceptions import TelegramBadRequest
 from html import escape
@@ -21,7 +22,8 @@ Creator_ID = getattr(config, 'CREATOR_ID', None)
 #======== reyting_menu =========
 @router.message(F.text == "🌟 Reyting")
 @router.callback_query(F.data == "reyting_menu")
-async def ranked_full(event: Union[types.Message, types.CallbackQuery], user: DBUser = None):
+async def ranked_full(event: Union[types.Message, types.CallbackQuery], state: FSMContext, user: DBUser = None):
+    await state.clear()
     is_callback = isinstance(event, types.CallbackQuery)
     message = event.message if is_callback else event
 

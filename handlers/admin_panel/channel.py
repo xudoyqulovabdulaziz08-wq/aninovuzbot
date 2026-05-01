@@ -18,7 +18,8 @@ class AddChannel(StatesGroup):
     waiting_for_info = State()  # ID va Linkni kutish
 
 @router.callback_query(F.data == "admin_channels")
-async def admin_channels(callback: types.CallbackQuery, session: AsyncSession):
+async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
+    await state.clear()
     # Faqat faol kanallarni olish
     channels = await session.execute(
         select(Channel).where(Channel.is_active == True)
@@ -75,9 +76,9 @@ async def add_channel_start(callback: types.CallbackQuery, state: FSMContext):
 
 
 
-@router.message(AddChannel.waiting_for_info)
+# 1. Faqat -100 bilan boshlangan xabarlarni qabul qiluvchi handler
+@router.message(AddChannel.waiting_for_info, F.text.startswith("-100"))
 async def check_channel_info(message: types.Message, state: FSMContext, bot: Bot):
-
     try:
         parts = message.text.split()
 
@@ -123,28 +124,37 @@ async def check_channel_info(message: types.Message, state: FSMContext, bot: Bot
             "❌ Xatolik!\nBot kanalga kira olmadi yoki ID noto‘g‘ri."
         )
 
+# 2. Agar foydalanuvchi state ichida bo'lsa-yu, lekin boshqa narsa yozsa (123v kabi)
+@router.message(AddChannel.waiting_for_info)
+async def invalid_channel_format(message: types.Message):
+    await message.answer(
+        "⚠️ <b>Noto'g'ri format!</b>\n\n"
+        "Iltimos, kanal ID raqamini (<b>-100</b> bilan boshlanadigan) va username yuboring.\n"
+        "Misol: <code>-100123456789 @kanal_user</code>\n\n"
+        "<i>Bekor qilish uchun /cancel buyrug'ini yuboring.</i>",
+        parse_mode="HTML"
+    )
+
 @router.callback_query(F.data == "confirm_add_channel")
 async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
-    # 1. Eng muhim to'siq: Session None bo'lsa darhol to'xtatamiz
-    # Bu AttributeError: 'NoneType' object has no attribute 'execute' xatosini oldini oladi
+    # 1. Middleware xavfsizligi (Olmos middleware None qaytarsa)
     if session is None:
-        return await callback.answer(
-            "⚠️ Ma'lumotlar bazasi bilan aloqa vaqtincha uzilgan (Circuit Breaker).\n"
-            "Iltimos, bir ozdan so'ng qayta urinib ko'ring.", 
-            show_alert=True
-        )
+        return await callback.answer("⚠️ Baza ulanishida xatolik. Keyinroq urunib ko'ring.", show_alert=True)
 
     data = await state.get_data()
 
-    # Ma'lumotlar borligini tekshirish
     if not all(k in data for k in ("c_id", "c_title", "c_link")):
         await state.clear()
         return await callback.answer("⚠️ Ma'lumotlar eskirgan.", show_alert=True)
 
     try:
-        # 2. DUPLICATE CHECK - Endi session.execute xavfsiz
+        # 2. Postgres xavfsizligi: IDni aniq integerga o'tkazamiz
+        # Bu 'bigint = character varying' xatosini yo'qotadi
+        target_channel_id = int(data['c_id'])
+
+        # DUPLICATE CHECK
         existing = await session.execute(
-            select(Channel).where(Channel.channel_id == data['c_id'])
+            select(Channel).where(Channel.channel_id == target_channel_id)
         )
 
         if existing.scalar():
@@ -152,13 +162,15 @@ async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, 
             return await callback.answer("⚠️ Bu kanal allaqachon mavjud!", show_alert=True)
 
         # URL FIX
-        if str(data['c_link']).startswith("http"):
-            final_url = data['c_link']
+        raw_link = str(data['c_link'])
+        if raw_link.startswith("http"):
+            final_url = raw_link
         else:
-            final_url = f"https://t.me/{str(data['c_link']).replace('@','')}"
+            final_url = f"https://t.me/{raw_link.replace('@','')}"
 
+        # 3. Model yaratishda ham integer ID ishlatamiz
         new_ch = Channel(
-            channel_id=data['c_id'],
+            channel_id=target_channel_id,
             title=data['c_title'],
             url=final_url,
             is_active=True
@@ -178,13 +190,12 @@ async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, 
             parse_mode="HTML"
         )
 
+    except ValueError:
+        await callback.answer("❌ Kanal ID formati noto'g'ri!", show_alert=True)
     except Exception as e:
-        # DB xatosi bo'lsa rollback qilish
         if session:
             await session.rollback()
         logging.error(f"Kanal qo‘shishda xatolik: {e}")
-        await callback.answer("❌ Ma'lumotlar bazasiga saqlashda xatolik yuz berdi!", show_alert=True)
+        await callback.answer("❌ Saqlashda xatolik yuz berdi!", show_alert=True)
 
-    finally:
-        # Har qanday holatda ham callback query'ni yopish
-        await callback.answer()
+    await callback.answer()
