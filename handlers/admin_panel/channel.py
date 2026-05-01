@@ -3,6 +3,7 @@ from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from html import escape
 
 from database.models import DBUser, Channel
 from config import config
@@ -274,56 +275,58 @@ async def show_all_channels(callback: types.CallbackQuery, session: AsyncSession
 
 
 
+from html import escape
+
+
 @router.callback_query(F.data.startswith("info_ch_"))
 async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSession):
-
     if session is None:
-        return await callback.answer("⚠️ DB ulanmagan!", show_alert=True)
+        return await callback.answer("⚠️ Ma'lumotlar bazasi bilan aloqa yo'q!", show_alert=True)
 
-    # SAFE PARSING
+    # 1. Toza Parsing
     try:
-        parts = callback.data.split(":")
-        ch_id = int(parts[0].replace("info_ch_", ""))
+        # info_ch_123:1 -> ch_id=123, current_page=1
+        data_part = callback.data.replace("info_ch_", "")
+        parts = data_part.split(":")
+        ch_id = int(parts[0])
         current_page = int(parts[1]) if len(parts) > 1 else 1
     except (ValueError, IndexError):
-        return await callback.answer("❌ Xato callback!", show_alert=True)
+        return await callback.answer("❌ Noto'g'ri ma'lumot formati!", show_alert=True)
 
     try:
-        result = await session.execute(
-            select(Channel).where(Channel.channel_id == ch_id)
-        )
+        # 2. Kanalni olish
+        result = await session.execute(select(Channel).where(Channel.channel_id == ch_id))
         channel = result.scalar_one_or_none()
 
         if not channel:
-            return await callback.answer("❌ Kanal topilmadi!", show_alert=True)
+            return await callback.answer("❌ Kanal ma'lumotlar bazasidan topilmadi!", show_alert=True)
 
-        from html import escape
-        safe_title = escape(channel.title)
+        # 3. Foydalanuvchilar sonini hisoblash (Optimallashtirilgan)
+        # referred_by_channel ustunining tipiga qarab ch_id ni o'giring
+        user_count_stmt = select(func.count()).where(DBUser.referred_by_channel == str(ch_id))
+        user_count = await session.scalar(user_count_stmt) or 0
 
-        # STAT
-        from database.models import DBUser
-        try:
-            user_count = await session.scalar(
-                select(func.count()).where(DBUser.referred_by_channel == str(ch_id))
-            )
-            user_count = user_count or 0
-        except Exception:
-            user_count = "Noma'lum"
-
-        created = channel.created_at.strftime('%Y-%m-%d %H:%M') if channel.created_at else "Noma'lum"
-
+        # 4. Matn tayyorlash
+        status_emoji = "✅ Faol" if channel.is_active else "❌ O'chirilgan"
+        created = channel.created_at.strftime('%d.%m.%Y %H:%M') if channel.created_at else "Noma'lum"
+        
         text = (
-            f"📊 <b>Kanal statistikasi: {safe_title}</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            f"🆔 <code>{channel.channel_id}</code>\n"
-            f"🔗 {channel.url}\n"
-            f"👤 Yo‘naltirilganlar: <b>{user_count}</b>\n"
-            f"⚙️ Holati: {'Faol ✅' if channel.is_active else 'O‘chirilgan ❌'}\n"
-            f"📅 {created}\n"
+            f"📊 <b>Kanal statistikasi:</b>\n"
+            f"🔹 <b>Nomi:</b> {escape(channel.title)}\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"🆔 <b>ID:</b> <code>{channel.channel_id}</code>\n"
+            f"🔗 <b>Havola:</b> {channel.url}\n"
+            f"👥 <b>Yo‘naltirilganlar:</b> <code>{user_count}</code> ta\n"
+            f"⚙️ <b>Holati:</b> {status_emoji}\n"
+            f"📅 <b>Qo'shilgan vaqti:</b> {created}\n"
         )
 
+        # 5. Tugmalar (Toggle va Delete)
+        toggle_text = "🔴 Faolsizlantirish" if channel.is_active else "🟢 Faollashtirish"
+        
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 O‘chirish", callback_data=f"del_ch_{channel.channel_id}")],
+            [InlineKeyboardButton(text=toggle_text, callback_data=f"toggle_ch_{ch_id}:{current_page}")],
+            [InlineKeyboardButton(text="🗑 Butunlay o‘chirish", callback_data=f"del_ch_{ch_id}")],
             [InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"full_channel:{current_page}")]
         ])
 
@@ -335,8 +338,8 @@ async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSessi
         )
 
     except Exception as e:
-        print(f"Xatolik: {e}")
-        return await callback.answer("❌ Yuklashda xatolik!", show_alert=True)
+        logging.error(f"Channel Info Detail Error: {e}")
+        return await callback.answer("❌ Ma'lumotlarni yuklashda texnik xatolik!", show_alert=True)
 
     await callback.answer()
 

@@ -40,6 +40,8 @@ class DBUser(Base):
     health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
     referral_count: Mapped[int] = mapped_column(Integer, default=0)
     last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    
+    referred_by_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True) 
     referred_by: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
     )
