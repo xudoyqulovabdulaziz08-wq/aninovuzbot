@@ -92,20 +92,32 @@ async def personal_cabinet(message: Union[types.Message, types.CallbackQuery], u
 
 @router.message(F.text == "❓ Qo'llanma")
 async def help_page(message: types.Message):
+
     text = (
-        "❓ <b>QO'LLANMA</b>\n\n"
-        "Bu bot orqali siz quyidagi imkoniyatlardan foydalanishingiz mumkin:\n\n"
-        "1️⃣ <b>Shaxsiy kabinet</b>: O'z profilingizni ko'rish va VIP sotib olish.\n"
-        "2️⃣ <b>Reyting</b>: Eng faol foydalanuvchilar ro'yxatini ko'rish.\n"
-        "3️⃣ <b>Qo'llanma</b>: Botning imkoniyatlari haqida ma'lumot olish.\n"
-        "4️⃣ <b>VIP sotib olish</b>: Maxsus imkoniyatlarga ega bo'lish uchun VIP rejimini sotib olish.\n"
-        "5️⃣ <b>Reklama berish</b>: O'z mahsulotingiz yoki xizmatlaringizni reklama qilish imkoniyati.\n\n"
-        "Agar sizda savollar bo'lsa, admin bilan bog'laning"
+        "❓ <b>QO‘LLANMA</b>\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "📌 <b>Bot imkoniyatlari:</b>\n\n"
+        "👤 Shaxsiy kabinet — profil va VIP\n"
+        "🏆 Reyting — TOP foydalanuvchilar\n"
+        "💎 VIP tizimi — maxsus imkoniyatlar\n"
+        "🎯 Referal — do‘st taklif qilib ball yig‘ish\n\n"
+        "📩 Savollar bo‘lsa admin bilan bog‘laning"
     )
+
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url= "https://t.me/Khudoyqulov_pg")]
+        [
+            types.InlineKeyboardButton(
+                text="📩 Admin bilan bog‘lanish",
+                url="https://t.me/Khudoyqulov_pg"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(text="👤 Kabinet", callback_data="cabinet"),
+            types.InlineKeyboardButton(text="💎 VIP", callback_data="buy_vip_menu"),
+        ]
     ])
-    await message.answer(text)
+
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 
@@ -114,19 +126,30 @@ async def help_page(message: types.Message):
 
 @router.message(F.text == "📢 Reklama berish")
 async def advertisement(message: types.Message, user: DBUser):
+
     text = (
-        "📢 <b>Reklama berish</b>\n\n"
-        "Agar sizda reklama berish istagi bo'lsa, iltimos, quyidagi ma'lumotlarni admin ga yuboring:\n\n"
-        "1️⃣ Reklama matni (qisqa va aniq)\n"
-        "2️⃣ Rasm yoki video (agar mavjud bo'lsa)\n"
-        "3️⃣ Maqsadli auditoriya (agar kerak bo'lsa)\n\n"
-        "Admin siz bilan bog'lanib, tafsilotlarni muhokama qiladi."
+        "📢 <b>REKLAMA BO‘LIMI</b>\n"
+        "━━━━━━━━━━━━━━\n\n"
+        "📌 Reklama yuborish tartibi:\n\n"
+        "📝 Matn\n"
+        "🎥 Rasm yoki video\n"
+        "🎯 Auditoriya (ixtiyoriy)\n\n"
+        "💡 <b>Misol:</b>\n"
+        "• Nima reklama\n"
+        "• Kimlar uchun\n"
+        "• Qachon\n\n"
+        "👨‍💼 Admin siz bilan bog‘lanadi"
     )
-    admin_username = "Khudoyqulov_pg"
-    admin_url = f"https://t.me/{admin_username}?text=Assalomu+alaykum+men+reklama+bermoqchiman"
+
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url= admin_url)]
+        [
+            types.InlineKeyboardButton(
+                text="📩 Admin bilan bog‘lanish",
+                url="https://t.me/Khudoyqulov_pg"
+            )
+        ]
     ])
-    await message.answer(text, reply_markup=kb)
+
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
     
 

@@ -3,9 +3,10 @@ import datetime
 import logging
 from aiogram import Router, types, F
 import pytz
-from database.models import DBUser
+from database.models import DBUser, Channel
 from config import config
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 from keyboards.inline import admin_panel_kb, creator_panel_kb
 from datetime import datetime
 
@@ -37,6 +38,7 @@ async def creator_panel(message: types.Message):
 
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
 async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession):
+    # Xavfsizlik tekshiruvi: Faqat Creator yoki Admin kira oladi
     if message.from_user.id == config.CREATOR_ID or user.status == "admin":
         uzb_tz = pytz.timezone('Asia/Tashkent')
         now = datetime.now(uzb_tz)
@@ -53,8 +55,17 @@ async def admin_panel(message: types.Message, user: DBUser, session: AsyncSessio
             f"👇 <i>Kerakli bo'limni tanlang:</i>"
         )
         
-        await message.answer(
-            text,
-            reply_markup=admin_panel_kb(is_admin=True),
-            parse_mode="HTML"
-        )
+        # Klaviaturaga user_id va statusni uzatamiz
+        kb = admin_panel_kb(user_id=message.from_user.id, user_status=user.status)
+        
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        # Oddiy user kirmoqchi bo'lsa javob bermaslik yoki xato deyish
+        await message.answer("⚠️ Kechirasiz, bu bo'limga kirish huquqingiz yo'q.")
+
+
+
+
+
+
+

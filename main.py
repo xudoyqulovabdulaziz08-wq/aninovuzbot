@@ -18,7 +18,7 @@ from database.cache import valkey
 from handlers import start, admin, user, anime, vip, reyting
 from handlers import search
 from handlers import referral
-
+from handlers.admin_panel import channel
 # ✅ Global Task Tracker
 background_tasks = set()
 logger = logging.getLogger("Main")
@@ -118,6 +118,7 @@ def main():
     dp.include_router(vip.router)
     dp.include_router(referral.router)
     dp.include_router(reyting.router)
+    dp.include_router(channel.router)
     dp.include_router(search.router)
 
     dp.startup.register(on_startup)
