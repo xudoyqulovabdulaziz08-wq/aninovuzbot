@@ -40,10 +40,11 @@ async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, s
 
     text = (
         "<b>📢 KANALLARNI BOSHQARISH</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📊 <b>Umumiy kanallar:</b> {total_count} ta\n"
         f"✅ <b>Faol holatda:</b> {active_count} ta\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        
+        "━━━━━━━━━━━━━━━━━━━━\n"
     )
 
     if channels:
@@ -57,10 +58,10 @@ async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, s
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="➕ Kanal qo‘shish", callback_data="add_channel_start"),
-            InlineKeyboardButton(text="📢 To'liq ro'yxat", callback_data="full_channel:1")
+            InlineKeyboardButton(text="➕ Add channel ", callback_data="add_channel_start"),
+            InlineKeyboardButton(text="➖ Del channel ", callback_data="del_channel_start")
         ],
-        [InlineKeyboardButton(text="➖ Kanal o‘chirish", callback_data="del_channel_start")],
+        [InlineKeyboardButton(text="📢 To'liq ro'yxat", callback_data="full_channel:1")],
         [InlineKeyboardButton(text="🔙 Admin panelga qaytish", callback_data="admin_panel")]
     ])
 
@@ -80,7 +81,7 @@ async def add_channel_start(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         "🚀 <b>Kanal QO‘SHISH</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
         "📌 Format:\n"
         "<code>-100123456789 @kanal_username</code>\n\n"
         "⚠️ Bot kanalga admin bo‘lishi shart!",
@@ -124,7 +125,7 @@ async def check_channel_info(message: types.Message, state: FSMContext, bot: Bot
 
         text = (
             "✅ <b>KANAL TOPILDI!</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             f"<b>Nomi:</b> {chat.title}\n"
             f"<b>ID:</b> <code>{c_id}</code>\n"
             f"<b>Username:</b> {c_link}\n\n"
@@ -201,7 +202,7 @@ async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, 
 
         await callback.message.edit_text(
             "🎉 <b>Muvaffaqiyatli qo‘shildi!</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📢 <b>{data['c_title']}</b> kanal tizimga qo‘shildi.",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="📢 Kanallar bo‘limiga qaytish", callback_data="admin_channels")]
@@ -271,7 +272,7 @@ async def show_all_channels(callback: types.CallbackQuery, session: AsyncSession
     
     text = (
         "📋 <b>BARCHA KANALLAR RO'YXATI</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         "Batafsil ma'lumot olish uchun kanal ustiga bosing:\n"
         f"<i>Jami kanallar: {len(channels)} ta</i>"
     )
@@ -323,7 +324,7 @@ async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSessi
         text = (
             f"📊 <b>Kanal statistikasi:</b>\n"
             f"🔹 <b>Nomi:</b> {escape(channel.title)}\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"🆔 <b>ID:</b> <code>{channel.channel_id}</code>\n"
             f"🔗 <b>Havola:</b> {channel.url}\n"
             f"👥 <b>Yo‘naltirilganlar:</b> <code>{user_count}</code> ta\n"
@@ -393,7 +394,7 @@ async def track_channel_redirect(callback: types.CallbackQuery, session: AsyncSe
 
     text = (
         "📢 <b>Kanalga obuna bo‘ling</b>\n"
-        "━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
         "1️⃣ Kanalga o‘ting\n"
         "2️⃣ Obuna bo‘ling\n"
         "3️⃣ 'Tasdiqlash' tugmasini bosing"

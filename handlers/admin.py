@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 from keyboards.inline import admin_panel_kb, creator_panel_kb
 from datetime import datetime
-
+from typing import Union
 # Dispatcher o'rniga Router ishlatamiz
 router = Router()
 
@@ -38,18 +38,27 @@ async def creator_panel(message: types.Message, state: FSMContext):
 
 # ================= admin panel =================
 
+
+
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
-async def admin_panel(message: types.Message, user: DBUser, session: AsyncSession, state: FSMContext):
+@router.callback_query(F.data == "admin_panel") # 👈 Mana bu qator tugmani ishga tushiradi
+async def admin_panel(event: Union[types.Message, types.CallbackQuery], user: DBUser, session: AsyncSession, state: FSMContext):
     await state.clear()
-    # Xavfsizlik tekshiruvi: Faqat Creator yoki Admin kira oladi
-    if message.from_user.id == config.CREATOR_ID or user.status == "admin":
+    
+    # Event turiga qarab message obyektini aniqlaymiz
+    is_callback = isinstance(event, types.CallbackQuery)
+    message = event.message if is_callback else event
+    user_id = event.from_user.id # Har doim eventdan olamiz
+
+    # Xavfsizlik tekshiruvi
+    if user_id == config.CREATOR_ID or user.status == "admin":
         uzb_tz = pytz.timezone('Asia/Tashkent')
         now = datetime.now(uzb_tz)
         
         text = (
             f"⚙️ <b>ANI NOWUZ | BOSHQARUV PANELI</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"👤 <b>Admin:</b> {message.from_user.mention_html()}\n"
+            f"👤 <b>Admin:</b> {event.from_user.mention_html()}\n"
             f"📅 <b>Sana:</b> {now.strftime('%d.%m.%Y | %H:%M')}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📊 <b>Tezkor ko'rsatkichlar:</b>\n"
@@ -58,13 +67,17 @@ async def admin_panel(message: types.Message, user: DBUser, session: AsyncSessio
             f"👇 <i>Kerakli bo'limni tanlang:</i>"
         )
         
-        # Klaviaturaga user_id va statusni uzatamiz
-        kb = admin_panel_kb(user_id=message.from_user.id, user_status=user.status)
+        kb = admin_panel_kb(user_id=user_id, user_status=user.status)
         
-        await message.answer(text, reply_markup=kb, parse_mode="HTML")
-        
+        if is_callback:
+            # Tugma bosilganda eski xabarni tahrirlaymiz
+            await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            await event.answer()
+        else:
+            # Matn yozilganda yangi xabar yuboramiz
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+            
     else:
-        # Oddiy user kirmoqchi bo'lsa javob bermaslik yoki xato deyish
         await message.answer("⚠️ Kechirasiz, bu bo'limga kirish huquqingiz yo'q.")
 
 
