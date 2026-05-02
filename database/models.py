@@ -197,14 +197,27 @@ class Ticket(Base):
 # ================= BOSHQA JADVALLAR =================
 class Channel(Base):
     __tablename__ = "channels"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    channel_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
-    title: Mapped[str] = mapped_column(String(255))
-    url: Mapped[str] = mapped_column(String(255))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    id: Mapped[int] = mapped_column(primary_key=True)
 
+    channel_id: Mapped[int] = mapped_column(
+        BigInteger,
+        unique=True,
+        nullable=False,
+        index=True
+    )
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
 class HelpPage(Base):
     __tablename__ = "help_pages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -16,15 +16,25 @@ import pytz
 router = Router()
 
 # FSM Holatlari
+#====================================
+
 class AddChannel(StatesGroup):
     waiting_for_info = State()  # ID va Linkni kutish
 
+#====================================
 
 def paginate(data: list, page: int, limit: int = 5):
     """Ro'yxatni sahifalarga bo'lib beruvchi yordamchi funksiya"""
     start = (page - 1) * limit
     end = start + limit
     return data[start:end]
+
+
+#====================================
+@router.callback_query(F.data == "noop")
+async def noop(callback: types.CallbackQuery):
+    await callback.answer()
+
 
 
 #================Channel Menu=====================
@@ -76,6 +86,10 @@ async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, s
     await callback.answer()
 
 
+
+
+
+
 #================Channel Add=====================
 
 @router.callback_query(F.data == "add_channel_start")
@@ -101,6 +115,7 @@ async def add_channel_start(callback: types.CallbackQuery, state: FSMContext):
 
 
 
+#====================================
 
 # 1. Faqat -100 bilan boshlangan xabarlarni qabul qiluvchi handler
 @router.message(AddChannel.waiting_for_info, F.text.startswith("-100"))
@@ -150,6 +165,8 @@ async def check_channel_info(message: types.Message, state: FSMContext, bot: Bot
             "❌ Xatolik!\nBot kanalga kira olmadi yoki ID noto‘g‘ri."
         )
 
+#====================================
+
 # 2. Agar foydalanuvchi state ichida bo'lsa-yu, lekin boshqa narsa yozsa (123v kabi)
 @router.message(AddChannel.waiting_for_info)
 async def invalid_channel_format(message: types.Message):
@@ -160,6 +177,10 @@ async def invalid_channel_format(message: types.Message):
         "<i>Bekor qilish uchun /cancel buyrug'ini yuboring.</i>",
         parse_mode="HTML"
     )
+
+
+
+#====================================
 
 @router.callback_query(F.data == "confirm_add_channel")
 async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
@@ -295,6 +316,13 @@ async def show_all_channels(callback: types.CallbackQuery, session: AsyncSession
 from html import escape
 
 
+
+
+
+
+
+#====================================
+
 @router.callback_query(F.data.startswith("info_ch_"))
 async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSession):
     if session is None:
@@ -363,111 +391,164 @@ async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSessi
 #================Channel Del=====================
 @router.callback_query(F.data.startswith("del_channel_start"))
 async def del_channel_start(callback: types.CallbackQuery, session: AsyncSession):
-    # 1. Callback data'dan sahifa raqamini olamiz (Format: del_channel_start:page)
-    parts = callback.data.split(":")
-    page = int(parts[1]) if len(parts) > 1 else 1
-    limit = 5  # Har bir sahifada 5 tadan kanal
+    try:
+        # 1. safe page parse
+        raw = callback.data.split(":")
+        page = int(raw[1]) if len(raw) > 1 and raw[1].isdigit() else 1
+        limit = 5
 
-    # 2. Bazadan barcha kanallarni olish
-    result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
-    channels = result.scalars().all()
+        # 2. DB
+        result = await session.execute(
+            select(Channel).order_by(Channel.created_at.desc())
+        )
+        channels = result.scalars().all()
 
-    if not channels:
-        return await callback.answer("⚠️ O'chirish uchun kanallar mavjud emas!", show_alert=True)
+        if not channels:
+            return await callback.answer(
+                "⚠️ O'chirish uchun kanallar mavjud emas!",
+                show_alert=True
+            )
 
-    # 3. Pagination hisob-kitoblari
-    total_channels = len(channels)
-    total_pages = (total_channels + limit - 1) // limit
-    
-    # Joriy sahifa uchun ma'lumotlarni qirqib olish (Slicing)
-    start_idx = (page - 1) * limit
-    end_idx = start_idx + limit
-    current_page_data = channels[start_idx:end_idx]
+        # 3. pagination
+        total_channels = len(channels)
+        total_pages = max((total_channels + limit - 1) // limit, 1)
 
-    # 4. Klaviatura shakllantirish
-    keyboard = []
-    
-    # Kanal tugmalari
-    for ch in current_page_data:
-        status_emoji = "✅" if ch.is_active else "❌"
-        # O'chirish uchun tasdiqlash bosqichiga sahifa raqamini ham yuboramiz (orqaga qaytganda qulay bo'lishi uchun)
+        page = max(1, min(page, total_pages))
+
+        start = (page - 1) * limit
+        end = start + limit
+        current_page_data = channels[start:end]
+
+        # 4. keyboard
+        keyboard = []
+
+        for ch in current_page_data:
+            title = getattr(ch, "title", "No title")
+            status_emoji = "✅" if ch.is_active else "❌"
+
+            keyboard.append([
+                InlineKeyboardButton(
+                    text=f"🗑 {status_emoji} {title[:20]}",
+                    callback_data=f"del_ch_{ch.channel_id}:{page}"
+                )
+            ])
+
+        # 5. nav
+        nav = []
+
+        if page > 1:
+            nav.append(
+                InlineKeyboardButton(
+                    text="⬅️ Oldingi",
+                    callback_data=f"del_channel_start:{page-1}"
+                )
+            )
+
+        nav.append(
+            InlineKeyboardButton(
+                text=f"📄 {page}/{total_pages}",
+                callback_data="noop"
+            )
+        )
+
+        if page < total_pages:
+            nav.append(
+                InlineKeyboardButton(
+                    text="Keyingi ➡️",
+                    callback_data=f"del_channel_start:{page+1}"
+                )
+            )
+
+        keyboard.append(nav)
+
+        # 6. back
         keyboard.append([
             InlineKeyboardButton(
-                text=f"🗑 {status_emoji} {ch.title[:20]}", 
-                callback_data=f"del_ch_{ch.channel_id}:{page}"
+                text="🔙 Orqaga",
+                callback_data="admin_channels"
             )
         ])
 
-    # 5. Navigatsiya tugmalari (⬅️ Oldingi | Sahifa | Keyingi ➡️)
-    nav_buttons = []
-    
-    # Oldingi sahifa tugmasi
-    if page > 1:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"del_channel_start:{page-1}"))
-    
-    # Sahifa raqami (bosib bo'lmaydigan tugma)
-    nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="ignore"))
-    
-    # Keyingi sahifa tugmasi
-    if page < total_pages:
-        nav_buttons.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"del_channel_start:{page+1}"))
-    
-    if nav_buttons:
-        keyboard.append(nav_buttons)
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    # Orqaga umumiy menyuga qaytish
-    keyboard.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_channels")])
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        text = (
+            "🗑 <b>KANAL O'CHIRISH BO'LIMI</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "O'chirmoqchi bo'lgan kanalingiz ustiga bosing:\n\n"
+            f"<i>Jami kanallar: {total_channels} ta</i>"
+        )
 
-    # 6. Xabarni chiqarish
-    text = (
-        "🗑 <b>KANAL O'CHIRISH BO'LIMI</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "O'chirmoqchi bo'lgan kanalingiz ustiga bosing:\n\n"
-        f"<i>Jami kanallar: {total_channels} ta</i>"
-    )
-
-    try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        # Xabar o'zgarmagan bo'lsa xato bermasligi uchun
-        pass
-    
-    await callback.answer()
+        await callback.answer()
 
+    except Exception as e:
+        print("del_channel_start error:", e)
+        try:
+            await callback.answer("⚠️ Xatolik yuz berdi", show_alert=True)
+        except:
+            pass
+
+
+
+
+
+#====================================
 
 @router.callback_query(F.data.startswith("del_ch_"))
 async def delete_confirm(callback: types.CallbackQuery, session: AsyncSession):
-    # Data formati: del_ch_123:2 (id=123, page=2)
-    data = callback.data.replace("del_ch_", "").split(":")
-    ch_id = int(data[0])
-    page = int(data[1]) if len(data) > 1 else 1
-    
-    channel = await session.get(Channel, ch_id)
-    if not channel:
-        return await callback.answer("❌ Kanal topilmadi!", show_alert=True)
+    try:
+        # safe parse
+        raw = callback.data.replace("del_ch_", "")
+        parts = raw.split(":")
 
-    text = (
-        f"❓ <b>Haqiqatdan ham ushbu kanalni o'chirmoqchimisiz?</b>\n\n"
-        f"🔸 Kanal: <b>{channel.title}</b>\n"
-        f"🆔 ID: <code>{channel.channel_id}</code>\n"
-        f"📄 Sahifa: {page}"
-    )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        # Tasdiqlash tugmasiga ham sahifani uzatamiz
-        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"confirm_del_{ch_id}:{page}")],
-        # Bekor qilishda admin o'zi turgan sahifaga qaytadi
-        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"del_channel_start:{page}")]
-    ])
-    
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        if not parts[0].isdigit():
+            return await callback.answer("⚠️ Noto‘g‘ri ma’lumot", show_alert=True)
+
+        ch_id = int(parts[0])
+        page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+
+        # DB
+        channel = await session.get(Channel, ch_id)
+
+        if not channel:
+            return await callback.answer("❌ Kanal topilmadi!", show_alert=True)
+
+        title = getattr(channel, "title", "Noma'lum")
+
+        text = (
+            f"❓ <b>Haqiqatdan ham ushbu kanalni o'chirmoqchimisiz?</b>\n\n"
+            f"🔸 Kanal: <b>{title}</b>\n"
+            f"🆔 ID: <code>{ch_id}</code>\n"
+            f"📄 Sahifa: {page}"
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Tasdiqlash",
+                    callback_data=f"confirm_del_{ch_id}:{page}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Bekor qilish",
+                    callback_data=f"del_channel_start:{page}"
+                )
+            ]
+        ])
+
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        print("delete_confirm error:", e)
+        await callback.answer("⚠️ Xatolik yuz berdi", show_alert=True)
 
 
 
 
 
+#================got ot====================
 
 @router.callback_query(F.data.startswith("go_to_channel:"))
 async def track_channel_redirect(callback: types.CallbackQuery, session: AsyncSession):
