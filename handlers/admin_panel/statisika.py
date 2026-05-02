@@ -48,7 +48,7 @@ def make_chart(x_labels, y_values, title):
 # MAIN DASHBOARD
 # =========================
 
-@router.callback_query(F.data == "admin_deep_stats_v2")
+@router.callback_query(F.data == "admin_statistics")
 async def deep_stats_v2(callback: types.CallbackQuery, session: AsyncSession):
     try:
         if not is_admin(callback.from_user.id):
@@ -155,7 +155,7 @@ async def deep_stats_v2(callback: types.CallbackQuery, session: AsyncSession):
             [
                 types.InlineKeyboardButton(
                     text="🔄 Refresh",
-                    callback_data="admin_deep_stats_v2"
+                    callback_data="admin_statistics"
                 )
             ],
             [
