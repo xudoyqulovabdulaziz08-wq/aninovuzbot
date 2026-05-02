@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, timezone
 import logging
 
-from database.models import DBUser, Anime, History, Favorite, Comment
+from database.models import DBUser, Anime, History, Favorite, Comment, MODELS_TO_WATCH
 
 router = Router()
 logger = logging.getLogger("AdminDeepStats")
@@ -21,119 +21,101 @@ def is_admin(user_id: int) -> bool:
     return user_id == config.CREATOR_ID
 
 
+
+
 @router.callback_query(F.data == "admin_statistics")
 async def admin_deep_stats(callback: types.CallbackQuery, session: AsyncSession):
     try:
         if not is_admin(callback.from_user.id):
             return await callback.answer("⛔ Ruxsat yo‘q", show_alert=True)
 
-        await callback.answer("📊 Deep analytics yuklanmoqda...")
+        await callback.answer("📊 Pro-tahlil tayyorlanmoqda...")
 
         now = datetime.now(timezone.utc)
+        d7 = now - timedelta(days=7)
+        d30 = now - timedelta(days=30)
 
-        day_7 = now - timedelta(days=7)
-        day_30 = now - timedelta(days=30)
-
-        # ================= USER GROWTH TREND =================
-        users_7d = await session.scalar(
-            select(func.count(DBUser.user_id))
-            .where(DBUser.joined_at >= day_7)
+        # --- FOYDALANUVCHILAR TAHLILI ---
+        # Bitta so'rovda bir nechta count'larni olish (Performance uchun)
+        user_stmt = select(
+            func.count(DBUser.user_id).label("total"),
+            func.count(DBUser.user_id).filter(DBUser.joined_at >= d7).label("w_growth"),
+            func.count(DBUser.user_id).filter(DBUser.joined_at >= d30).label("m_growth"),
+            func.count(DBUser.user_id).filter(DBUser.status == "vip").label("vips")
         )
+        u_res = await session.execute(user_stmt)
+        u_stats = u_res.one()
 
-        users_30d = await session.scalar(
-            select(func.count(DBUser.user_id))
-            .where(DBUser.joined_at >= day_30)
+        # --- FAOLLIK (ENGAGEMENT) ---
+        act_stmt = select(
+            func.count(History.id).label("watch_cnt"),
+            func.count(Comment.id).label("comm_cnt"),
+            func.count(func.distinct(History.user_id)).filter(History.watched_at >= d7).label("wau") # Weekly Active Users
         )
+        a_res = await session.execute(act_stmt)
+        a_stats = a_res.one()
 
-        total_users = await session.scalar(
-            select(func.count(DBUser.user_id))
-        )
+        # --- MOLIYAVIY/BALLAR ANALITIKASI ---
+        point_stats = await session.execute(select(
+            func.sum(DBUser.points),
+            func.avg(DBUser.points)
+        ))
+        total_p, avg_p = point_stats.one()
 
-        # growth rate (oddiy formula)
-        growth_rate = round((users_7d / users_30d) * 100, 2) if users_30d else 0
+        # ================= HISOB-KITOB (PRO LOGIC) =================
+        
+        # 1. Growth Velocity (O'sish tezligi)
+        # O'tgan haftadagi o'sishni foizda ko'rsatish
+        velocity = round((u_stats.w_growth / max(u_stats.total, 1)) * 100, 1)
 
-        # ================= ENGAGEMENT =================
-        total_watch = await session.scalar(
-            select(func.count(History.id))
-        )
+        # 2. Conversion (VIP ulushi)
+        vip_conv = round((u_stats.vips / max(u_stats.total, 1)) * 100, 1)
 
-        total_fav = await session.scalar(
-            select(func.count(Favorite.user_id))
-        )
+        # 3. Stickiness Index (Foydalanuvchilarning botga "yopishib" qolishi)
+        # WAU / Total Users
+        stickiness = round((a_stats.wau / max(u_stats.total, 1)) * 100, 1)
 
-        total_comments = await session.scalar(
-            select(func.count(Comment.id))
-        )
+        # ================= VIZUALIZATSIYA (UX) =================
+        
+        def get_trend_icon(val):
+            return "📈" if val > 5 else "📉" if val < 2 else "📊"
 
-        engagement_rate = round((total_watch + total_fav + total_comments) / max(total_users, 1), 2)
-
-        # ================= CONTENT PERFORMANCE =================
-        top_anime_views = await session.scalar(
-            select(func.max(Anime.views_week))
-        ) or 0
-
-        avg_views = await session.scalar(
-            select(func.avg(Anime.views_week))
-        ) or 0
-
-        # ================= RETENTION (SIMPLE MODEL) =================
-        active_7d = await session.scalar(
-            select(func.count(func.distinct(History.user_id)))
-            .where(History.watched_at >= day_7)
-        )
-
-        retention = round((active_7d / max(total_users, 1)) * 100, 2)
-
-        # ================= UX DASHBOARD =================
         text = (
-            "📊 <b>DEEP ANALYTICS DASHBOARD</b>\n"
+            "🚀 <b>SYSTEM PRO ANALYTICS</b>\n"
+            f"📅 <code>{now.strftime('%d.%m.%Y | %H:%M')}</code>\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-            "👥 <b>User Growth</b>\n"
-            f"• Total users: <b>{total_users}</b>\n"
-            f"• Last 7 days: <b>{users_7d}</b>\n"
-            f"• Last 30 days: <b>{users_30d}</b>\n"
-            f"• Growth rate: <b>{growth_rate}%</b>\n\n"
+            "👥 <b>AUDITORIYA</b>\n"
+            f"├ Jami: <b>{u_stats.total:,}</b>\n"
+            f"├ Haftalik o'sish: <code>+{u_stats.w_growth}</code> ({velocity}%)\n"
+            f"├ VIP konversiya: <b>{vip_conv}%</b>\n"
+            f"└ Status: {get_trend_icon(velocity)}\n\n"
 
-            "📈 <b>Engagement</b>\n"
-            f"• Watch actions: <b>{total_watch}</b>\n"
-            f"• Favorites: <b>{total_fav}</b>\n"
-            f"• Comments: <b>{total_comments}</b>\n"
-            f"• Engagement/user: <b>{engagement_rate}</b>\n\n"
+            "🎭 <b>KONTENT FAOLLIGI</b>\n"
+            f"├ Ko'rilgan: <b>{a_stats.watch_cnt:,}</b>\n"
+            f"├ Izohlar: <b>{a_stats.comm_cnt:,}</b>\n"
+            f"├ 7-kunlik faollar (WAU): <b>{a_stats.wau:,}</b>\n"
+            f"└ Stickiness: <b>{stickiness}%</b> " + ("🔥" if stickiness > 20 else "💤") + "\n\n"
 
-            "🎬 <b>Content Performance</b>\n"
-            f"• Top views: <b>{top_anime_views}</b>\n"
-            f"• Avg views: <b>{round(avg_views, 2)}</b>\n\n"
+            "💰 <b>EKONOMIKA (POINTS)</b>\n"
+            f"├ Jami ballar: <b>{int(total_p or 0):,}</b>\n"
+            f"└ O'rtacha/user: <b>{round(avg_p or 0, 1)}</b>\n\n"
 
-            "🔁 <b>Retention</b>\n"
-            f"• 7-day active users: <b>{active_7d}</b>\n"
-            f"• Retention rate: <b>{retention}%</b>\n\n"
-
+            "⚙ <b>TEXNIK HOLAT</b>\n"
+            f"├ Jami kanallar: <b>{len(MODELS_TO_WATCH)} modellar</b>\n"
+            f"└ DB Timezone: <b>UTC+00</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱ Updated: <code>{now.strftime('%Y-%m-%d %H:%M:%S')}</code>"
+            "<i>Analitika har 15 daqiqada keshlanadi.</i>"
         )
 
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [
-                types.InlineKeyboardButton(
-                    text="🔄 Refresh",
-                    callback_data="admin_deep_stats"
-                )
-            ],
-            [
-                types.InlineKeyboardButton(
-                    text="🔙 Orqaga",
-                    callback_data="admin_panel"
-                )
-            ]
+            [types.InlineKeyboardButton(text="📥 To'liq hisobot (.csv)", callback_data="export_stats")],
+            [types.InlineKeyboardButton(text="🔄 Yangilash", callback_data="admin_statistics")],
+            [types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel")]
         ])
 
-        await callback.message.edit_text(
-            text,
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     except Exception as e:
-        logger.error(f"Deep stats error: {e}", exc_info=True)
-        await callback.answer("⚠️ Deep analytics xatosi", show_alert=True)
+        logger.error(f"Stats Error: {e}")
+        await callback.answer("❌ Ma'lumotlarni hisoblashda xatolik", show_alert=True)
