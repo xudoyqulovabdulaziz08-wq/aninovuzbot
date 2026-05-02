@@ -146,32 +146,52 @@ async def get_sub_keyboard(missing):
 # ================================
 
 @router.message(CommandStart())
-async def cmd_start(message: types.Message, user: any, session: AsyncSession, bot: Bot, state: FSMContext):
+async def cmd_start(
+    message: types.Message,
+    user: any,
+    session: AsyncSession,
+    bot: Bot,
+    state: FSMContext
+):
     await state.clear()
-
-    if not session:
-        return await message.answer("❌ Server error. Keyinroq urinib ko‘ring.")
 
     try:
         args = message.text.split()
+        user_id = message.from_user.id
+        full_name = message.from_user.full_name
         now = datetime.now(timezone.utc)
 
+        # =========================
+        # SAFE SESSION GUARD
+        # =========================
+        if session is None:
+            return await message.answer(
+                "⚠️ Tizim vaqtincha ishlamayapti, keyinroq urinib ko‘ring.",
+                parse_mode="HTML"
+            )
+
+        # =========================
+        # USER JOIN TIME
+        # =========================
         user_joined = getattr(user, "joined_at", None)
         is_new_user = True
 
         if user_joined:
             if user_joined.tzinfo is None:
                 user_joined = user_joined.replace(tzinfo=timezone.utc)
+
             is_new_user = (now - user_joined).total_seconds() < 60
 
-        # ================= REF =================
-        if len(args) > 1 and not getattr(user, "referred_by", None) and is_new_user:
+        # =========================
+        # REFERRAL (SAFE + IDEMPOTENT)
+        # =========================
+        if len(args) > 1 and is_new_user:
             try:
                 ref_id = int(args[1])
-                if ref_id != message.from_user.id:
 
+                if ref_id != user_id:
                     db_user = await session.scalar(
-                        select(DBUser).where(DBUser.user_id == message.from_user.id)
+                        select(DBUser).where(DBUser.user_id == user_id)
                     )
 
                     if db_user and not db_user.referred_by:
@@ -179,40 +199,70 @@ async def cmd_start(message: types.Message, user: any, session: AsyncSession, bo
                         await session.commit()
 
             except Exception as e:
-                logger.warning(f"Referral error: {e}")
+                logger.warning(f"Referral parse error: {e}")
 
-        # ================= PRIV =================
+        # =========================
+        # PRIVILEGE CHECK
+        # =========================
         status = getattr(user, "status", "user")
         is_vip = getattr(user, "is_vip", False)
+        is_admin_or_creator = status in ["creator", "admin"] or user_id == config.CREATOR_ID
 
-        if status in ["creator", "admin"] or is_vip or message.from_user.id == config.CREATOR_ID:
+        if is_vip:
+            # agar model property bo‘lsa (recommended)
+            try:
+                is_vip = user.is_vip
+            except:
+                pass
+
+        if is_admin_or_creator or is_vip:
             return await message.answer(
-                f"👑 Xush kelibsiz, <b>{message.from_user.full_name}</b>!",
-                reply_markup=get_main_menu(message.from_user.id, is_vip, status),
+                f"👑 <b>Xush kelibsiz, {full_name}!</b>\n\n"
+                f"🎯 Role: <b>{status.upper()}</b>\n"
+                f"🚀 Sizga to‘liq access berildi.",
+                reply_markup=get_main_menu(user_id, is_vip, status),
                 parse_mode="HTML"
             )
 
-        # ================= SUB CHECK =================
-        ok, missing = await check_subscription(bot, message.from_user.id, session)
+        # =========================
+        # SUB CHECK
+        # =========================
+        ok, missing = await check_subscription(bot, user_id, session)
 
         if not ok:
+            text = (
+                f"👋 <b>Assalomu alaykum, {full_name}!</b>\n\n"
+                "Botdan foydalanish uchun quyidagi kanallarga obuna bo‘lishingiz kerak.\n"
+                "Bu bizga loyihani rivojlantirishga yordam beradi ❤️"
+            )
+
             kb = await get_sub_keyboard(missing)
+
             return await message.answer(
-                "📢 <b>Obuna bo‘lish shart!</b>",
+                text,
                 reply_markup=kb,
                 parse_mode="HTML"
             )
 
-        # ================= SUCCESS =================
-        return await message.answer(
-            f"👋 Xush kelibsiz, <b>{message.from_user.full_name}</b>",
-            reply_markup=get_main_menu(message.from_user.id, is_vip, status),
+        # =========================
+        # SUCCESS UX
+        # =========================
+        await message.answer(
+            f"🎉 <b>Xush kelibsiz, {full_name}!</b>\n\n"
+            "✔ Ro‘yxatdan muvaffaqiyatli o‘tdingiz\n"
+            "🚀 Endi botdan foydalanishingiz mumkin",
+            reply_markup=get_main_menu(user_id, is_vip, status),
             parse_mode="HTML"
         )
 
     except Exception as e:
-        logger.error(f"Start handler crash: {e}")
-        return await message.answer("❌ Xatolik yuz berdi")
+        logger.error(f"cmd_start error: {e}", exc_info=True)
+
+        await message.answer(
+            "❌ <b>Ichki xatolik yuz berdi.</b>\n"
+            "Iltimos, keyinroq qayta urinib ko‘ring.",
+            parse_mode="HTML"
+        )
 
 
 # ================================
@@ -222,43 +272,109 @@ async def cmd_start(message: types.Message, user: any, session: AsyncSession, bo
 @router.callback_query(F.data.startswith("go_to_channel:"))
 async def redirect(callback: types.CallbackQuery, session: AsyncSession):
     try:
+        # UX: instant response (silent)
+        await callback.answer()
+
         ch_id = int(callback.data.split(":")[1])
 
+        # =========================
+        # DB FETCH (SAFE)
+        # =========================
         channel = await session.scalar(
             select(Channel).where(Channel.channel_id == ch_id)
         )
 
         if not channel:
-            return await callback.answer("❌ Kanal topilmadi", show_alert=True)
+            return await callback.answer(
+                "❌ Kanal topilmadi yoki o‘chirilgan.",
+                show_alert=True
+            )
 
-        await session.execute(
-            update(DBUser)
-            .where(DBUser.user_id == callback.from_user.id)
-            .values(last_redirected_channel=str(ch_id))
+        # =========================
+        # URL VALIDATION (IMPORTANT)
+        # =========================
+        if not channel.url:
+            return await callback.answer(
+                "⚠️ Bu kanal uchun link mavjud emas.",
+                show_alert=True
+            )
+
+        # =========================
+        # TRACKING (non-critical)
+        # =========================
+        try:
+            await session.execute(
+                update(DBUser)
+                .where(DBUser.user_id == callback.from_user.id)
+                .values(last_redirected_channel=str(ch_id))
+            )
+            await session.commit()
+        except Exception as e:
+            logger.warning(f"Tracking failed: {e}")
+
+        # =========================
+        # UX TEXT (clean + readable)
+        # =========================
+        text = (
+            f"📢 <b>{channel.title}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Botdan foydalanish uchun ushbu kanalga obuna bo‘ling.\n\n"
+            "📌 <b>Qadamlar:</b>\n"
+            "1️⃣ Kanalga o‘ting\n"
+            "2️⃣ Obuna bo‘ling\n"
+            "3️⃣ Botga qaytib tasdiqlang\n"
         )
-        await session.commit()
 
-        text = f"""
-📢 <b>Kanalga obuna bo‘ling</b>
-
-📌 {channel.title}
-
-1️⃣ O‘ting
-2️⃣ Obuna bo‘ling
-3️⃣ Tasdiqlang
-"""
-
+        # =========================
+        # INLINE KEYBOARD
+        # =========================
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="📢 Kanal", url=channel.url)],
-            [types.InlineKeyboardButton(text="✅ Tekshirish", callback_data=f"check_sub:{ch_id}")]
+            [
+                types.InlineKeyboardButton(
+                    text="📢 Kanalga o'tish",
+                    url=channel.url
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="✅ Tasdiqlash",
+                    callback_data=f"check_sub:{ch_id}"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="⬅️ Orqaga",
+                    callback_data="check_sub:all"
+                )
+            ]
         ])
 
-        await callback.message.edit_text(text, reply_markup=kb)
-        await callback.answer()
+        # =========================
+        # SAFE EDIT (fallback included)
+        # =========================
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        except:
+            await callback.message.answer(
+                text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
 
     except Exception as e:
-        logger.error(f"Redirect error: {e}")
-        await callback.answer("❌ Xatolik")
+        logger.error(f"redirect error: {e}")
+
+        try:
+            await callback.answer(
+                "⚠️ Kanalga yo‘naltirishda muammo yuz berdi.",
+                show_alert=True
+            )
+        except:
+            pass
 
 
 # ================================
@@ -267,26 +383,92 @@ async def redirect(callback: types.CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("check_sub"))
 async def check_sub(callback: types.CallbackQuery, user: any, session: AsyncSession, bot: Bot):
-
     try:
-        ok, missing = await check_subscription(bot, callback.from_user.id, session)
+        # UX: instant feedback
+        await callback.answer("⏳ Tekshirilmoqda...")
 
-        if ok:
-            await callback.message.delete()
+        is_subbed, missing = await check_subscription(
+            bot,
+            callback.from_user.id,
+            session
+        )
 
-            status = getattr(user, "status", "user")
-            is_vip = getattr(user, "is_vip", False)
-
-            await callback.message.answer(
-                "✅ Tasdiqlandi!",
-                reply_markup=get_main_menu(callback.from_user.id, is_vip, status),
-                parse_mode="HTML"
-            )
-        else:
-            await callback.answer("❌ Obuna bo‘ling", show_alert=True)
+        if not is_subbed:
             kb = await get_sub_keyboard(missing)
-            await callback.message.edit_reply_markup(reply_markup=kb)
+
+            await callback.answer(
+                f"❌ Siz hali {len(missing)} ta kanalga obuna bo‘lmagansiz!",
+                show_alert=True
+            )
+
+            try:
+                await callback.message.edit_reply_markup(reply_markup=kb)
+            except:
+                pass
+
+            return
+
+        # =========================
+        # REFERRAL SYSTEM (SAFE)
+        # =========================
+        stmt = select(DBUser).where(DBUser.user_id == callback.from_user.id)
+        res = await session.execute(stmt)
+        db_user = res.scalar_one_or_none()
+
+        if db_user and db_user.referred_by and db_user.referred_by_channel != "done":
+
+            ref_stmt = select(DBUser).where(DBUser.user_id == db_user.referred_by)
+            ref_res = await session.execute(ref_stmt)
+            referrer = ref_res.scalar_one_or_none()
+
+            if referrer:
+                referrer.points += 10
+                referrer.referral_count += 1
+                db_user.referred_by_channel = "done"
+
+                await session.commit()
+
+                await valkey.delete("db_users", referrer.user_id)
+
+                # async notify (non-blocking UX)
+                asyncio.create_task(
+                    bot.send_message(
+                        referrer.user_id,
+                        "🎊 <b>Yangi referral!</b>\n+10 ball qo‘shildi 🔥",
+                        parse_mode="HTML"
+                    )
+                )
+
+        # =========================
+        # CLEAN UX RESPONSE
+        # =========================
+
+        try:
+            await callback.message.delete()
+        except:
+            pass
+
+        status = getattr(user, "status", "user")
+        is_vip = getattr(user, "is_vip", False)
+
+        await callback.message.answer(
+            (
+                f"🎉 <b>Xush kelibsiz, {callback.from_user.first_name}!</b>\n\n"
+                "✔ Barcha obunalar tasdiqlandi\n"
+                "🚀 Endi botdan to‘liq foydalanishingiz mumkin"
+            ),
+            reply_markup=get_main_menu(
+                user_id=callback.from_user.id,
+                is_vip=is_vip,
+                status=status
+            ),
+            parse_mode="HTML"
+        )
 
     except Exception as e:
-        logger.error(f"Check sub error: {e}")
-        await callback.answer("❌ Xatolik")
+        logger.error(f"check_sub error: {e}")
+
+        await callback.answer(
+            "⚠️ Serverda vaqtinchalik xatolik. Keyinroq urinib ko‘ring.",
+            show_alert=True
+        )
