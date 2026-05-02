@@ -40,17 +40,16 @@ async def creator_panel(message: types.Message, state: FSMContext):
 
 
 
+from aiogram.exceptions import TelegramBadRequest # Xatolikni tutib qolish uchun
+
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
-@router.callback_query(F.data == "admin_panel") # 👈 Mana bu qator tugmani ishga tushiradi
+@router.callback_query(F.data == "admin_panel")
 async def admin_panel(event: Union[types.Message, types.CallbackQuery], user: DBUser, session: AsyncSession, state: FSMContext):
     await state.clear()
     
-    # Event turiga qarab message obyektini aniqlaymiz
     is_callback = isinstance(event, types.CallbackQuery)
-    message = event.message if is_callback else event
-    user_id = event.from_user.id # Har doim eventdan olamiz
+    user_id = event.from_user.id
 
-    # Xavfsizlik tekshiruvi
     if user_id == config.CREATOR_ID or user.status == "admin":
         uzb_tz = pytz.timezone('Asia/Tashkent')
         now = datetime.now(uzb_tz)
@@ -70,16 +69,23 @@ async def admin_panel(event: Union[types.Message, types.CallbackQuery], user: DB
         kb = admin_panel_kb(user_id=user_id, user_status=user.status)
         
         if is_callback:
-            # Tugma bosilganda eski xabarni tahrirlaymiz
-            await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            try:
+                # 1. Avval tahrirlashga urinib ko'ramiz (agar eski xabar matn bo'lsa)
+                await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            except TelegramBadRequest:
+                # 2. Agar eski xabar rasm bo'lsa (tahrirlab bo'lmasa), eskisini o'chirib yangisini yuboramiz
+                await event.message.delete()
+                await event.message.answer(text, reply_markup=kb, parse_mode="HTML")
+            
             await event.answer()
         else:
             # Matn yozilganda yangi xabar yuboramiz
-            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+            await event.answer(text, reply_markup=kb, parse_mode="HTML")
             
     else:
-        await message.answer("⚠️ Kechirasiz, bu bo'limga kirish huquqingiz yo'q.")
-
+        # Xavfsizlik uchun oddiy answer ishlatamiz
+        msg = event.message if is_callback else event
+        await msg.answer("⚠️ Kechirasiz, bu bo'limga kirish huquqingiz yo'q.")
 
 
 
