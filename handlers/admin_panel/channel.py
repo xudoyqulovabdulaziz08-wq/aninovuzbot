@@ -4,6 +4,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from html import escape
+from sqlalchemy import delete
+
 
 from database.models import DBUser, Channel
 from config import config
@@ -551,6 +553,47 @@ async def delete_confirm(callback: types.CallbackQuery, session: AsyncSession):
     except Exception as e:
         print("delete_confirm error:", e)
         await callback.answer("⚠️ Xatolik yuz berdi", show_alert=True)
+
+
+
+
+#====================================
+@router.callback_query(F.data.startswith("confirm_del_"))
+async def confirm_delete_channel(callback: types.CallbackQuery, session: AsyncSession):
+    try:
+        # 1. Ma'lumotlarni ajratib olamiz
+        data = callback.data.replace("confirm_del_", "").split(":")
+        ch_id = int(data[0])
+        
+        # 2. Bazadan o'chirish
+        stmt = delete(Channel).where(Channel.channel_id == ch_id)
+        result = await session.execute(stmt)
+        await session.commit()
+
+        # 3. Xabarni yangilash va menyuga qaytish tugmasini chiqarish
+        if result.rowcount > 0:
+            text = "✅ <b>Kanal muvaffaqiyatli o'chirildi!</b>"
+        else:
+            text = "❌ <b>Xatolik: Kanal topilmadi yoki allaqachon o'chirilgan.</b>"
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔙 Kanallar menyusiga qaytish", 
+                    callback_data="admin_channels"
+                )
+            ]
+        ])
+
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        await session.rollback()
+        print(f"confirm_delete_channel error: {e}")
+        await callback.answer("⚠️ O'chirishda texnik xatolik", show_alert=True)
+
+
 
 
 
