@@ -332,11 +332,10 @@ async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSessi
             f"📅 <b>Qo'shilgan vaqti:</b> {created}\n"
         )
 
-        # 5. Tugmalar (Toggle va Delete)
-        toggle_text = "🔴 Faolsizlantirish" if channel.is_active else "🟢 Faollashtirish"
+    
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=toggle_text, callback_data=f"toggle_ch_{ch_id}:{current_page}")],
+           
             [InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"full_channel:{current_page}")]
         ])
 
