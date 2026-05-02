@@ -13,7 +13,11 @@ from decimal import Decimal
 
 
 
+from datetime import datetime, timezone
 
+now = datetime.now(timezone.utc)
+
+cutoff = now.replace(tzinfo=None) 
 
 # ================= BASE =================
 class Base(DeclarativeBase):
@@ -35,10 +39,17 @@ class DBUser(Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True)
-    joined_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(),
+        index=True  # Qidiruv va filtrlashni tezlashtiradi
+    )
     points: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="user", index=True)
-    vip_expire_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    vip_expire_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), 
+        nullable=True
+    )
     health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
     referral_count: Mapped[int] = mapped_column(Integer, default=0)
     last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -158,7 +169,11 @@ class History(Base):
     anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
     last_episode: Mapped[int] = mapped_column(Integer, default=1)
     # onupdate qo'shildi!
-    watched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    watched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(), 
+        onupdate=func.now()
+    )
 
     user: Mapped["DBUser"] = relationship(back_populates="history")
     anime: Mapped["Anime"] = relationship(back_populates="history")
@@ -175,7 +190,10 @@ class Comment(Base):
     user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
     comment_text: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now()
+    )
 
     user: Mapped["DBUser"] = relationship(back_populates="comments")
     anime: Mapped["Anime"] = relationship(back_populates="comments")
@@ -191,7 +209,10 @@ class Ticket(Base):
     message: Mapped[str] = mapped_column(Text)
     file_id: Mapped[Optional[str]] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), default="open")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now()
+    )
 
     user: Mapped["DBUser"] = relationship(back_populates="tickets")
 
