@@ -26,6 +26,9 @@ def paginate(data: list, page: int, limit: int = 5):
     end = start + limit
     return data[start:end]
 
+
+#================Channel Menu=====================
+
 @router.callback_query(F.data == "admin_channels")
 async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
     await state.clear()
@@ -71,6 +74,9 @@ async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, s
         pass
         
     await callback.answer()
+
+
+#================Channel Add=====================
 
 @router.callback_query(F.data == "add_channel_start")
 async def add_channel_start(callback: types.CallbackQuery, state: FSMContext):
@@ -223,7 +229,7 @@ async def confirm_add_channel(callback: types.CallbackQuery, state: FSMContext, 
 
 
 
-
+#================Channel Full=====================
 
 @router.callback_query(F.data.startswith("full_channel"))
 async def show_all_channels(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
@@ -354,9 +360,109 @@ async def channel_info_detail(callback: types.CallbackQuery, session: AsyncSessi
 
 
 
+#================Channel Del=====================
+@router.callback_query(F.data.startswith("del_channel_start"))
+async def del_channel_start(callback: types.CallbackQuery, session: AsyncSession):
+    # 1. Callback data'dan sahifa raqamini olamiz (Format: del_channel_start:page)
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+    limit = 5  # Har bir sahifada 5 tadan kanal
+
+    # 2. Bazadan barcha kanallarni olish
+    result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
+    channels = result.scalars().all()
+
+    if not channels:
+        return await callback.answer("⚠️ O'chirish uchun kanallar mavjud emas!", show_alert=True)
+
+    # 3. Pagination hisob-kitoblari
+    total_channels = len(channels)
+    total_pages = (total_channels + limit - 1) // limit
+    
+    # Joriy sahifa uchun ma'lumotlarni qirqib olish (Slicing)
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    current_page_data = channels[start_idx:end_idx]
+
+    # 4. Klaviatura shakllantirish
+    keyboard = []
+    
+    # Kanal tugmalari
+    for ch in current_page_data:
+        status_emoji = "✅" if ch.is_active else "❌"
+        # O'chirish uchun tasdiqlash bosqichiga sahifa raqamini ham yuboramiz (orqaga qaytganda qulay bo'lishi uchun)
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"🗑 {status_emoji} {ch.title[:20]}", 
+                callback_data=f"del_ch_{ch.channel_id}:{page}"
+            )
+        ])
+
+    # 5. Navigatsiya tugmalari (⬅️ Oldingi | Sahifa | Keyingi ➡️)
+    nav_buttons = []
+    
+    # Oldingi sahifa tugmasi
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"del_channel_start:{page-1}"))
+    
+    # Sahifa raqami (bosib bo'lmaydigan tugma)
+    nav_buttons.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="ignore"))
+    
+    # Keyingi sahifa tugmasi
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"del_channel_start:{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    # Orqaga umumiy menyuga qaytish
+    keyboard.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_channels")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    # 6. Xabarni chiqarish
+    text = (
+        "🗑 <b>KANAL O'CHIRISH BO'LIMI</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "O'chirmoqchi bo'lgan kanalingiz ustiga bosing:\n\n"
+        f"<i>Jami kanallar: {total_channels} ta</i>"
+    )
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        # Xabar o'zgarmagan bo'lsa xato bermasligi uchun
+        pass
+    
+    await callback.answer()
 
 
+@router.callback_query(F.data.startswith("del_ch_"))
+async def delete_confirm(callback: types.CallbackQuery, session: AsyncSession):
+    # Data formati: del_ch_123:2 (id=123, page=2)
+    data = callback.data.replace("del_ch_", "").split(":")
+    ch_id = int(data[0])
+    page = int(data[1]) if len(data) > 1 else 1
+    
+    channel = await session.get(Channel, ch_id)
+    if not channel:
+        return await callback.answer("❌ Kanal topilmadi!", show_alert=True)
 
+    text = (
+        f"❓ <b>Haqiqatdan ham ushbu kanalni o'chirmoqchimisiz?</b>\n\n"
+        f"🔸 Kanal: <b>{channel.title}</b>\n"
+        f"🆔 ID: <code>{channel.channel_id}</code>\n"
+        f"📄 Sahifa: {page}"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        # Tasdiqlash tugmasiga ham sahifani uzatamiz
+        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"confirm_del_{ch_id}:{page}")],
+        # Bekor qilishda admin o'zi turgan sahifaga qaytadi
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"del_channel_start:{page}")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 
