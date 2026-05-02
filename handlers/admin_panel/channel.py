@@ -29,36 +29,46 @@ def paginate(data: list, page: int, limit: int = 5):
 @router.callback_query(F.data == "admin_channels")
 async def admin_channels(callback: types.CallbackQuery, session: AsyncSession, state: FSMContext):
     await state.clear()
-    # Faqat faol kanallarni olish
-    channels = await session.execute(
-        select(Channel).where(Channel.is_active == True)
-    )
-    channels = channels.scalars().all()
+    
+    # Barcha kanallarni olish (faol va nofaol)
+    result = await session.execute(select(Channel).order_by(Channel.created_at.desc()))
+    channels = result.scalars().all()
+
+    # Statistika hisoblash
+    active_count = sum(1 for ch in channels if ch.is_active)
+    total_count = len(channels)
 
     text = (
-        "<b>📢 KANALLAR BO'LIMI</b>\n"
+        "<b>📢 KANALLARNI BOSHQARISH</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "📌 Bu bo‘lim orqali siz:\n"
-        "➕ Kanal qo‘shish\n"
-        "📢 Kanallar ro‘yxatini ko‘rish\n"
-        "➖ Kanal o‘chirish\n"
+        f"📊 <b>Umumiy kanallar:</b> {total_count} ta\n"
+        f"✅ <b>Faol holatda:</b> {active_count} ta\n"
+        "━━━━━━━━━━━━━━━━━━\n"
     )
 
     if channels:
-        text += "\n📋 <b>Faol kanallar:</b>\n"
-        for ch in channels:
-            text += f"• {ch.title}\n"
+        text += "\n📌 <b>Oxirgi qo'shilganlar:</b>\n"
+        # Faqat oxirgi 5 tasini qisqa ro'yxat sifatida ko'rsatish
+        for ch in channels[:5]:
+            status = "✅" if ch.is_active else "❌"
+            text += f"{status} {ch.title[:20]}\n"
     else:
-        text += "\n⚠️ Hozircha kanal yo‘q"
+        text += "\n⚠️ Hozircha bazada kanallar mavjud emas."
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Kanal qo‘shish", callback_data="add_channel_start")],
-        [InlineKeyboardButton(text="📢 Kanallar ro‘yxati", callback_data="full_channel")],
+        [
+            InlineKeyboardButton(text="➕ Kanal qo‘shish", callback_data="add_channel_start"),
+            InlineKeyboardButton(text="📢 To'liq ro'yxat", callback_data="full_channel:1")
+        ],
         [InlineKeyboardButton(text="➖ Kanal o‘chirish", callback_data="del_channel_start")],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel")]
+        [InlineKeyboardButton(text="🔙 Admin panelga qaytish", callback_data="admin_panel")]
     ])
 
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+        
     await callback.answer()
 
 @router.callback_query(F.data == "add_channel_start")
