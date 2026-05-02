@@ -501,14 +501,22 @@ async def delete_confirm(callback: types.CallbackQuery, session: AsyncSession):
         raw = callback.data.replace("del_ch_", "")
         parts = raw.split(":")
 
-        if not parts[0].isdigit():
-            return await callback.answer("⚠️ Noto‘g‘ri ma’lumot", show_alert=True)
+        # .isdigit() o'rniga try-except yoki lstrip('-') ishlatamiz
+        try:
+            ch_id = int(parts[0])
+            page = int(parts[1]) if len(parts) > 1 else 1
+        except (ValueError, IndexError):
+            return await callback.answer("⚠️ Noto‘g‘ri ma’lumot formatda", show_alert=True)
 
-        ch_id = int(parts[0])
-        page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
-
-        # DB
+        # DB - Endi session.get() BigInteger bilan xato bermaydi
         channel = await session.get(Channel, ch_id)
+
+        if not channel:
+            # Agar session.get topmasa, balki bu channel_id ustunidir?
+            # Shuning uchun qo'shimcha tekshiruv:
+            from sqlalchemy import select
+            res = await session.execute(select(Channel).where(Channel.channel_id == ch_id))
+            channel = res.scalar_one_or_none()
 
         if not channel:
             return await callback.answer("❌ Kanal topilmadi!", show_alert=True)

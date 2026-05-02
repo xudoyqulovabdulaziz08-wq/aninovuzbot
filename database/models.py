@@ -198,8 +198,10 @@ class Ticket(Base):
 class Channel(Base):
     __tablename__ = "channels"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    # 1. Primary keyni ham BigInteger qilish tavsiya etiladi
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
+    # 2. Telegram ID uchun BigInteger (Bu qism sizda zo'r turibdi)
     channel_id: Mapped[int] = mapped_column(
         BigInteger,
         unique=True,
@@ -208,9 +210,7 @@ class Channel(Base):
     )
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-
     url: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
