@@ -18,7 +18,7 @@ from database.cache import valkey
 from handlers import start, admin, user, anime, vip, reyting
 from handlers import search
 from handlers import referral
-from handlers.admin_panel import channel
+from handlers.admin_panel import channel, statisika
 from services.outbox.worker import OutboxWorker
 
 
@@ -133,6 +133,7 @@ def main():
     dp.include_router(referral.router)
     dp.include_router(reyting.router)
     dp.include_router(channel.router)
+    dp.include_router(statisika.router)
     dp.include_router(search.router)
 
     dp.startup.register(on_startup)
