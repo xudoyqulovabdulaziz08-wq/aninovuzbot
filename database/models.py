@@ -13,6 +13,8 @@ from decimal import Decimal
 
 
 
+
+
 # ================= BASE =================
 class Base(DeclarativeBase):
     pass
@@ -254,16 +256,32 @@ class AdminSettings(Base):
     user: Mapped["DBUser"] = relationship(back_populates="admin_settings")
 
 
+
+
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    aggregate: Mapped[str] = mapped_column(String, nullable=False)   # Jadval nomi
-    aggregate_id: Mapped[str] = mapped_column(String, nullable=False) # PK qiymati
+    id: Mapped[str] = mapped_column(
+        String,
+        primary_key=True,
+        default=lambda: str(uuid.uuid4())
+    )
+
+    aggregate: Mapped[str] = mapped_column(String, nullable=False)      # users, anime, etc
+    aggregate_id: Mapped[str] = mapped_column(String, nullable=False)   # entity id
+
+    event_type: Mapped[str] = mapped_column(String, nullable=False)     # user_created, points_added
+    payload: Mapped[str] = mapped_column(Text, nullable=False)         # JSON string
+
     processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    retry_count: Mapped[int] = mapped_column(default=0)
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
 
-
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 MODELS_TO_WATCH = [Anime, DBUser, Episode, Channel, Favorite, History, Comment]

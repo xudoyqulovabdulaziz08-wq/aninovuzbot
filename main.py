@@ -19,6 +19,9 @@ from handlers import start, admin, user, anime, vip, reyting
 from handlers import search
 from handlers import referral
 from handlers.admin_panel import channel
+from services.outbox.worker import OutboxWorker
+
+
 # ✅ Global Task Tracker
 background_tasks = set()
 logger = logging.getLogger("Main")
@@ -26,6 +29,13 @@ logger = logging.getLogger("Main")
 async def health_check_handler(request):
     """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
     return web.Response(text="AniNowuz SaaS Engine is running! 🚀", status=200)
+
+outbox_worker = OutboxWorker(AsyncSessionLocal)
+
+async def start_workers():
+    task = asyncio.create_task(outbox_worker.start(), name="OutboxWorker")
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
 
 
 
@@ -36,7 +46,8 @@ def get_now():
     return datetime.now(tashkent_tz)
 
 # Handler ichida foydalanish:
-now = get_now()
+def get_now():
+    return datetime.now(pytz.timezone('Asia/Tashkent'))
 
 async def on_startup(bot: Bot):
     """Industrial Startup: Infra & Worker Sync."""
@@ -50,6 +61,9 @@ async def on_startup(bot: Bot):
     # 2. Infra Check & Start
     await check_db()
     await valkey.start()
+    await start_workers()
+    await asyncio.sleep(0.2)
+    logger.info("🔥 OutboxWorker started")
     
     try:
         await asyncio.wait_for(valkey.redis.ping(), timeout=2.0)
@@ -78,7 +92,7 @@ async def on_startup(bot: Bot):
 
     # 4. Background Workers
     invalidation_worker = CacheInvalidationWorker(AsyncSessionLocal, valkey)
-    worker_task = asyncio.create_task(invalidation_worker.run(), name="OutboxWorker")
+    worker_task = asyncio.create_task(invalidation_worker.run(), name="CacheInvalidationWorker")
     background_tasks.add(worker_task)
     worker_task.add_done_callback(background_tasks.discard)
 
