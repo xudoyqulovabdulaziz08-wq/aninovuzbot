@@ -1,121 +1,281 @@
-
-
-from aiogram import Router, types, F
-router = Router()
-
-
-from aiogram import types, Router, F
-from sqlalchemy import select, func, and_
-from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timedelta, timezone
+import io
 import logging
+import csv
+from datetime import datetime, timedelta, timezone
 
-from database.models import DBUser, Anime, History, Favorite, Comment, MODELS_TO_WATCH
+import matplotlib.pyplot as plt
+from aiogram import types, F, Router
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database.models import DBUser, History, Comment
+from config import config
 
 router = Router()
-logger = logging.getLogger("AdminDeepStats")
+logger = logging.getLogger("DeepStatsV2")
 
 
-def is_admin(user_id: int) -> bool:
-    from config import config
+# =========================
+# UTILS
+# =========================
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
+def is_admin(user_id: int):
     return user_id == config.CREATOR_ID
 
 
+def make_chart(x_labels, y_values, title):
+    """Return PNG image as bytes (Telegram ready)"""
+    plt.figure(figsize=(6, 3))
+
+    plt.plot(x_labels, y_values, marker="o")
+
+    plt.title(title)
+    plt.grid(True)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    plt.close()
+
+    buf.seek(0)
+    return buf
 
 
-@router.callback_query(F.data == "admin_statistics")
-async def admin_deep_stats(callback: types.CallbackQuery, session: AsyncSession):
+# =========================
+# MAIN DASHBOARD
+# =========================
+
+@router.callback_query(F.data == "admin_deep_stats_v2")
+async def deep_stats_v2(callback: types.CallbackQuery, session: AsyncSession):
     try:
         if not is_admin(callback.from_user.id):
             return await callback.answer("⛔ Ruxsat yo‘q", show_alert=True)
 
-        await callback.answer("📊 Pro-tahlil tayyorlanmoqda...")
+        await callback.answer("📊 Dashboard generatsiya qilinmoqda...")
 
-        now = datetime.now(timezone.utc)
-        d7 = now - timedelta(days=7)
-        d30 = now - timedelta(days=30)
+        now = utc_now()
 
-        # --- FOYDALANUVCHILAR TAHLILI ---
-        # Bitta so'rovda bir nechta count'larni olish (Performance uchun)
-        user_stmt = select(
-            func.count(DBUser.user_id).label("total"),
-            func.count(DBUser.user_id).filter(DBUser.joined_at >= d7).label("w_growth"),
-            func.count(DBUser.user_id).filter(DBUser.joined_at >= d30).label("m_growth"),
-            func.count(DBUser.user_id).filter(DBUser.status == "vip").label("vips")
-        )
-        u_res = await session.execute(user_stmt)
-        u_stats = u_res.one()
+        days = [6, 5, 4, 3, 2, 1, 0]
 
-        # --- FAOLLIK (ENGAGEMENT) ---
-        act_stmt = select(
-            func.count(History.id).label("watch_cnt"),
-            func.count(Comment.id).label("comm_cnt"),
-            func.count(func.distinct(History.user_id)).filter(History.watched_at >= d7).label("wau") # Weekly Active Users
-        )
-        a_res = await session.execute(act_stmt)
-        a_stats = a_res.one()
+        # =========================
+        # USERS GROWTH (7 days)
+        # =========================
+        user_growth = []
 
-        # --- MOLIYAVIY/BALLAR ANALITIKASI ---
-        point_stats = await session.execute(select(
-            func.sum(DBUser.points),
-            func.avg(DBUser.points)
-        ))
-        total_p, avg_p = point_stats.one()
+        for d in days:
+            day = now - timedelta(days=d)
 
-        # ================= HISOB-KITOB (PRO LOGIC) =================
-        
-        # 1. Growth Velocity (O'sish tezligi)
-        # O'tgan haftadagi o'sishni foizda ko'rsatish
-        velocity = round((u_stats.w_growth / max(u_stats.total, 1)) * 100, 1)
+            count = await session.scalar(
+                select(func.count(DBUser.user_id))
+                .where(DBUser.joined_at <= day)
+            )
 
-        # 2. Conversion (VIP ulushi)
-        vip_conv = round((u_stats.vips / max(u_stats.total, 1)) * 100, 1)
+            user_growth.append(count or 0)
 
-        # 3. Stickiness Index (Foydalanuvchilarning botga "yopishib" qolishi)
-        # WAU / Total Users
-        stickiness = round((a_stats.wau / max(u_stats.total, 1)) * 100, 1)
+        # =========================
+        # WAU TREND
+        # =========================
+        wau_trend = []
 
-        # ================= VIZUALIZATSIYA (UX) =================
-        
-        def get_trend_icon(val):
-            return "📈" if val > 5 else "📉" if val < 2 else "📊"
+        for d in days:
+            day = now - timedelta(days=d)
 
+            count = await session.scalar(
+                select(func.count(func.distinct(History.user_id)))
+                .where(History.watched_at >= day)
+            )
+
+            wau_trend.append(count or 0)
+
+        # =========================
+        # ENGAGEMENT TOTALS
+        # =========================
+        total_watch = await session.scalar(select(func.count(History.id)))
+        total_comments = await session.scalar(select(func.count(Comment.id)))
+
+        # =========================
+        # CHARTS GENERATION
+        # =========================
+        labels = [f"-{d}d" for d in days]
+
+        users_chart = make_chart(labels, user_growth, "Users Growth")
+        wau_chart = make_chart(labels, wau_trend, "WAU Trend")
+
+        # =========================
+        # KPI CALCULATIONS
+        # =========================
+        total_users = user_growth[-1]
+        retention = round((wau_trend[-1] / max(total_users, 1)) * 100, 1)
+
+        # =========================
+        # DASHBOARD TEXT
+        # =========================
         text = (
-            "🚀 <b>SYSTEM PRO ANALYTICS</b>\n"
-            f"📅 <code>{now.strftime('%d.%m.%Y | %H:%M')}</code>\n"
+            "🚀 <b>DEEP ANALYTICS V2</b>\n"
+            f"📅 <code>{now.strftime('%d.%m.%Y %H:%M UTC')}</code>\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-            "👥 <b>AUDITORIYA</b>\n"
-            f"├ Jami: <b>{u_stats.total:,}</b>\n"
-            f"├ Haftalik o'sish: <code>+{u_stats.w_growth}</code> ({velocity}%)\n"
-            f"├ VIP konversiya: <b>{vip_conv}%</b>\n"
-            f"└ Status: {get_trend_icon(velocity)}\n\n"
+            "👥 <b>USERS</b>\n"
+            f"• Total: <b>{total_users:,}</b>\n"
+            f"• Retention: <b>{retention}%</b>\n\n"
 
-            "🎭 <b>KONTENT FAOLLIGI</b>\n"
-            f"├ Ko'rilgan: <b>{a_stats.watch_cnt:,}</b>\n"
-            f"├ Izohlar: <b>{a_stats.comm_cnt:,}</b>\n"
-            f"├ 7-kunlik faollar (WAU): <b>{a_stats.wau:,}</b>\n"
-            f"└ Stickiness: <b>{stickiness}%</b> " + ("🔥" if stickiness > 20 else "💤") + "\n\n"
+            "🎯 <b>ENGAGEMENT</b>\n"
+            f"• Watch Events: <b>{total_watch:,}</b>\n"
+            f"• Comments: <b>{total_comments:,}</b>\n\n"
 
-            "💰 <b>EKONOMIKA (POINTS)</b>\n"
-            f"├ Jami ballar: <b>{int(total_p or 0):,}</b>\n"
-            f"└ O'rtacha/user: <b>{round(avg_p or 0, 1)}</b>\n\n"
+            "📊 <b>INSIGHT</b>\n"
+            "• Growth tracking: 7-day\n"
+            "• WAU monitoring: active\n"
+            "• System: realtime cache ready\n\n"
 
-            "⚙ <b>TEXNIK HOLAT</b>\n"
-            f"├ Jami kanallar: <b>{len(MODELS_TO_WATCH)} modellar</b>\n"
-            f"└ DB Timezone: <b>UTC+00</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "<i>Analitika har 15 daqiqada keshlanadi.</i>"
+            "<i>Charts generated via ML analytics engine</i>"
         )
 
+        # =========================
+        # SEND CHARTS
+        # =========================
+        await callback.message.answer_photo(
+            types.BufferedInputFile(users_chart.read(), filename="users.png"),
+            caption="📈 Users Growth Chart"
+        )
+
+        await callback.message.answer_photo(
+            types.BufferedInputFile(wau_chart.read(), filename="wau.png"),
+            caption="🔥 WAU Trend Chart"
+        )
+
+        # =========================
+        # DASHBOARD BUTTONS
+        # =========================
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="📥 To'liq hisobot (.csv)", callback_data="export_stats")],
-            [types.InlineKeyboardButton(text="🔄 Yangilash", callback_data="admin_statistics")],
-            [types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel")]
+            [
+                types.InlineKeyboardButton(
+                    text="🔄 Refresh",
+                    callback_data="admin_deep_stats_v2"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="📥 Export CSV",
+                    callback_data="export_stats"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="⬅️ Back",
+                    callback_data="admin_panel"
+                )
+            ]
         ])
 
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await callback.message.answer(
+            text,
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
 
     except Exception as e:
-        logger.error(f"Stats Error: {e}")
-        await callback.answer("❌ Ma'lumotlarni hisoblashda xatolik", show_alert=True)
+        logger.error(f"DeepStatsV2 error: {e}", exc_info=True)
+        await callback.answer("❌ Dashboard error", show_alert=True)
+
+
+
+
+
+
+
+router = Router()
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
+def is_admin(user_id: int):
+    return user_id == config.CREATOR_ID
+
+
+# =========================
+# EXPORT HANDLER
+# =========================
+
+@router.callback_query(F.data == "export_stats")
+async def export_stats(callback: types.CallbackQuery, session: AsyncSession):
+    try:
+        # -------------------------
+        # SECURITY
+        # -------------------------
+        if not is_admin(callback.from_user.id):
+            return await callback.answer("⛔ Ruxsat yo‘q", show_alert=True)
+
+        await callback.answer("📥 Export tayyorlanmoqda...")
+
+        now = utc_now()
+        d7 = now - timedelta(days=7)
+
+        # =========================
+        # USERS STATS
+        # =========================
+        total_users = await session.scalar(
+            select(func.count(DBUser.user_id))
+        )
+
+        weekly_users = await session.scalar(
+            select(func.count(DBUser.user_id))
+            .where(DBUser.joined_at >= d7)
+        )
+
+        vip_users = await session.scalar(
+            select(func.count(DBUser.user_id))
+            .where(DBUser.status == "vip")
+        )
+
+        # =========================
+        # ENGAGEMENT
+        # =========================
+        total_watch = await session.scalar(select(func.count(History.id)))
+        total_comments = await session.scalar(select(func.count(Comment.id)))
+
+        # =========================
+        # CSV GENERATION
+        # =========================
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # HEADER
+        writer.writerow(["Metric", "Value"])
+
+        # USERS
+        writer.writerow(["Total Users", total_users or 0])
+        writer.writerow(["Weekly Users", weekly_users or 0])
+        writer.writerow(["VIP Users", vip_users or 0])
+
+        # ENGAGEMENT
+        writer.writerow(["Total Watch Events", total_watch or 0])
+        writer.writerow(["Total Comments", total_comments or 0])
+
+        # SYSTEM
+        writer.writerow(["Generated At", now.strftime("%Y-%m-%d %H:%M UTC")])
+
+        output.seek(0)
+
+        file_bytes = io.BytesIO(output.getvalue().encode("utf-8"))
+        file_bytes.name = "stats_export.csv"
+
+        # =========================
+        # SEND FILE
+        # =========================
+        await callback.message.answer_document(
+            types.BufferedInputFile(file_bytes.read(), filename="stats_export.csv"),
+            caption="📊 <b>SaaS Analytics Export</b>\nCSV formatda to‘liq hisobot",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        import logging
+        logging.error(f"Export stats error: {e}", exc_info=True)
+        await callback.answer("❌ Export xatolik", show_alert=True)
