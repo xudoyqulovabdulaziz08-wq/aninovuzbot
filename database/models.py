@@ -74,7 +74,9 @@ class DBUser(Base):
     )
 
     comments: Mapped[List["Comment"]] = relationship(
+        "Comment",
         back_populates="user",
+        primaryjoin="DBUser.user_id == Comment.user_id", 
         lazy="selectin"
     )
 
@@ -246,7 +248,11 @@ class Comment(Base):
     )
 
     # 🟢 TO'G'IRLANDI: DBUser bilan munosabat
-    user: Mapped[Optional["DBUser"]] = relationship(back_populates="comments")
+    user: Mapped[Optional["DBUser"]] = relationship(
+        "DBUser",
+        back_populates="comments",
+        primaryjoin="Comment.user_id == DBUser.user_id" # <--- Shuni qo'shing
+    )
     
     # 🟢 TO'G'IRLANDI: Replies uchun back_populates (self-referential)
     replies: Mapped[List["Comment"]] = relationship(
