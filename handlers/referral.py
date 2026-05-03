@@ -104,11 +104,17 @@ async def check_referrals_callback(callback: types.CallbackQuery, user: DBUser, 
         return await callback.answer("⚠️ Baza bilan aloqa yo'q.", show_alert=True)
 
     # Eng aniq sonni olish uchun count query (Siz yozganingizdek)
-    stmt = select(func.count(DBUser.user_id)).where(DBUser.referred_by == user.user_id)
+    user_id = user.get("user_id") if isinstance(user, dict) else getattr(user, "user_id", None)
+    stmt = select(func.count(DBUser.user_id)).where(DBUser.referred_by == user_id)
     real_ref_count = (await session.execute(stmt)).scalar() or 0
 
-    # Agar bazadagi referral_count bilan farq qilsa, uni yangilab qo'yish ham mumkin (ixtiyoriy)
-    # user.referral_count = real_ref_count 
+    # Agar keshdagi son bazadagidan farq qilsa, keshni yangilash mantiqi
+    if isinstance(user, dict) and user.get("referral_count") != real_ref_count:
+        # L1 va L2 keshni tozalash orqali keyingi safar yangi ma'lumot yuklanishini ta'minlash
+        from services.orchestrator import state
+        async with state.db_lock:
+            state.l1_cache.pop(user_id, None)
+        await valkey.delete("db_users", user_id)
 
     text = (
         "<b>📊 SIZNING TAKLIFLARINGIZ</b>\n"
@@ -150,16 +156,17 @@ async def check_referrals_callback(callback: types.CallbackQuery, user: DBUser, 
 @router.callback_query(F.data == "exchange_points")
 async def exchange_points(callback: types.CallbackQuery, user: dict, session: AsyncSession, state_fsm: FSMContext):
     """
-    Ballarni VIP'ga almashtirish: Outbox pattern va L1/L2 kesh integratsiyasi.[cite: 15, 17, 20]
+    Ballarni VIP'ga almashtirish: Lug'at (dict) xatoliklari tuzatilgan variant.
     """
     # 1. CIRCUIT BREAKER & SESSION CHECK
-    if not user or isinstance(session, type(None)):
+    if not user or session is None:
         return await callback.answer("⚠️ Tizim vaqtincha offline. Keyinroq urinib ko'ring.", show_alert=True)
 
-    user_id = user.get("user_id")
+    # Lug'atdan ID ni olish (Nuqta bilan emas, get bilan!)
+    user_id = user.get("user_id") 
 
     try:
-        # 2. REAL-TIME DB CHECK (Keshdan emas, bazadan olish shart)
+        # 2. REAL-TIME DB CHECK
         db_user = await session.get(DBUser, user_id)
         if not db_user:
             return await callback.answer("❌ Foydalanuvchi topilmadi.", show_alert=True)
@@ -176,16 +183,15 @@ async def exchange_points(callback: types.CallbackQuery, user: dict, session: As
             )
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="🚀 Ball yig'ish", callback_data="get_ref_link")],
-                [types.InlineKeyboardButton(text="👤 Kabinet", callback_data="cabinet")]
+                [types.InlineKeyboardButton(text="👤 Kabinet", callback_data="cabinet")] # Callback nomi to'g'rilandi
             ])
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
             return await callback.answer()
 
-        # 4. VIP STACKING LOGIC (ORM LEVEL)[cite: 15, 16]
+        # 4. VIP STACKING LOGIC
         now = datetime.now(timezone.utc)
         expire_date = db_user.vip_expire_date
         
-        # Vaqtni UTC formatga keltirish
         if expire_date and expire_date.tzinfo is None:
             expire_date = expire_date.replace(tzinfo=timezone.utc)
 
@@ -194,27 +200,22 @@ async def exchange_points(callback: types.CallbackQuery, user: dict, session: As
         db_user.points -= 100
         db_user.status = "vip"
 
-        # 5. DB COMMIT & OUTBOX TRIGGER
-        # SQLAlchemy 'after_update' listeneri OutboxEvent yaratadi va keshni invalidatsiya qiladi
+        # 5. DB COMMIT
         await session.commit()
 
-        # 6. INSTANT CACHE INVALIDATION (L1 dan darhol o'chirish)[cite: 11, 19]
+        # 6. CACHE INVALIDATION
         from services.orchestrator import state
         async with state.db_lock:
-            state.l1_cache.pop(user_id, None) # L1 keshni tozalash
+            state.l1_cache.pop(user_id, None)
         
-        # L2 (Valkey) keshni o'chirish[cite: 11]
         await valkey.delete("db_users", user_id)
 
         # 7. SUCCESS UX
-        await callback.answer(
-            "🎉 TABRIKLAYMIZ!\nVIP status 30 kunga faollashtirildi! 👑", 
-            show_alert=True
-        )
+        await callback.answer("🎉 VIP status 30 kunga faollashtirildi! 👑", show_alert=True)
 
-        # 8. REFRESH CABINET[cite: 17]
-        # Yangilangan ma'lumotlarni dict ko'rinishida shakllantirish
-        updated_user = {
+        # 8. REFRESH CABINET
+        # Cabinetga yuboriladigan dict
+        updated_user_dict = {
             "user_id": db_user.user_id,
             "username": db_user.username,
             "status": db_user.status,
@@ -225,10 +226,10 @@ async def exchange_points(callback: types.CallbackQuery, user: dict, session: As
         }
         
         from handlers.user import personal_cabinet
-        await personal_cabinet(callback, updated_user, state_fsm)
+        # Cabinet handleriga yangilangan lug'atni uzatamiz
+        await personal_cabinet(callback, updated_user_dict, state_fsm)
 
     except Exception as e:
         await session.rollback()
-        logger.error(f"Exchange points error for {user_id}: {e}")
-        await callback.answer("❌ Xatolik yuz berdi. Keyinroq urinib ko'ring.", show_alert=True)
-
+        logger.error(f"Exchange error for {user_id}: {e}")
+        await callback.answer("❌ Xatolik yuz berdi.", show_alert=True)
