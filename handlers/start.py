@@ -270,61 +270,63 @@ async def cmd_start(message: types.Message, user: any, session: AsyncSession, bo
 
 @router.callback_query(F.data.startswith("go_to_channel:"))
 async def redirect_handler(callback: types.CallbackQuery, session: AsyncSession):
-    await callback.answer() # Tugma qotib qolishini oldini oladi
+    """
+    DbSessionMiddleware'ning SafeSession xususiyatiga moslashtirilgan handler.
+    """
+    await callback.answer()
     
-    ch_id = int(callback.data.split(":")[1])
-    channel = await session.scalar(select(Channel).where(Channel.channel_id == ch_id))
-
-    if not channel or not channel.url:
-        return await callback.answer("❌ Kanal topilmadi yoki o'chirilgan", show_alert=True)
-
-    text = (
-        f"📢 <b>Kanal: {channel.title}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"1️⃣ Quyidagi tugma orqali kanalga o'ting\n"
-        f"2️⃣ A'zo bo'ling (Join)\n"
-        f"3️⃣ Botga qaytib tasdiqlashni bosing\n"
-    )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Kanalga o'tish", url=channel.url)],
-        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"check_sub:{ch_id}")],
-        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="check_sub:all")]
-    ])
-
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-
-@router.callback_query(F.data.startswith("check_sub"))
-async def check_callback(callback: types.CallbackQuery, user: dict, session: AsyncSession, bot: Bot):
-    # Middleware 'user'ni dict sifatida beradi[cite: 11]
-    await callback.answer("⏳ Tekshirilmoqda...")
-
-    ok, missing = await check_subscription(bot, callback.from_user.id, session)
-
-    if not ok:
+    # 1. CIRCUIT BREAKER TEKSHIRUVI
+    # Agar baza o'chgan bo'lsa, SafeSession ichidagi haqiqiy sessiya None bo'ladi.
+    # Bu holatda session.scalar() chaqirish RuntimeError beradi.[cite: 12]
+    if isinstance(session._session, type(None)):
         return await callback.answer(
-            f"❌ Obuna to'liq emas!\nYana {len(missing)} ta kanal qoldi.", 
+            "⚠️ Ma'lumotlar bazasi vaqtincha mavjud emas.\n"
+            "Iltimos, keyinroq qayta urinib ko'ring.",
             show_alert=True
         )
 
-    # SUCCESS UX
     try:
-        await callback.message.delete()
-    except:
-        pass
+        # Callback'dan kanal ID sini ajratib olish
+        ch_id_str = callback.data.split(":")[1]
+        ch_id = int(ch_id_str)
 
-    # Keshdagi ma'lumotlardan foydalanamiz[cite: 11]
-    status = user.get("status", "user")
-    is_vip = user.get("is_vip", False)
+        # 2. BAZADAN QIDIRISH (Sessiya borligi aniq)[cite: 12, 19]
+        # Bu yerda SafeSession orqali haqiqiy session.execute ishga tushadi
+        stmt = select(Channel).where(Channel.channel_id == ch_id)
+        channel = await session.scalar(stmt)
 
-    await callback.message.answer(
-        f"✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Xush kelibsiz, {callback.from_user.first_name}!\n"
-        f"Botdan to'liq foydalanishingiz mumkin. 🔥",
-        reply_markup=get_main_menu(callback.from_user.id, is_vip, status),
-        parse_mode="HTML"
-    )
+        if not channel or not channel.url:
+            return await callback.answer(
+                "❌ Kanal topilmadi yoki o'chirilgan.", 
+                show_alert=True
+            )
+
+        # 3. INTERFEYS (UX)
+        text = (
+            f"📢 <b>Kanal: {channel.title}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Botdan foydalanishni davom ettirish uchun "
+            f"ushbu kanalga a'zo bo'lishingiz shart.\n"
+        )
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Kanalga o'tish", url=channel.url)],
+            [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"check_sub:{ch_id}")],
+            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="check_sub:all")]
+        ])
+
+        await callback.message.edit_text(
+            text=text, 
+            reply_markup=kb, 
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"Redirect handler error: {e}", exc_info=True)
+        await callback.answer(
+            "❌ Xatolik yuz berdi. Qayta urinib ko'ring.", 
+            show_alert=True
+        )
 
 # =========================
 # CHECK SUB (FAST PATH)
