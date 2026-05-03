@@ -1,5 +1,6 @@
 import pytz
 import logging
+import html
 from datetime import datetime, timezone
 from aiogram import types, F, Router
 from typing import Any, Union  # ✅ To'g'risi shu
@@ -14,7 +15,8 @@ from html import escape
 from typing import List, Dict, Any, Union
 from sqlalchemy import select, func, desc, cast, Float, or_
 from database.models import Anime
-from database.connection import SafeSession
+from database.connection import AsyncSessionLocal
+
 
 
 
@@ -93,31 +95,37 @@ async def ranked_full(event: Union[types.Message, types.CallbackQuery], state: F
 
 
 
+
+
 @router.callback_query(F.data == "Anime_ranked")
-async def anime_rank(callback: types.CallbackQuery, session: SafeSession):
+async def anime_rank(callback: types.CallbackQuery, session: AsyncSession):
     """
-    Anime reytingi: Keshdan o'qiydi, agar yo'q bo'lsa DB'dan hisoblab keshga yozadi.[cite: 11, 16]
+    Anime reytingi: L2 kesh va optimallashgan DB hisob-kitobi[cite: 11, 16].
     """
-    cache_key = "anime:top_ranking_v1"
+    CACHE_KEY = "anime:top_ranking_v1"
     
     # 1. L2 KESHNI TEKSHIRISH[cite: 11]
-    cached_data = await valkey.get("anime", "top_ranking_v1")
-    
-    if cached_data:
-        # Keshdan olingan ma'lumotni render qilish
-        return await render_ranking(callback, cached_data)
-
-    # 2. DB'DAN HISOBLASH (Kesh bo'sh bo'lsa)[cite: 12, 16]
     try:
+        cached_data = await valkey.get("anime", "top_ranking_v1")
+        if cached_data:
+            return await render_ranking(callback, cached_data)
+    except Exception as e:
+        print(f"Cache Read Error: {e}") # Keshda xatolik bo'lsa DB ga o'tadi[cite: 18]
+
+    # 2. DB'DAN HISOBLASH (Optimallashtirilgan formula)[cite: 12, 16, 17]
+    try:
+        # Reytingni hisoblash (0 ga bo'lishdan himoyalangan)
         avg_rating_raw = Anime.rating_sum / func.nullif(Anime.rating_count, 0)
         avg_rating = func.coalesce(avg_rating_raw, 0.0).label("avg_rating")
         
+        # Max views subquery (Skalyar)
         max_views_sq = select(func.max(Anime.views_week)).scalar_subquery()
         
-        # Ommaboplik formulasi (Views 70% + Rating 30%)
+        # Ommaboplik formulasi: Views (70%) + Rating (30%)
+        # Normalizatsiya: (current / max) * weight[cite: 16]
         norm_views = cast(Anime.views_week, Float) / func.nullif(max_views_sq, 0)
         norm_rating = cast(avg_rating, Float) / 5.0
-        score = ((func.coalesce(norm_views, 0.0) * 0.7) + (norm_rating * 0.3)).label("score")
+        score = ((func.coalesce(norm_views, 0.0) * 0.7) + (func.coalesce(norm_rating, 0.0) * 0.3)).label("score")
 
         stmt = (
             select(Anime.title, Anime.views_week, avg_rating)
@@ -126,55 +134,66 @@ async def anime_rank(callback: types.CallbackQuery, session: SafeSession):
         )
         
         result = await session.execute(stmt)
-        top_animes = []
-        
-        for row in result.all():
-            top_animes.append({
+        top_animes = [
+            {
                 "title": row.title,
                 "views": row.views_week,
                 "rating": round(float(row.avg_rating), 1)
-            })
+            }
+            for row in result.all()
+        ]
 
         if not top_animes:
-            return await callback.answer("📊 Ma'lumotlar tayyorlanmoqda...", show_alert=True)
+            return await callback.answer("📊 Hozircha ma'lumotlar yo'q...", show_alert=True)
 
-        # 3. KESHGA YOZISH (10 daqiqa muddatga)
+        # 3. KESHGA YOZISH (10 daqiqa)[cite: 11]
         await valkey.set("anime", "top_ranking_v1", top_animes, ttl=600)
-        
         await render_ranking(callback, top_animes)
 
     except Exception as e:
-        print(f"Ranking error: {e}")
-        await callback.answer("❌ Reytingni yuklashda xatolik.", show_alert=True)
+        print(f"Ranking System Error: {e}")
+        await callback.answer("❌ Tizimda texnik nosozlik yuz berdi.", show_alert=True)
 
 async def render_ranking(callback: types.CallbackQuery, data: List[Dict[str, Any]]):
     """
-    UX/UI qismi: Ma'lumotlarni chiroyli formatda ko'rsatish.
+    Pro Max UX/UI: Chiroyli vizualizatsiya.
     """
-    text = "🏆 <b>HAFTALIK TREND ANIMELAR</b>\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    header = (
+        "<b>🏆 HAFTALIK TREND ANIMELAR</b>\n"
+        "<i>Eng ko'p ko'rilgan va yuqori baholangan</i>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
     
-    medals = ["🥇", "🥈", "🥉"]
+    rows = []
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
     
     for i, anime in enumerate(data, 1):
-        medal = medals[i-1] if i <= 3 else f"<b>{i}.</b>"
+        rank_icon = medals.get(i, f"<b>{i}.</b>")
         
-        # Trending belgisi (Yuqori ko'rilgan bo'lsa)
-        trend = "🔥 " if anime["views"] > 1000 else ""
+        # Title qisqartirish
+        title = anime["title"][:30] + ".." if len(anime["title"]) > 30 else anime["title"]
         
-        # Title uzunligini boshqarish
-        title = anime["title"][:35] + "..." if len(anime["title"]) > 35 else anime["title"]
+        # Vizual Reyting (Progress bar uslubida)
+        stars_count = int(anime["rating"])
+        progress = "🔹" * stars_count + "🔸" * (5 - stars_count)
         
-        # Reyting yulduzchasi
-        star = "🌟" if anime["rating"] >= 4.5 else "⭐"
-        views = f"{anime['views']:,}".replace(",", " ")
+        # Dinamik indikatorlar
+        hot_label = "🔥" if anime["views"] > 5000 else "📈" if anime["views"] > 1000 else "✨"
+        views_formatted = f"{anime['views']:,}".replace(",", " ")
 
-        text += (
-            f"{medal} {trend}<b>{title}</b>\n"
-            f"└ {star} {anime['rating']}  |  👁 {views}\n\n"
+        row = (
+            f"{rank_icon} {hot_label} <b>{title}</b>\n"
+            f"┣ {progress} <b>{anime['rating']}</b>\n"
+            f"┗ 👁 {views_formatted} marta ko'rildi\n"
         )
+        rows.append(row)
 
-    text += "🕒 <i>Reyting har 10 daqiqada yangilanadi.</i>"
+    footer = (
+        "\n━━━━━━━━━━━━━━━━━━━━\n"
+        "🕒 <i>Ma'lumotlar avtomatik yangilanadi.</i>"
+    )
+
+    text = header + "\n".join(rows) + footer
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="🔄 Yangilash", callback_data="Anime_ranked")],
@@ -182,8 +201,9 @@ async def render_ranking(callback: types.CallbackQuery, data: List[Dict[str, Any
     ])
 
     try:
+        # Faqat o'zgarish bo'lsa xabar yangilanadi (Telegram xatoligini oldini olish)[cite: 18]
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest:
+    except Exception:
         pass
     
     await callback.answer()
@@ -193,32 +213,36 @@ async def render_ranking(callback: types.CallbackQuery, data: List[Dict[str, Any
 
 
 
-from sqlalchemy import select, func, desc, or_
+
 
 
 logger = logging.getLogger("UserRank")
 
-@router.callback_query(F.data == "User_ranked")
-async def user_rank(callback: types.CallbackQuery, session: SafeSession, user: dict = None):
-    """
-    Foydalanuvchilar reytingi: Logarifmik ball tizimi va L2 kesh bilan optimallashtirilgan.
-    """
-    if session is None:
-        return await callback.answer("⚠️ Tizim vaqtincha band. Keyinroq urinib ko'ring.", show_alert=True)
 
-    cache_key = "users:top_10_ranking"
-    
-    # 1. KESHNI TEKSHIRISH (Ultra-tezkor javob)[cite: 11]
-    top_users_cached = await valkey.get("users", "top_10_ranking")
+#------------------------------------------------------------------------------------------
+
+@router.callback_query(F.data == "User_ranked")
+async def user_rank(callback: types.CallbackQuery, session: AsyncSession, user: dict = None):
+    """
+    Foydalanuvchilar reytingi: Logarifmik ball tizimi va dual-layer kesh[cite: 11, 15].
+    """
+    if not session:
+        return await callback.answer("⚠️ Tizim vaqtincha band...", show_alert=True)
+
+    CACHE_KEY = "users:top_10_ranking"
+    user_id = callback.from_user.id
     
     try:
-        if not top_users_cached:
-            # 2. OG'IR HISOBLASH (Faqat kesh bo'sh bo'lsa bajariladi)[cite: 15]
-            # Logarifmik formula: Ballar (70%) va Takliflar (30%) muvozanati
+        # 1. L2 KESHNI TEKSHIRISH[cite: 11]
+        top_users = await valkey.get("users", "top_10_ranking")
+        
+        if not top_users:
+            # 2. MURAKKAB HISOBLASH (Faqat kesh bo'sh bo'lsa)[cite: 15, 18]
+            # Logarifmik formula: Ballar (70%) va Referral (30%)
             log_p = func.ln(func.coalesce(DBUser.points, 0) + 1)
             log_r = func.ln(func.coalesce(DBUser.referral_count, 0) + 1)
             
-            # Normalizatsiya uchun max qiymatlarni olish
+            # Normalizatsiya subquery'lari
             stmt_max = select(func.max(log_p), func.max(log_r))
             res_max = (await session.execute(stmt_max)).fetchone()
             max_p, max_r = (res_max[0] or 1), (res_max[1] or 1)
@@ -232,7 +256,7 @@ async def user_rank(callback: types.CallbackQuery, session: SafeSession, user: d
             )
             
             db_res = await session.execute(stmt)
-            top_users_cached = [
+            top_users = [
                 {
                     "user_id": r.user_id,
                     "username": r.username,
@@ -242,59 +266,80 @@ async def user_rank(callback: types.CallbackQuery, session: SafeSession, user: d
                 } for r in db_res.all()
             ]
             
-            # Keshga 15 daqiqaga saqlash[cite: 18]
-            if top_users_cached:
-                await valkey.set("users", "top_10_ranking", top_users_cached, ttl=900)
+            # Keshga yozish (15 daqiqa)
+            if top_users:
+                await valkey.set("users", "top_10_ranking", top_users, ttl=900)
 
-        # 3. FOYDALANUVCHI O'RNINI ANIQLASH (Shaxsiy ma'lumot keshlanmaydi)
-        user_id = callback.from_user.id
-        rank_val = "1000+"
-        
-        # Agar user Top 10 ichida bo'lsa, count so'rovini yubormaymiz (Optimallashtirish)
-        in_top = next((i + 1 for i, u in enumerate(top_users_cached) if u["user_id"] == user_id), None)
+        # 3. FOYDALANUVCHI O'RNINI ANIQLASH (Optimallashgan)
+        my_rank = "1000+"
+        in_top = next((i + 1 for i, u in enumerate(top_users) if u["user_id"] == user_id), None)
         
         if in_top:
-            rank_val = in_top
+            my_rank = in_top
         else:
-            # Bazadan o'rnini hisoblash
-            current_user_pts = user.get("points", 0) if user else 0
+            # Bazadan faqat o'rnini so'rash (Yengil query)
+            my_pts = user.get("points", 0) if user else 0
+            my_refs = user.get("referral_count", 0) if user else 0
+            
             rank_stmt = select(func.count()).select_from(DBUser).where(
                 or_(
-                    DBUser.points > current_user_pts,
-                    (DBUser.points == current_user_pts) & (DBUser.referral_count > (user.get("referral_count", 0) if user else 0))
+                    DBUser.points > my_pts,
+                    (DBUser.points == my_pts) & (DBUser.referral_count > my_refs)
                 )
             )
-            rank_val = (await session.execute(rank_stmt)).scalar() + 1
+            my_rank = (await session.execute(rank_stmt)).scalar() + 1
 
-        await render_user_ranking(callback, top_users_cached, rank_val, user_id)
+        await render_user_ranking(callback, top_users, my_rank, user_id)
 
     except Exception as e:
-        logger.error(f"Ranking crash: {e}")
-        await callback.answer("❌ Ma'lumotlarni yuklashda xatolik.", show_alert=True)
+        print(f"User Ranking Error: {e}")
+        await callback.answer("❌ Reytingni yuklashda xatolik yuz berdi.", show_alert=True)
+
+
+
+#------------------------------------------------------------------------------------------------------------
+
 
 async def render_user_ranking(callback: types.CallbackQuery, top_users: List[Dict], my_rank: Any, my_id: int):
-    """UX/UI qismi: Reytingni chiroyli formatda ko'rsatish."""
-    text = "🏆 <b>ELITA FOYDALANUVCHILAR</b>\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    """
+    Pro Max UX/UI: Elita foydalanuvchilar ko'rinishi.
+    """
+    header = (
+        "<b>💎 ELITA FOYDALANUVCHILAR</b>\n"
+        "<i>Eng faol va sodiq hamjamiyat a'zolari</i>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
     
-    medals = ["🥇", "🥈", "🥉"]
+    rows = []
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
     
     for i, u in enumerate(top_users, 1):
         is_me = u["user_id"] == my_id
-        medal = medals[i-1] if i <= 3 else f"<b>{i}.</b>"
+        rank_icon = medals.get(i, f"<b>{i}.</b>")
         
-        # Xavfsizlik: Username'ni escape qilish
-        name = f"@{escape(u['username'])}" if u["username"] else f"ID:{u['user_id']}"
-        badge = "💎 " if u["status"] == "vip" else ""
+        # Username xavfsizligi
+        name_raw = u['username'] if u['username'] else f"ID:{u['user_id']}"
+        name = html.escape(name_raw)
         
-        line = f"<u>{badge}{name}</u>" if is_me else f"{badge}{name}"
+        # VIP va o'zini ajratib ko'rsatish
+        prefix = "⭐️ " if is_me else "💎 " if u["status"] == "vip" else "👤 "
+        user_line = f"<u>{prefix}{name}</u>" if is_me else f"{prefix}{name}"
+        
         points = f"{u['points']:,}".replace(",", " ")
         
-        text += f"{medal} {line}\n└ 💰 <b>{points}</b> ball | 👥 <b>{u['refs']}</b> ref\n\n"
+        rows.append(
+            f"{rank_icon} {user_line}\n"
+            f"┣ 💰 <b>{points}</b> ball\n"
+            f"┗ 👥 <b>{u['refs']}</b> referral\n"
+        )
 
-    text += "━━━━━━━━━━━━━━━━━━━━\n"
-    text += f"👤 Sizning o'rningiz: <b>#{my_rank}</b>\n\n"
-    text += "🕒 <i>Reyting har 15 daqiqada yangilanadi.</i>"
+    footer = (
+        "\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"✨ Sizning o'rningiz: <b>#{my_rank}</b>\n"
+        "🕒 <i>Reyting har 15 daqiqada yangilanadi.</i>"
+    )
+
+    text = header + "\n".join(rows) + footer
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="🔄 Yangilash", callback_data="User_ranked")],
@@ -303,7 +348,7 @@ async def render_user_ranking(callback: types.CallbackQuery, top_users: List[Dic
 
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest:
+    except Exception:
         pass
+    
     await callback.answer()
-
