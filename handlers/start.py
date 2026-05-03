@@ -94,15 +94,19 @@ async def get_active_channels(session: AsyncSession) -> list:
 # =========================
 # KEYBOARD (FAST BUILD)
 # =========================
+# DIQQAT: Bu oddiy def, await bilan chaqirilmaydi!
 def build_sub_keyboard(missing: list):
     builder = InlineKeyboardBuilder()
     
+    # Har bir kanal uchun alohida qator (UX: bosishga qulay)
     for ch in missing:
         builder.row(types.InlineKeyboardButton(
             text=f"📢 {ch['title']}", 
+            # go_to_channel handleri orqali o'tish
             callback_data=f"go_to_channel:{ch['id']}")
         )
     
+    # Tekshirish tugmasi har doim oxirida va ajralib turadi
     builder.row(types.InlineKeyboardButton(
         text="🔄 Obunani tekshirish", 
         callback_data="check_sub:all")
@@ -110,22 +114,23 @@ def build_sub_keyboard(missing: list):
     return builder.as_markup()
 
 async def check_subscription(bot: Bot, user_id: int, session: AsyncSession):
+    # Kanallarni keshdan yoki bazadan olish
     channels = await get_active_channels(session)
     if not channels:
         return True, []
 
-    # API so'rovlarni parallel yuborish (Tezkorlik uchun)
+    # API so'rovlarni parallel yuborish (Tezkorlik: High-Load uchun)
     async def check(ch):
         try:
             m = await bot.get_chat_member(ch["id"], user_id)
             return None if m.status in ("member", "administrator", "creator") else ch
         except Exception:
-            return ch # Xatolik bo'lsa, obuna bo'lmagan deb hisoblaymiz (xavfsizlik uchun)
+            # Xatolik bo'lsa (masalan bot kanalda admin emas), foydalanuvchini kanalga yo'naltiramiz
+            return ch 
 
     results = await asyncio.gather(*[check(ch) for ch in channels])
     missing = [r for r in results if r]
     return len(missing) == 0, missing
-
 # =========================
 # START (ULTRA OPTIMIZED)
 # =========================
@@ -202,29 +207,24 @@ async def cmd_start(message: types.Message, user: any, session: AsyncSession, bo
         # =========================
         # SUB CHECK (HIGH-END UX)
         # =========================
+        # start.py ichida
         ok, missing = await check_subscription(bot, user_id, session)
 
         if not ok:
-            # Kanallar soniga qarab matnni moslashtirish
-            count = len(missing)
-            
+           
+            kb = build_sub_keyboard(missing) 
+    
             text = (
-                f"👋 <b>Assalomu alaykum, {full_name}!</b>\n\n"
-                f"Botdan to‘liq foydalanish uchun quyidagi <b>{count} ta</b> "
-                f"kanalga a'zo bo‘lishingiz zarur 👇\n\n"
-                f"<i>Bu loyihani bepul ushlab turishimizga yordam beradi. 🚀</i>"
+                f"👋 <b>Assalomu alaykum, {message.from_user.full_name}!</b>\n\n"
+                f"Botimizdan foydalanish uchun quyidagi kanallarga a'zo bo'lishingiz kerak.\n\n"
+                f"<i>Obuna bo'lib, '🔄 Obunani tekshirish' tugmasini bosing.</i>"
             )
-
-            # Keyboardni yasash (Sizning build_sub_keyboard funksiyangizga tayanadi)
-            kb = await build_sub_keyboard(missing) 
-
-            # Rasm bilan yuborish UXni sezilarli darajada oshiradi (ixtiyoriy)
-            # Agar rasm bo'lmasa, oddiy message.answer'ga qaytamiz
+    
             return await message.answer(
                 text=text,
                 reply_markup=kb,
-                parse_mode="HTML",
-                disable_web_page_preview=True # Linklar pastida preview chiqmasligi uchun
+                parse_mode="HTML"
+
             )
 
         # =========================
