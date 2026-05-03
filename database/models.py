@@ -218,9 +218,19 @@ class Comment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    anime_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # 🟢 TO'G'IRLANDI: anime_list.id EMAS, anime_list.anime_id bo'lishi kerak
+    anime_id: Mapped[int] = mapped_column(
+        BigInteger, 
+        ForeignKey("anime_list.anime_id", ondelete="CASCADE"), 
+        index=True
+    )
 
-    user_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+    # 🟢 TO'G'IRLANDI: Foydalanuvchiga bog'liqlik (ForeignKey)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, 
+        ForeignKey("users.user_id", ondelete="SET NULL"), 
+        index=True
+    )
 
     parent_id: Mapped[Optional[int]] = mapped_column(
         Integer,
@@ -235,7 +245,20 @@ class Comment(Base):
         index=True
     )
 
-    replies = relationship("Comment", lazy="selectin")
+    # 🟢 TO'G'IRLANDI: DBUser bilan munosabat
+    user: Mapped[Optional["DBUser"]] = relationship(back_populates="comments")
+    
+    # 🟢 TO'G'IRLANDI: Replies uchun back_populates (self-referential)
+    replies: Mapped[List["Comment"]] = relationship(
+        "Comment", 
+        back_populates="parent",
+        lazy="selectin"
+    )
+    parent: Mapped[Optional["Comment"]] = relationship(
+        "Comment", 
+        back_populates="replies", 
+        remote_side=[id]
+    )
 # ================= TICKET =================
 class Ticket(Base):
     __tablename__ = "tickets"
