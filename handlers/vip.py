@@ -92,7 +92,7 @@ async def buy_vip(event: Union[types.Message, types.CallbackQuery], user: dict, 
         [types.InlineKeyboardButton(text=btn_text, callback_data="buy_vip_start")],
         [
             types.InlineKeyboardButton(text="🎁 Ball yig'ish", callback_data="get_ref_link"),
-            types.InlineKeyboardButton(text="👤 Kabinet", callback_data="back_to_cabinet"),
+            types.InlineKeyboardButton(text="👤 Kabinet", callback_data="cabinet"),
         ]
     ])
 
