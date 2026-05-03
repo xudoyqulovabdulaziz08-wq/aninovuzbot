@@ -190,14 +190,27 @@ class History(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    anime_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # 🟢 TO'G'IRLANDI: ForeignKey qo'shildi
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, 
+        ForeignKey("users.user_id", ondelete="CASCADE"), 
+        index=True
+    )
+    # 🟢 TO'G'IRLANDI: Anime uchun ham bog'liqlik qo'shish tavsiya etiladi
+    anime_id: Mapped[int] = mapped_column(
+        BigInteger, 
+        ForeignKey("anime_list", ondelete="CASCADE"), 
+        index=True
+    )
 
     watched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         index=True
     )
+
+    # 🟢 QO'SHILDI: relationship orqaga qaytishi uchun (back_populates uchun shart)
+    user: Mapped["DBUser"] = relationship(back_populates="history")
 
 # ================= COMMENT =================
 class Comment(Base):
