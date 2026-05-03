@@ -76,6 +76,9 @@ async def get_ref_link_callback(callback: types.CallbackQuery, user: dict, state
         [
             types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="cabinet"),
             types.InlineKeyboardButton(text="💎 VIP menyu", callback_data="buy_vip_menu")
+        ],
+        [
+            types.InlineKeyboardButton(text="💫 Takliflarim", callback_data="check_referrals")
         ]
     ])
 
