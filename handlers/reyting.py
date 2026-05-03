@@ -11,8 +11,8 @@ from aiogram.fsm.context import FSMContext
 from database.cache import valkey
 from aiogram.exceptions import TelegramBadRequest
 from html import escape
-from typing import List, Dict, Any, or_
-from sqlalchemy import select, func, desc, cast, Float
+from typing import List, Dict, Any, Union
+from sqlalchemy import select, func, desc, cast, Float, or_
 from database.models import Anime
 from database.connection import SafeSession
 
