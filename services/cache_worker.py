@@ -1,61 +1,119 @@
+import time
 import asyncio
 import logging
+from datetime import datetime, timezone
+
 from sqlalchemy import select, delete
 from database.models import OutboxEvent
 
 logger = logging.getLogger("CacheWorker")
 
+
 class CacheInvalidationWorker:
     def __init__(self, session_factory, cache_manager):
-        # session_factory — bu async_sessionmaker bo'lishi kerak
         self.session_factory = session_factory
         self.cache = cache_manager
+
         self._running = True
 
+        # tuning (production optimized)
+        self.batch_size = 100
+        self.fast_sleep = 0.1
+        self.idle_sleep = 0.5
+        self.cleanup_interval = 300  # 5 min
+
+        self._last_cleanup = time.time()
+
+    # ================= MAIN LOOP =================
     async def run(self):
-        logger.info("🚀 Cache Invalidation Worker: ACTIVE")
+        logger.info("🚀 Cache Invalidation Worker STARTED")
+
         while self._running:
             try:
-                processed_count = await self.process_events()
-                # Agar eventlar bo'lsa tezroq ishlaymiz, bo'lmasa dam olamiz
-                sleep_time = 0.1 if processed_count > 0 else 0.5
-                await asyncio.sleep(sleep_time)
-            except Exception as e:
-                logger.error(f"Worker Loop Error: {e}")
-                await asyncio.sleep(5)
+                processed = await self.process_events()
 
+                # adaptive sleep (load-based)
+                if processed > 0:
+                    await asyncio.sleep(self.fast_sleep)
+                else:
+                    await asyncio.sleep(self.idle_sleep)
+
+                # periodic cleanup
+                await self._maybe_cleanup()
+
+            except asyncio.CancelledError:
+                logger.warning("🛑 Worker cancelled")
+                break
+
+            except Exception as e:
+                logger.error(f"🔥 Worker loop error: {e}")
+                await asyncio.sleep(3)
+
+    # ================= EVENT PROCESS =================
     async def process_events(self) -> int:
         async with self.session_factory() as session:
-            # 1. Qayta ishlanmagan xabarlarni SQLAlchemy 2.0 style'da olish
-            stmt = select(OutboxEvent).filter_by(processed=False).limit(100)
+
+            # 🔥 batch fetch (FAST)
+            stmt = (
+                select(OutboxEvent)
+                .where(OutboxEvent.processed == False)
+                .order_by(OutboxEvent.created_at.asc())
+                .limit(self.batch_size)
+            )
+
             result = await session.execute(stmt)
             events = result.scalars().all()
-            
+
             if not events:
                 return 0
 
+            # ================= PARALLEL INVALIDATION =================
+            tasks = []
             for ev in events:
-                try:
-                    # 2. Redis Stream orqali barcha node'larga xabar yuborish
-                    # Bu metod CacheManager'da Redis'ga XADD qiladi
-                    await self.cache.invalidate(ev.aggregate, ev.aggregate_id)
-                    ev.processed = True
-                except Exception as e:
-                    logger.error(f"Invalidation failed for {ev.aggregate}:{ev.aggregate_id}: {e}")
+                tasks.append(self._process_single(session, ev))
 
-            # 3. Batch commit
+            await asyncio.gather(*tasks, return_exceptions=True)
+
             await session.commit()
-            
-            # 4. Eski xabarlarni o'chirish (Vaqti-vaqti bilan qilish tavsiya etiladi)
-            # Masalan, processed_count ma'lum songa yetganda yoki random
+
             return len(events)
 
-    async def cleanup_old_events(self):
-        """Eski (processed) xabarlarni ommaviy o'chirish."""
-        async with self.session_factory() as session:
-            await session.execute(delete(OutboxEvent).where(OutboxEvent.processed == True))
-            await session.commit()
-            logger.info("🧹 Outbox cleanup completed.")
+    # ================= SINGLE EVENT =================
+    async def _process_single(self, session, ev: OutboxEvent):
+        try:
+            # 🔥 REAL CACHE INVALIDATION
+            await self.cache.invalidate(ev.aggregate, ev.aggregate_id)
 
+            ev.processed = True
+            ev.processed_at = datetime.now(timezone.utc)
+
+        except Exception as e:
+            logger.error(
+                f"❌ Invalidation failed {ev.aggregate}:{ev.aggregate_id} -> {e}"
+            )
+
+    # ================= CLEANUP =================
+    async def _maybe_cleanup(self):
+        now = time.time()
+
+        if now - self._last_cleanup < self.cleanup_interval:
+            return
+
+        self._last_cleanup = now
+
+        try:
+            async with self.session_factory() as session:
+                await session.execute(
+                    delete(OutboxEvent).where(OutboxEvent.processed == True)
+                )
+                await session.commit()
+
+            logger.info("🧹 Outbox cleanup done")
+
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+
+    # ================= STOP =================
     def stop(self):
         self._running = False
+        logger.info("🛑 Cache Worker STOPPED")

@@ -1,37 +1,33 @@
-from datetime import datetime, timezone
-from typing import List, Optional
+from __future__ import annotations
+
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import List, Optional
 
 from sqlalchemy import (
-    CheckConstraint, Numeric, String, Integer, BigInteger, Boolean,
-    Table, Text, DateTime, ForeignKey, Index, UniqueConstraint, Column
+    String, Integer, BigInteger, Boolean,
+    Text, DateTime, ForeignKey, Index,
+    UniqueConstraint, Column, Table, Numeric
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import (
+    DeclarativeBase, Mapped, mapped_column,
+    relationship
+)
 from sqlalchemy.sql import func
-from decimal import Decimal
-
-
-
-
-from datetime import datetime, timezone
-
-now = datetime.now(timezone.utc)
-
-cutoff = now.replace(tzinfo=None) 
 
 # ================= BASE =================
 class Base(DeclarativeBase):
+    """Shared base for all models"""
     pass
-
-
 # ================= ASSOCIATION TABLE =================
 anime_genre = Table(
     "anime_genre",
     Base.metadata,
     Column("anime_id", ForeignKey("anime_list.anime_id", ondelete="CASCADE"), primary_key=True),
-    Column("genre_id", ForeignKey("genres.id", ondelete="CASCADE"), primary_key=True)
+    Column("genre_id", ForeignKey("genres.id", ondelete="CASCADE"), primary_key=True),
+    Index("idx_anime_genre_fast", "anime_id", "genre_id")
 )
-
 
 # ================= USER =================
 class DBUser(Base):
@@ -39,56 +35,72 @@ class DBUser(Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True)
-    joined_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        server_default=func.now(),
-        index=True  # Qidiruv va filtrlashni tezlashtiradi
-    )
-    points: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(20), default="user", index=True)
-    vip_expire_date: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), 
-        nullable=True
-    )
-    health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
-    referral_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    
-    referred_by_channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True) 
-    referred_by: Mapped[Optional[int]] = mapped_column(
-        BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
-    )
-    
-    # Relationships
-    favorites: Mapped[List["Favorite"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    history: Mapped[List["History"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    comments: Mapped[List["Comment"]] = relationship(back_populates="user")
-    tickets: Mapped[List["Ticket"]] = relationship(back_populates="user")
-    admin_settings: Mapped[Optional["AdminSettings"]] = relationship(back_populates="user", uselist=False)
-    
 
-    # Indexlar query'larni tezlatish uchun (Ranking uchun juda muhim)
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True
+    )
+
+    points: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="user", index=True)
+
+    vip_expire_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    referral_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
+    last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50))
+
+    referred_by_channel: Mapped[Optional[str]] = mapped_column(String(50))
+
+    referred_by: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("users.user_id", ondelete="SET NULL")
+    )
+
+    # 🔥 PERFORMANCE: lazy='selectin' = N+1 fix
+    favorites: Mapped[List["Favorite"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+
+    history: Mapped[List["History"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+
+    comments: Mapped[List["Comment"]] = relationship(
+        back_populates="user",
+        lazy="selectin"
+    )
+
+    tickets: Mapped[List["Ticket"]] = relationship(
+        back_populates="user",
+        lazy="selectin"
+    )
+
+    admin_settings: Mapped[Optional["AdminSettings"]] = relationship(
+        back_populates="user",
+        uselist=False,
+        lazy="joined"
+    )
+
     __table_args__ = (
-        Index("idx_points", "points"),
-        Index("idx_referral_count", "referral_count"),
+        Index("idx_user_points_fast", "points", "status"),
+        Index("idx_user_ref_fast", "referral_count"),
     )
 
     @property
     def is_vip(self) -> bool:
-        """Foydalanuvchi VIP statusini tekshirish (muddati bilan)"""
         if self.status != "vip":
             return False
-        
-        if self.vip_expire_date:
-            # Bazadagi vaqtni UTC ga o'tkazib, hozirgi UTC vaqt bilan solishtiramiz
-            expire_date = self.vip_expire_date
-            if expire_date.tzinfo is None:
-                expire_date = expire_date.replace(tzinfo=timezone.utc)
-            
-            return expire_date > datetime.now(timezone.utc)
-        
-        # Agar status VIP bo'lib, muddati belgilanmagan bo'lsa - muddatsiz VIP
-        return True
+        if not self.vip_expire_date:
+            return True
+        return self.vip_expire_date > datetime.now(timezone.utc)
 # ================= GENRE =================
 class Genre(Base):
     __tablename__ = "genres"
@@ -99,106 +111,118 @@ class Genre(Base):
 # ================= ANIME =================
 class Anime(Base):
     __tablename__ = "anime_list"
-    __table_args__ = (
-        Index("idx_anime_title", "title"),
-        Index("idx_anime_year", "year"),
-    )
 
     anime_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    title: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+
+    title: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+
     poster_id: Mapped[Optional[str]] = mapped_column(String(255))
-    lang: Mapped[Optional[str]] = mapped_column(String(100))
-    year: Mapped[Optional[int]] = mapped_column(Integer)
-    fandub: Mapped[Optional[str]] = mapped_column(String(255))
-    description: Mapped[Optional[str]] = mapped_column(Text)
+
+    year: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+
     rating_sum: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     rating_count: Mapped[int] = mapped_column(Integer, default=0)
-    views_week: Mapped[int] = mapped_column(Integer, default=0)
+
+    views_week: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Relationships
-    genres: Mapped[List["Genre"]] = relationship(secondary=anime_genre, backref="animes")
-    episodes: Mapped[List["Episode"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
-    favorites: Mapped[List["Favorite"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
-    history: Mapped[List["History"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
-    comments: Mapped[List["Comment"]] = relationship(back_populates="anime", cascade="all, delete-orphan")
+    genres: Mapped[List["Genre"]] = relationship(
+        secondary=anime_genre,
+        backref="animes",
+        lazy="selectin"
+    )
+
+    episodes: Mapped[List["Episode"]] = relationship(
+        back_populates="anime",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+
+    favorites: Mapped[List["Favorite"]] = relationship(lazy="selectin")
+    history: Mapped[List["History"]] = relationship(lazy="selectin")
+
+    __table_args__ = (
+        Index("idx_anime_fast_search", "title", "year"),
+    )
 
     @property
     def average_rating(self) -> float:
-        if self.rating_count > 0:
+        if self.rating_count:
             return round(float(self.rating_sum / self.rating_count), 1)
         return 0.0
 # ================= EPISODE =================
 class Episode(Base):
     __tablename__ = "anime_episodes"
-    __table_args__ = (
-        Index("idx_episode_anime", "anime_id"),
-        UniqueConstraint("anime_id", "episode", name="uix_anime_episode"),
-        CheckConstraint("episode > 0", name="check_episode_positive"),
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    anime_id: Mapped[int] = mapped_column(
+        ForeignKey("anime_list.anime_id", ondelete="CASCADE"),
+        index=True
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
-    episode: Mapped[int] = mapped_column(Integer)
+    episode: Mapped[int] = mapped_column(Integer, index=True)
+
     file_id: Mapped[str] = mapped_column(String(255))
 
     anime: Mapped["Anime"] = relationship(back_populates="episodes")
 
-
+    __table_args__ = (
+        UniqueConstraint("anime_id", "episode"),
+        Index("idx_episode_fast", "anime_id", "episode"),
+    )
 # ================= FAVORITE =================
 class Favorite(Base):
     __tablename__ = "favorites"
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
-    anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"), primary_key=True)
 
-    # ✅ TUZATILDI: back_populates="favorites" (oldin "user" deb xato yozilgandi)
-    user: Mapped["DBUser"] = relationship(back_populates="favorites")
-    anime: Mapped["Anime"] = relationship(back_populates="favorites")
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
+    anime_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("anime_list.anime_id", ondelete="CASCADE"), primary_key=True)
+
+    user: Mapped["DBUser"] = relationship(back_populates="favorites", lazy="joined")
+    anime: Mapped["Anime"] = relationship(back_populates="favorites", lazy="joined")
 
 
 
 # ================= HISTORY =================
 class History(Base):
     __tablename__ = "history"
-    __table_args__ = (
-        UniqueConstraint("user_id", "anime_id", name="uix_user_anime_history"),
-    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"))
-    anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
-    last_episode: Mapped[int] = mapped_column(Integer, default=1)
-    # onupdate qo'shildi!
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    anime_id: Mapped[int] = mapped_column(BigInteger, index=True)
+
     watched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        server_default=func.now(), 
-        onupdate=func.now()
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True
     )
-
-    user: Mapped["DBUser"] = relationship(back_populates="history")
-    anime: Mapped["Anime"] = relationship(back_populates="history")
 
 # ================= COMMENT =================
 class Comment(Base):
     __tablename__ = "comments"
-    __table_args__ = (Index("idx_comment_anime", "anime_id"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    parent_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("comments.id", ondelete="CASCADE"))
-    parent: Mapped[Optional["Comment"]] = relationship(remote_side=[id], backref="replies")
-    # Comment modelida shunday qilish xavfsizroq:
-    user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
-    anime_id: Mapped[int] = mapped_column(ForeignKey("anime_list.anime_id", ondelete="CASCADE"))
-    comment_text: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now()
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    anime_id: Mapped[int] = mapped_column(BigInteger, index=True)
+
+    user_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+
+    parent_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("comments.id", ondelete="CASCADE")
     )
 
-    user: Mapped["DBUser"] = relationship(back_populates="comments")
-    anime: Mapped["Anime"] = relationship(back_populates="comments")
+    comment_text: Mapped[str] = mapped_column(Text)
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True
+    )
 
+    replies = relationship("Comment", lazy="selectin")
 # ================= TICKET =================
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -282,25 +306,23 @@ class AdminSettings(Base):
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
-    id: Mapped[str] = mapped_column(
-        String,
-        primary_key=True,
-        default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
 
-    aggregate: Mapped[str] = mapped_column(String, nullable=False)      # users, anime, etc
-    aggregate_id: Mapped[str] = mapped_column(String, nullable=False)   # entity id
+    aggregate: Mapped[str] = mapped_column(String, index=True)
+    aggregate_id: Mapped[str] = mapped_column(String, index=True)
 
-    event_type: Mapped[str] = mapped_column(String, nullable=False)     # user_created, points_added
-    payload: Mapped[str] = mapped_column(Text, nullable=False)         # JSON string
+    event_type: Mapped[str] = mapped_column(String, index=True)
+
+    payload: Mapped[str] = mapped_column(Text)
 
     processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    retry_count: Mapped[int] = mapped_column(default=0)
+
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        nullable=False
+        index=True
     )
 
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

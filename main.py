@@ -1,116 +1,115 @@
-import pytz
-
 import asyncio
 import logging
+import pytz
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from datetime import datetime, timedelta, timezone
 
 from database.connection import AsyncSessionLocal, engine, check_db
-from database.events import attach_cache_listeners 
+from database.events import attach_cache_listeners
 from middlewares.db_middleware import DbSessionMiddleware
-from services.cache_worker import CacheInvalidationWorker 
-from config import config
-from database.cache import valkey
-from handlers import start, admin, user, anime, vip, reyting
-from handlers import search
-from handlers import referral
-from handlers.admin_panel import channel, statisika
+from services.cache_worker import CacheInvalidationWorker
 from services.outbox.worker import OutboxWorker
+from database.cache import valkey
+from config import config
+from handlers import start, admin, user, anime, vip, reyting, search, referral
+from handlers.admin_panel import channel, statisika
 
-
-# ✅ Global Task Tracker
-background_tasks = set()
 logger = logging.getLogger("Main")
 
+background_tasks = set()
+
+# ================= HEALTH =================
 async def health_check_handler(request):
-    """Render va UptimeRobot uchun bot holatini tasdiqlovchi endpoint."""
     return web.Response(text="AniNowuz SaaS Engine is running! 🚀", status=200)
 
-outbox_worker = OutboxWorker(AsyncSessionLocal)
 
+# ================= TIME =================
+def get_now():
+    return pytz.timezone("Asia/Tashkent").localize(
+        __import__("datetime").datetime.now()
+    )
+
+
+# ================= WORKERS START =================
 async def start_workers():
-    task = asyncio.create_task(outbox_worker.start(), name="OutboxWorker")
-    background_tasks.add(task)
-    task.add_done_callback(background_tasks.discard)
+    tasks = []
+
+    outbox_worker = OutboxWorker(AsyncSessionLocal)
+    cache_worker = CacheInvalidationWorker(AsyncSessionLocal, valkey)
+
+    # parallel start (MUHIM FIX ⚡)
+    tasks.append(asyncio.create_task(outbox_worker.start(), name="OutboxWorker"))
+    tasks.append(asyncio.create_task(cache_worker.run(), name="CacheWorker"))
+
+    for t in tasks:
+        background_tasks.add(t)
+        t.add_done_callback(background_tasks.discard)
+
+    logger.info("🚀 Workers started in PARALLEL mode")
 
 
-
-def get_now():
-    # O'zbekiston vaqt mintaqasini belgilash
-    tashkent_tz = pytz.timezone('Asia/Tashkent')
-    # Hozirgi UTC vaqtni olib, Toshkent vaqtiga o'tkazish
-    return datetime.now(tashkent_tz)
-
-# Handler ichida foydalanish:
-def get_now():
-    return datetime.now(pytz.timezone('Asia/Tashkent'))
-
+# ================= STARTUP =================
 async def on_startup(bot: Bot):
-    """Industrial Startup: Infra & Worker Sync."""
-    
-    # 1. ESKI XABARLARNI TOZALASH (Drop Pending Updates)
-    # Bu qator bot o'chig'ida kelgan barcha xabarlarni o'chirib yuboradi.
-    # Shunda bot "toza sahifa" bilan ish boshlaydi.
     await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("🗑 Eski xabarlar tozalandi (Pending updates dropped).")
-    
-    # 2. Infra Check & Start
-    await check_db()
-    await valkey.start()
-    await start_workers()
-    await asyncio.sleep(0.2)
-    logger.info("🔥 OutboxWorker started")
-    
-    try:
-        await asyncio.wait_for(valkey.redis.ping(), timeout=2.0)
-        logger.info("✅ Valkey (Redis) is online.")
-    except Exception as e:
-        logger.warning(f"⚠️ Redis unavailable: {e}. Bot running in DB-only mode.")
+    logger.info("🧹 Pending updates cleared")
 
-    # 3. Tables Sync
+    # ⚡ PARALLEL INIT (ENG MUHIM OPTIMIZATION)
+    db_task = asyncio.create_task(check_db())
+    redis_task = asyncio.create_task(valkey.start())
+
+    await asyncio.gather(db_task, redis_task)
+
+    # workers parallel start
+    await start_workers()
+
+    # DB schema (blocking faqat 1 marta)
     async with engine.begin() as conn:
         from database.models import Base
         await conn.run_sync(Base.metadata.create_all)
-    
+
     attach_cache_listeners()
 
-    # 3. Webhookni o'rnatish
-    if not config.WEBHOOK_URL:
-        raise ValueError("❌ WEBHOOK_URL is missing in environment variables!")
-
-    # drop_pending_updates=False: restartda xabarlar o'chib ketmasligi uchun
+    # webhook setup
     await bot.set_webhook(
         url=config.WEBHOOK_URL,
         allowed_updates=["message", "callback_query", "inline_query"],
-        drop_pending_updates=False 
     )
-    logger.info(f"🌐 Webhook Live: {config.WEBHOOK_URL}")
 
-    # 4. Background Workers
-    invalidation_worker = CacheInvalidationWorker(AsyncSessionLocal, valkey)
-    worker_task = asyncio.create_task(invalidation_worker.run(), name="CacheInvalidationWorker")
-    background_tasks.add(worker_task)
-    worker_task.add_done_callback(background_tasks.discard)
+    logger.info("🌐 Webhook active")
 
-    logger.info(f"🔥 AniNowuz Engine Live | Outbox Workers Active")
+    # redis health check async (non-blocking)
+    asyncio.create_task(_redis_ping())
 
+    # middleware already optimal
+
+
+async def _redis_ping():
+    try:
+        await asyncio.wait_for(valkey.redis.ping(), timeout=2)
+        logger.info("✅ Redis OK")
+    except Exception as e:
+        logger.warning(f"Redis slow/unavailable: {e}")
+
+
+# ================= SHUTDOWN =================
 async def on_shutdown(bot: Bot):
-    """Graceful Shutdown."""
-    logger.info("🛑 Shutdown sequence initiated...")
-    
-    if background_tasks:
-        for task in background_tasks:
-            task.cancel()
-        await asyncio.gather(*background_tasks, return_exceptions=True)
-    
-    await valkey.stop() 
-    await engine.dispose()
-    logger.info("✨ Clean shutdown complete.")
+    logger.info("🛑 Shutting down...")
 
+    for t in background_tasks:
+        t.cancel()
+
+    await asyncio.gather(*background_tasks, return_exceptions=True)
+
+    await valkey.stop()
+    await engine.dispose()
+
+    logger.info("✅ Clean shutdown complete")
+
+
+# ================= MAIN =================
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -121,10 +120,13 @@ def main():
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
+
     dp = Dispatcher()
 
-    # Middleware & Routers
+    # middleware (unchanged)
     dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
+
+    # routers (UNCHANGED — MUHIM)
     dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(anime.router)
@@ -139,23 +141,22 @@ def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # --- 🌐 WEB APP ---
+    # web app
     app = web.Application()
-    app.router.add_get("/", health_check_handler) # Render Health Check uchun
-    
-    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_requests_handler.register(app, path=config.WEBHOOK_PATH)
-    
-    # setup_application signallarni (SIGTERM) to'g'ri boshqaradi
+    app.router.add_get("/", health_check_handler)
+
+    handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    handler.register(app, path=config.WEBHOOK_PATH)
+
     setup_application(app, dp, bot=bot)
-    
-    # Render PORT ni configdan yoki avtomatik oladi
+
     web.run_app(
-        app, 
-        host="0.0.0.0", 
+        app,
+        host="0.0.0.0",
         port=config.PORT,
-        handle_signals=True 
+        handle_signals=True
     )
+
 
 if __name__ == "__main__":
     main()
