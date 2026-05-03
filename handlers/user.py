@@ -74,7 +74,7 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], use
         f"🏅 Status: <pre>{status}</pre>\n"
         f"⭐ Ballaringiz: <b>{points}</b>\n"
         f"👥 Takliflar: <b>{ref_count} ta</b>\n"
-        f"💎 VIP holati: <b>{vip_status}</b>\n"
+        f"💎 VIP holati: <b>{vip_status}</b>\n\n"
         f"‼️Sayt profile tez orqada ishga tushadi\n"
         "━━━━━━━━━━━━━━━━━━━━"
     )

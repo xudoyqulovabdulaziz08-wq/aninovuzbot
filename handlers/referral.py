@@ -17,64 +17,81 @@ from handlers.user import personal_cabinet
 from middlewares.db_middleware import DbSessionMiddleware
 from main import get_now
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
 
 
 logger = logging.getLogger("StartHandler")
 router = Router()
 
-# Shaxsiy kabinet ichidagi callback handler (get_ref_link uchun)
+
+
+
+
 @router.callback_query(F.data == "get_ref_link")
-async def get_ref_link_callback(callback: types.CallbackQuery, user: DBUser):
+async def get_ref_link_callback(callback: types.CallbackQuery, user: dict, state: FSMContext):
+    """
+    Referal tizimi: Keshdan olingan ma'lumotlar bilan bazaga yuklamasiz ishlaydi.[cite: 1, 3]
+    """
     await state.clear()
-    # User obyektini tekshirish (Middleware xavfsizligi)
-    if user is None:
-        return await callback.answer("⚠️ Ma'lumot topilmadi.", show_alert=True)
+    
+    # 1. USER & CIRCUIT BREAKER VALIDATION
+    if not user:
+        return await callback.answer(
+            "⚠️ Ma'lumot topilmadi. Qayta /start bosing.", 
+            show_alert=True
+        )
 
+    # 2. DATA PARSING (Middleware keshidan kelgan dict)[cite: 1, 6]
+    user_id = user.get("user_id")
+    current_points = user.get("points", 0)
+    current_refs = user.get("referral_count", 0)
+
+    # Bot ma'lumotlarini keshdan olish (Performance optimizatsiyasi)
     bot_info = await callback.bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start={user.user_id}"
+    ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
 
-    # Statistikani olish (user obyekti middleware orqali kelyapti)
-    current_points = getattr(user, 'points', 0)
-    current_refs = getattr(user, 'referral_count', 0)
-
+    # 3. PREMIUM UI DESIGN
     text = (
         "<b>🔗 DO'STLARINGIZNI TAKLIF QILING</b>\n"
-        "━━━━━━━━━━━━━━\n"
-        f"👤 Taklif qilgan do'stlaringiz: <b>{current_refs} ta</b>\n"
-        f"💰 Sizning ballaringiz: <b>{current_points} ball</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Takliflar: <b>{current_refs} ta</b>\n"
+        f"💰 Balansingiz: <b>{current_points} ball</b>\n\n"
         "🎁 <b>Bonus tizimi:</b>\n"
-        "🔥 Har bir do‘st = <b>10 ball</b>\n"
-        "💎 100 ball to'plab 1 oy VIP oling!\n\n"
-        f"📎 Sizning havolangiz:\n<code>{ref_link}</code>\n\n"
-        "📌 <i>Nusxalash uchun havola ustiga bosing</i>"
+        "🔥 Har bir faol do‘st uchun = <b>10 ball</b>\n"
+        "💎 100 ball to'plab 30 kunlik VIP oling!\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"📎 <b>Sizning shaxsiy havolangiz:</b>\n"
+        f"<code>{ref_link}</code>\n\n"
+        "📌 <i>Nusxalash uchun havola ustiga bir marta bosing.</i>"
     )
 
+    # 4. KEYBOARD DESIGN (Interactive UX)
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
             types.InlineKeyboardButton(
-                text="🚀 Do'stlarga ulashish",
+                text="🚀 Do'stlarga yuborish",
                 switch_inline_query=f"\nAnime ko‘rish uchun eng zo‘r bot! Hoziroq qo'shiling: {ref_link}"
             )
         ],
         [
-            types.InlineKeyboardButton(text="📊 Takliflarim ro'yxati", callback_data="check_referrals")
-        ],
-        [
-            types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="back_to_cabinet")
-        ],
-        [
-            types.InlineKeyboardButton(text="💎 VIP sotib olish", callback_data="buy_vip_menu")
+            types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="cabinet"),
+            types.InlineKeyboardButton(text="💎 VIP menyu", callback_data="buy_vip_menu")
         ]
     ])
 
+    # 5. SAFE & FAST RESPONSE
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
-        if "message is not modified" not in str(e).lower():
-            if "message can't be edited" in str(e).lower():
-                await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
-            else:
-                raise
+        err_msg = str(e).lower()
+        if "message is not modified" in err_msg:
+            await callback.answer()
+        elif "message can't be edited" in err_msg:
+            # Agar xabarni edit qilib bo'lmasa, yangisini yuborib eskisini o'chiramiz
+            await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+            await callback.message.delete()
+        else:
+            raise e
 
     await callback.answer()
 
@@ -107,7 +124,7 @@ async def check_referrals_callback(callback: types.CallbackQuery, user: DBUser, 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=exchange_text, callback_data="exchange_points")], # Avvalgi buy_vip_points handleriga yo'naltiramiz
         [types.InlineKeyboardButton(text="🔗 Taklif havolasi", callback_data="get_ref_link")],
-        [types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="back_to_cabinet")]
+        [types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="cabinet")]
         
     ])
 
@@ -121,70 +138,93 @@ async def check_referrals_callback(callback: types.CallbackQuery, user: DBUser, 
 
 
 
-@router.callback_query(F.data == "back_to_cabinet")
-async def back_to_cabinet(callback: types.CallbackQuery, user: DBUser):
-    # Funksiya ichida import qilish circular import'dan qutqaradi
-    from handlers.user import personal_cabinet 
-    await personal_cabinet(callback, user)
-    await callback.answer()
+
+
+from datetime import datetime, timezone, timedelta
+from aiogram import types, F
+from sqlalchemy.ext.asyncio import AsyncSession
 
 @router.callback_query(F.data == "exchange_points")
-async def exchange_points(callback: types.CallbackQuery, user: DBUser, session: AsyncSession):
-    # 0. Session xavfsizligi
-    if session is None:
-        return await callback.answer("⚠️ Baza bilan aloqa yo'q.", show_alert=True)
-
-    now = datetime.now(timezone.utc)
-
-    # 1. Ballarni tekshirish
-    if user.points < 100:
-        needed = 100 - user.points
-        text = (
-            "⚠️ <b>BALL YETARLI EMAS</b>\n"
-            "━━━━━━━━━━━━━━\n\n"
-            f"Sizda: <b>{user.points} ball</b>\n"
-            f"Kerak: <b>{needed} ball</b>\n\n"
-            "💡 Do‘stlarni taklif qilib ball yig‘ing yoki VIP sotib oling!"
+async def exchange_points(callback: types.CallbackQuery, user: dict, session: AsyncSession, state: FSMContext):
+    """
+    Ballarni VIP muddatiga almashtirish: Tranzaksiya xavfsizligi va keshni yangilash bilan.[cite: 1]
+    """
+    # 1. CIRCUIT BREAKER & SESSION CHECK
+    if isinstance(session._session, type(None)) or not user:
+        return await callback.answer(
+            "⚠️ Tizim vaqtincha band. Keyinroq urinib ko'ring.", 
+            show_alert=True
         )
 
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="📊 Takliflarim ro'yxati", callback_data="check_referrals")],
-            [types.InlineKeyboardButton(text="💳 VIP sotib olish", callback_data="buy_vip_start")],
-            [types.InlineKeyboardButton(text="👤 Kabinet", callback_data="back_to_cabinet")]
-        ])
+    user_id = user.get("user_id")
+    current_points = user.get("points", 0)
 
+    # 2. BALLARNI TEKSHIRISH (UX Check)
+    if current_points < 100:
+        needed = 100 - current_points
+        text = (
+            "⚠️ <b>BALLARINGIZ YETARLI EMAS</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Sizning balansingiz: <b>{current_points} ball</b>\n"
+            f"VIP uchun yana <b>{needed} ball</b> kerak. ⚡️\n\n"
+            "💡 Do‘stlarni taklif qilish orqali ballaringizni ko'paytirishingiz mumkin!"
+        )
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🚀 Ball yig'ish", callback_data="get_ref_link")],
+            [types.InlineKeyboardButton(text="👤 Kabinetga qaytish", callback_data="cabinet")]
+        ])
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         return await callback.answer()
 
     try:
-        # 2. VIP vaqtini hisoblash (Stacking logic)
-        # Ma'lumotlar bazasidagi vaqtni UTC aware qilish (xatolikni oldini olish uchun)
-        expire_date = user.vip_expire_date
+        # 3. TRANZAKSIYA BOSHLASH (DB Userni qayta yuklash)
+        # Keshdagi ma'lumot emas, bazadagi real foydalanuvchini olish shart!
+        from database.models import DBUser
+        db_user = await session.get(DBUser, user_id)
+        
+        if not db_user:
+            return await callback.answer("❌ Foydalanuvchi topilmadi.", show_alert=True)
+
+        now = datetime.now(timezone.utc)
+        
+        # 4. VIP STACKING LOGIC
+        expire_date = db_user.vip_expire_date
         if expire_date and expire_date.tzinfo is None:
             expire_date = expire_date.replace(tzinfo=timezone.utc)
 
+        # Agar hozirgi VIP muddati tugamagan bo'lsa, unga 30 kun qo'shamiz
         base = expire_date if expire_date and expire_date > now else now
-        user.vip_expire_date = base + timedelta(days=30)
+        db_user.vip_expire_date = base + timedelta(days=30)
+        db_user.points -= 100
+        db_user.status = "vip"
 
-        # 3. Ballarni yechish va statusni yangilash
-        user.points -= 100
-        user.status = "vip"
-
-        # 4. Saqlash
+        # 5. DB COMMIT & CACHE INVALIDATION[cite: 3]
         await session.commit()
+        
+        # MUHIM: Keshni o'chiramiz (Keyingi safar kabinetga kirganda kesh yangilanadi)
+        cache_key = f"user_cache:{user_id}"
+        if hasattr(callback.bot, 'valkey'): # Agar valkey boti ichida bo'lsa
+            await callback.bot.valkey.delete(cache_key)
 
         await callback.answer(
-            "🎉 VIP faollashtirildi! Muddat 30 kunga uzaytirildi 👑",
+            "🎉 MUBORAK BO'LSIN!\nVIP status 30 kunga faollashtirildi! 👑",
             show_alert=True
         )
 
-        # 5. Kabinetni yangilab ko'rsatish
+        # 6. KABINETNI QAYTA YUKLASH (Middleware yangi ma'lumotni keshga yozadi)
         from handlers.user import personal_cabinet
-        await personal_cabinet(callback, user, session)
+        # Yangilangan db_user'ni dict formatida uzatish (Middleware mantiqiga mos)
+        updated_user = {
+            "user_id": db_user.user_id,
+            "points": db_user.points,
+            "status": db_user.status,
+            "vip_expire_date": db_user.vip_expire_date.timestamp(),
+            "referral_count": db_user.referral_count
+        }
+        await personal_cabinet(callback, updated_user, state)
 
     except Exception as e:
         await session.rollback()
-        # logger obyektini import qilganingizga ishonch hosil qiling
-        print(f"Xatolik yuz berdi: {e}") 
-        await callback.answer("❌ Amaliyot bajarilmadi. Keyinroq urinib ko'ring.", show_alert=True)
+        # logger.error(f"Exchange error: {e}")
+        await callback.answer("❌ Xatolik: Tranzaksiya bajarilmadi.", show_alert=True)
 
