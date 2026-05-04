@@ -611,3 +611,22 @@ class OutboxEvent(Base):
         DateTime(timezone=True),
         index=True
     )
+
+
+
+# ================= OUTBOX CONFIG =================
+
+# Keshni yangilashi yoki hodisalarni kuzatishi kerak bo'lgan modellar ro'yxati[cite: 16]
+MODELS_TO_WATCH = [
+    DBUser,
+    Anime,
+    Episode,
+    Genre,
+    Favorite,
+    Comment,
+    Ticket,
+    Channel,
+    FanGroup,
+    Advertisement,
+    AdminSettings
+]
