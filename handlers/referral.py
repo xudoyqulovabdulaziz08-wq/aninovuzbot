@@ -1,4 +1,5 @@
 
+import html
 import pytz
 import logging
 import asyncio
@@ -13,6 +14,7 @@ from database.models import Channel, DBUser
 from handlers import user
 from keyboards.reply import get_main_menu
 from config import config
+from typing import Union
 from handlers.user import personal_cabinet
 from middlewares.db_middleware import DbSessionMiddleware
 from main import get_now
@@ -98,51 +100,78 @@ async def get_ref_link_callback(callback: types.CallbackQuery, user: dict, state
 
     await callback.answer()
 
+
+
 @router.callback_query(F.data == "check_referrals")
-async def check_referrals_callback(callback: types.CallbackQuery, user: DBUser, session: AsyncSession):
+async def check_referrals_callback(callback: types.CallbackQuery, user: Union[dict, DBUser], session: AsyncSession):
+    """
+    Referral tizimi: Ma'lumotlarni tekshirish va keshni aqlli yangilash[cite: 11, 15, 18].
+    """
+    # 1. XAVFSIZLIK: Session mavjudligini tekshirish
     if session is None:
-        return await callback.answer("⚠️ Baza bilan aloqa yo'q.", show_alert=True)
-
-    # Eng aniq sonni olish uchun count query (Siz yozganingizdek)
-    user_id = user.get("user_id") if isinstance(user, dict) else getattr(user, "user_id", None)
-    stmt = select(func.count(DBUser.user_id)).where(DBUser.referred_by == user_id)
-    real_ref_count = (await session.execute(stmt)).scalar() or 0
-
-    # Agar keshdagi son bazadagidan farq qilsa, keshni yangilash mantiqi
-    if isinstance(user, dict) and user.get("referral_count") != real_ref_count:
-        # L1 va L2 keshni tozalash orqali keyingi safar yangi ma'lumot yuklanishini ta'minlash
-        from services.orchestrator import state
-        async with state.db_lock:
-            state.l1_cache.pop(user_id, None)
-        await valkey.delete("db_users", user_id)
-
-    text = (
-        "<b>📊 SIZNING TAKLIFLARINGIZ</b>\n"
-        "━━━━━━━━━━━━━━\n\n"
-        f"👥 Umumiy takliflar: <b>{real_ref_count} ta</b>\n"
-        f"💰 Mavjud ballar: <b>{user.points} ball</b>\n\n"
-        "💎 <b>Bonus:</b> 100 ball to'plab 30 kunlik VIP statusini bepul faollashtiring!\n\n"
-        "🚀 <i>Ko'proq do'stlarni taklif qiling va imkoniyatlarni kengaytiring!</i>"
-    )
-
-  
-    
-
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="💎 VIP ga almashtirish (100 ball)", callback_data="exchange_points")], # Avvalgi buy_vip_points handleriga yo'naltiramiz
-        [types.InlineKeyboardButton(text="🔗 Taklif havolasi", callback_data="get_ref_link")],
-        [types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="cabinet")]
-        
-    ])
+        return await callback.answer("⚠️ Baza ulanishida uzilish (Session=None).", show_alert=True)
 
     try:
+        # Foydalanuvchi ID sini aniqlash
+        user_id = user.get("user_id") if isinstance(user, dict) else getattr(user, "user_id", None)
+        user_points = user.get("points", 0) if isinstance(user, dict) else getattr(user, "points", 0)
+
+        # 2. BAZADAN ANIQLIK: Haqiqiy referral sonini hisoblash[cite: 16]
+        # 'referred_by' ustuniga qarab (Sizning DB strukturangizga moslangan)
+        stmt = select(func.count(DBUser.user_id)).where(DBUser.referred_by == user_id)
+        result = await session.execute(stmt)
+        real_ref_count = result.scalar() or 0
+
+        # 3. KESHNI TOZALASH (Agar ma'lumot eskirgan bo'lsa)
+        old_count = user.get("referral_count", 0) if isinstance(user, dict) else getattr(user, "referral_count", 0)
+        
+        if old_count != real_ref_count:
+            from services.orchestrator import state
+            # L1 keshdan o'chirish[cite: 13]
+            async with state.db_lock:
+                state.l1_cache.pop(user_id, None)
+            # L2 (Valkey) keshdan o'chirish[cite: 11]
+            await valkey.delete("db_users", user_id)
+
+        # 4. UX/UI: Chiroyli formatlash
+        header = (
+            "<b>📊 REFERRAL STATISTIKASI</b>\n"
+            "<i>Do'stlarni taklif qiling va ballar to'plang!</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+        
+        # Progress bar (VIP ga qolgan ballar uchun)
+        needed = 100
+        progress_val = min(user_points, needed)
+        filled = int(progress_val / 10)
+        bar = "🟦" * filled + "⬜" * (10 - filled)
+        
+        body = (
+            f"👤 Foydalanuvchi: <b>{html.escape(callback.from_user.full_name)}</b>\n"
+            f"👥 Takliflar: <b>{real_ref_count} ta</b>\n"
+            f"💰 Ballar: <b>{user_points} ball</b>\n\n"
+            f"🏆 <b>VIP Progress:</b>\n"
+            f"{bar} <b>{user_points}/{needed}</b>\n"
+            f"└ <i>100 ball to'plab 30 kunlik VIP oling!</i>\n"
+        )
+
+        footer = "\n🚀 <i>Har bir taklif uchun ballar avtomat qo'shiladi.</i>"
+        text = header + body + footer
+
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="💎 VIP ga almashtirish (100 ball)", callback_data="exchange_points")],
+            [types.InlineKeyboardButton(text="🔗 Taklif havolasi", callback_data="get_ref_link")],
+            [types.InlineKeyboardButton(text="👤 Shaxsiy kabinet", callback_data="cabinet")]
+        ])
+
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e).lower():
-            raise
 
-    await callback.answer()
-
+    except Exception as e:
+        print(f"Referral Error: {e}")
+        await callback.answer("❌ Ma'lumotlarni hisoblashda xatolik.", show_alert=True)
+    
+    finally:
+        await callback.answer()
 
 
 
