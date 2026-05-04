@@ -19,6 +19,8 @@ from config import config
 logger = logging.getLogger("CacheManager")
 
 
+
+
 # ================= METRICS =================
 class CacheMetrics:
     def __init__(self):
@@ -380,3 +382,11 @@ class CacheManager:
             await self.redis.close()
 
         logger.info("🛑 CACHE SHUTDOWN CLEAN")
+
+
+
+
+cache_manager = CacheManager(config.VALKEY_URL)
+
+
+valkey = cache_manager
