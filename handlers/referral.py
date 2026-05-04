@@ -206,7 +206,7 @@ async def exchange_points(
     callback: types.CallbackQuery, 
     user: dict, 
     session: Any, 
-    state_fsm: FSMContext, 
+    state: FSMContext, 
     session_pool: async_sessionmaker # Endi bu xato bermaydi!
 ):
     """
@@ -222,16 +222,16 @@ async def exchange_points(
         if actual_session is None:
             # Agar keshdan kelgan bo'lsa, pool'dan yangi sessiya ochamiz
             async with session_pool() as new_session:
-                return await _execute_exchange_logic(callback, user_id, new_session, state_fsm)
+                return await _execute_exchange_logic(callback, user_id, new_session, state)
         else:
             # Agar keshda bo'lmasa, mavjud sessiyadan foydalanamiz
-            return await _execute_exchange_logic(callback, user_id, actual_session, state_fsm)
+            return await _execute_exchange_logic(callback, user_id, actual_session, state)
 
     except Exception as e:
         logger.error(f"🔥 Exchange Critical Error for {user_id}: {e}")
         await callback.answer("❌ Tizimda texnik xatolik yuz berdi.", show_alert=True)
 
-async def _execute_exchange_logic(callback, user_id, session, state_fsm):
+async def _execute_exchange_logic(callback, user_id, session, state):
     """Asosiy almashtirish mantiqi va DB tranzaksiyasi."""
     try:
         # 2. REAL-TIME VALIDATION

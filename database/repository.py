@@ -1,122 +1,99 @@
+import time
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.dialects.postgresql import insert
+from collections import OrderedDict
 
-from datetime import datetime, timedelta, timezone
+from database.cache import valkey
+from database.repository import UserRepository
 
-from database.models import DBUser
-from aiogram.types import User as TgUser
-
-logger = logging.getLogger("UserRepository")
+logger = logging.getLogger("Orchestrator")
 
 
-class UserRepository:
+class Orchestrator:
 
-    # ================= GET OR CREATE =================
-    @staticmethod
-    async def get_or_create(session: AsyncSession, tg_user: TgUser) -> DBUser:
-        """
-        🔥 Optimized strategy:
-        - SELECT first (fast)
-        - INSERT only if needed
-        - Object-level update (event-safe)
-        """
+    """
+    🧠 FINAL CACHE BRAIN (L1 + L2 + DB)
 
-        # ---------- FAST SELECT ----------
-        result = await session.execute(
-            select(DBUser).where(DBUser.user_id == tg_user.id)
-        )
-        user = result.scalar_one_or_none()
+    FLOW:
+    L1 (RAM) → L2 (Redis) → DB
+    """
 
-        if user:
-            # ---------- SAFE UPDATE (ORM LEVEL) ----------
-            if user.username != tg_user.username:
-                try:
-                    user.username = tg_user.username
-                    session.add(user)  # 🔥 event trigger uchun
-                except Exception as e:
-                    logger.warning(f"Username update failed: {e}")
+    def __init__(self):
+        # ================= L1 CACHE (HOT USERS) =================
+        self.l1_cache: OrderedDict[int, Dict[str, Any]] = OrderedDict()
+        self.l1_max_size = 5000
 
-            return user
+        # ================= STATS =================
+        self.stats = {
+            "l1_hits": 0,
+            "l2_hits": 0,
+            "db_hits": 0,
+        }
 
-        # ---------- INSERT ----------
+    # ================= MAIN FETCH =================
+    async def get_user(self, session_pool, tg_user):
+
+        user_id = tg_user.id
+
+        # ================= L1 CACHE =================
+        cached = self.l1_cache.get(user_id)
+        if cached:
+            self.l1_cache.move_to_end(user_id)
+
+            self.stats["l1_hits"] += 1
+            return cached
+
+        # ================= L2 CACHE =================
+        if valkey.is_alive:
+            try:
+                cached = await valkey.get("users", user_id)
+
+                if cached:
+                    self._set_l1(user_id, cached)
+
+                    self.stats["l2_hits"] += 1
+                    return cached
+
+            except Exception as e:
+                logger.debug(f"L2 error: {e}")
+
+        # ================= DB FALLBACK =================
+        self.stats["db_hits"] += 1
+
+        async with session_pool() as session:
+            user = await UserRepository.get_or_create(session, tg_user)
+            data = self._to_dict(user)
+
+            await self._sync_cache(user_id, data)
+
+            return data
+
+    # ================= L1 SET =================
+    def _set_l1(self, key: int, value: dict):
+        self.l1_cache[key] = value
+        self.l1_cache.move_to_end(key)
+
+        if len(self.l1_cache) > self.l1_max_size:
+            self.l1_cache.popitem(last=False)
+
+    # ================= CACHE SYNC =================
+    async def _sync_cache(self, user_id: int, data: dict):
         try:
-            stmt = insert(DBUser).values(
-                user_id=tg_user.id,
-                username=tg_user.username,
-                status="user",
-                points=0
-            ).returning(DBUser)
+            self._set_l1(user_id, data)
 
-            result = await session.execute(stmt)
-            return result.scalar_one()
+            if valkey.is_alive:
+                await valkey.set("users", user_id, data, ttl=180)
 
         except Exception as e:
-            # ---------- RACE CONDITION ----------
-            logger.warning(f"Insert race fallback: {e}")
+            logger.debug(f"cache sync error: {e}")
 
-            result = await session.execute(
-                select(DBUser).where(DBUser.user_id == tg_user.id)
-            )
-            return result.scalar_one()
-
-
-    # ================= GET =================
-    @staticmethod
-    async def get_by_id(session: AsyncSession, user_id: int) -> Optional[DBUser]:
-        result = await session.execute(
-            select(DBUser).where(DBUser.user_id == user_id)
-        )
-        return result.scalar_one_or_none()
-
-
-    # ================= UPDATE POINTS =================
-    @staticmethod
-    async def update_points(session: AsyncSession, user_id: int, points: int):
-        """
-        🔥 Hybrid strategy:
-        - Agar session ichida user bor bo‘lsa → ORM update
-        - Aks holda → SQL update
-        """
-
-        # ORM cache check
-        user = await session.get(DBUser, user_id)
-
-        if user:
-            user.points += points
-            session.add(user)  # 🔥 event trigger
-            return
-
-        # fallback (fast SQL)
-        await session.execute(
-            update(DBUser)
-            .where(DBUser.user_id == user_id)
-            .values(points=DBUser.points + points)
-        )
-
-
-    # ================= VIP =================
-    @staticmethod
-    async def set_vip(session: AsyncSession, user_id: int, duration_days: int):
-
-        expire_date = datetime.now(timezone.utc) + timedelta(days=duration_days)
-
-        user = await session.get(DBUser, user_id)
-
-        if user:
-            user.status = "vip"
-            user.vip_expire_date = expire_date
-            session.add(user)
-            return
-
-        await session.execute(
-            update(DBUser)
-            .where(DBUser.user_id == user_id)
-            .values(
-                status="vip",
-                vip_expire_date=expire_date
-            )
-        )
+    # ================= FORMAT =================
+    def _to_dict(self, user):
+        return {
+            "user_id": user.user_id,
+            "username": user.username,
+            "status": user.status,
+            "points": user.points,
+            "referral_count": user.referral_count,
+        }

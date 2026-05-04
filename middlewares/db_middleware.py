@@ -1,7 +1,9 @@
 import asyncio
 import time
 import logging
-from typing import Any, Dict
+import copy
+from collections import OrderedDict
+from typing import Any, Dict, Optional
 
 from aiogram import BaseMiddleware
 from aiogram.types import User
@@ -14,18 +16,54 @@ from services.orchestrator import state
 logger = logging.getLogger("DbMiddleware")
 
 
-# ================= SAFE SESSION WRAPPER =================
+# ======================================================
+# 🔥 L1 CACHE (LRU SAFE IMPLEMENTATION)
+# ======================================================
+class L1Cache:
+    def __init__(self, max_size: int = 5000):
+        self.max_size = max_size
+        self._cache = OrderedDict()
+
+    def get(self, key):
+        if key not in self._cache:
+            return None
+        self._cache.move_to_end(key)
+        return self._cache[key]
+
+    def set(self, key, value):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+
+        self._cache[key] = value
+
+        if len(self._cache) > self.max_size:
+            removed = self._cache.popitem(last=False)
+            logger.debug(f"🧹 L1 cache evicted: user_id={removed[0]}")
+
+    def size(self):
+        return len(self._cache)
+
+
+# global L1 cache
+state.l1_cache = L1Cache(max_size=5000)
+
+
+# ======================================================
+# 🔥 SAFE SESSION WRAPPER
+# ======================================================
 class SafeSession:
     def __init__(self, session):
         self._session = session
 
     def __getattr__(self, item):
         if self._session is None:
-            raise RuntimeError("❌ Database hozir mavjud emas (session=None)")
+            raise RuntimeError("❌ DB session is None (cache-only mode)")
         return getattr(self._session, item)
 
 
-# ================= MIDDLEWARE =================
+# ======================================================
+# 🔥 MIDDLEWARE
+# ======================================================
 class DbSessionMiddleware(BaseMiddleware):
 
     def __init__(self, session_pool: async_sessionmaker):
@@ -33,78 +71,122 @@ class DbSessionMiddleware(BaseMiddleware):
         super().__init__()
 
     async def __call__(self, handler, event, data):
+
         data["session_pool"] = self.session_pool
-        user_obj: User = data.get("event_from_user")
+        user_obj: Optional[User] = data.get("event_from_user")
+
         if not user_obj:
             return await handler(event, data)
 
         user_id = user_obj.id
 
-        # ================= L1 CACHE =================
-        if user_id in state.l1_cache:
-            cached = state.l1_cache[user_id]
+        # ======================================================
+        # 🔥 L1 CACHE (FASTEST)
+        # ======================================================
+        cached_l1 = state.l1_cache.get(user_id)
 
-            if cached.get("username") == user_obj.username:
-                state.l1_cache.move_to_end(user_id)
+        if cached_l1:
+            try:
+                # 🔥 LRU refresh (IMPORTANT)
+                state.l1_cache.set(user_id, cached_l1)
 
-                data["user"] = cached
+                cached_copy = copy.deepcopy(cached_l1)
+
+                # username sync check
+                if (cached_copy.get("username") or "") != (user_obj.username or ""):
+                    logger.info(f"🔄 Username updated (L1): {user_id}")
+                    cached_copy["username"] = user_obj.username
+
+                data["user"] = cached_copy
                 data["session"] = SafeSession(None)
+
+                logger.debug(f"⚡ L1 hit user_id={user_id}")
 
                 return await handler(event, data)
 
-        # ================= L2 CACHE =================
+            except Exception as e:
+                logger.exception(f"❌ L1 CACHE ERROR user_id={user_id}: {e}")
+
+        # ======================================================
+        # 🔥 L2 CACHE (VALKEY/REDIS)
+        # ======================================================
         if valkey.is_alive:
             try:
-                cached = await valkey.get("db_users", user_id)
+                cached_l2 = await valkey.get("db_users", user_id)
 
-                if cached:
-                    # username change detect
-                    if cached.get("username") != user_obj.username:
-                        cached["username"] = user_obj.username
-                        await self._enqueue_cache_update(cached)
+                if cached_l2:
+                    cached_l2 = dict(cached_l2)
 
-                    data["user"] = cached
+                    # username sync
+                    if (cached_l2.get("username") or "") != (user_obj.username or ""):
+                        logger.info(f"🔄 Username updated (L2): {user_id}")
+
+                        cached_l2["username"] = user_obj.username
+                        await self._enqueue_cache_update(cached_l2)
+
+                    # promote to L1
+                    state.l1_cache.set(user_id, copy.deepcopy(cached_l2))
+
+                    data["user"] = cached_l2
                     data["session"] = SafeSession(None)
 
-                    # L1 update
-                    state.l1_cache[user_id] = cached
+                    logger.debug(f"⚡ L2 hit user_id={user_id}")
 
                     return await handler(event, data)
 
             except Exception as e:
-                logger.debug(f"L2 skip: {e}")
+                logger.exception(f"❌ L2 CACHE ERROR user_id={user_id}: {e}")
 
-        # ================= CIRCUIT BREAKER =================
+        # ======================================================
+        # 🔥 CIRCUIT BREAKER CHECK
+        # ======================================================
         async with state.db_lock:
             if not state.db_status:
                 if time.time() - state.db_last_retry < state.cb_recovery_time:
+
+                    logger.warning(f"🚫 DB blocked (circuit open) user_id={user_id}")
+
                     data["user"] = self._emergency_user(user_obj)
                     data["session"] = SafeSession(None)
+
                     return await handler(event, data)
 
-        # ================= DB =================
+        # ======================================================
+        # 🔥 DATABASE ACCESS (SLOW PATH)
+        # ======================================================
         try:
             async with self.session_pool() as session:
 
                 try:
+                    start = time.time()
+
                     async with asyncio.timeout(2.5):
                         db_user = await UserRepository.get_or_create(session, user_obj)
 
+                    duration = round(time.time() - start, 4)
+
                     user_data = self._model_to_dict(db_user)
 
-                    # cache update
-                    await self._enqueue_cache_update(user_data)
+                    # deep copy for safety
+                    safe_data = copy.deepcopy(user_data)
+
+                    # cache updates (async safe)
+                    asyncio.create_task(self._enqueue_cache_update(safe_data))
 
                     # L1 update
-                    state.l1_cache[user_id] = user_data
+                    state.l1_cache.set(user_id, safe_data)
 
                     data["user"] = user_data
                     data["session"] = SafeSession(session)
+
+                    logger.info(f"🟢 DB HIT user_id={user_id} time={duration}s")
 
                     return await handler(event, data)
 
                 except Exception as e:
                     await self._handle_db_failure(e)
+
+                    logger.exception(f"❌ DB ERROR user_id={user_id}")
 
                     data["user"] = self._emergency_user(user_obj)
                     data["session"] = SafeSession(None)
@@ -112,25 +194,30 @@ class DbSessionMiddleware(BaseMiddleware):
                     return await handler(event, data)
 
         except Exception as e:
-            logger.error(f"POOL ERROR: {e}")
+            logger.critical(f"💥 DB POOL ERROR user_id={user_id}: {e}")
 
             data["user"] = self._emergency_user(user_obj)
             data["session"] = SafeSession(None)
 
             return await handler(event, data)
 
-    # ================= CACHE QUEUE =================
+    # ======================================================
+    # 🔥 CACHE QUEUE
+    # ======================================================
     async def _enqueue_cache_update(self, user_data: Dict[str, Any]):
         try:
             state.cache_queue.put_nowait(user_data)
         except asyncio.QueueFull:
             try:
-                state.cache_queue.get_nowait()
+                dropped = state.cache_queue.get_nowait()
+                logger.warning(f"⚠️ Cache queue overflow, dropped: {dropped.get('user_id')}")
                 state.cache_queue.put_nowait(user_data)
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"❌ Cache queue fatal error: {e}")
 
-    # ================= MODEL → DICT =================
+    # ======================================================
+    # 🔥 MODEL SERIALIZER
+    # ======================================================
     def _model_to_dict(self, db_user) -> Dict[str, Any]:
         return {
             "user_id": db_user.user_id,
@@ -145,7 +232,9 @@ class DbSessionMiddleware(BaseMiddleware):
             )
         }
 
-    # ================= EMERGENCY USER =================
+    # ======================================================
+    # 🔥 EMERGENCY MODE
+    # ======================================================
     def _emergency_user(self, user_obj: User):
         return {
             "user_id": user_obj.id,
@@ -158,13 +247,17 @@ class DbSessionMiddleware(BaseMiddleware):
             "is_emergency": True
         }
 
-    # ================= CIRCUIT BREAKER =================
+    # ======================================================
+    # 🔥 CIRCUIT BREAKER
+    # ======================================================
     async def _handle_db_failure(self, e):
         async with state.db_lock:
             state.db_fail_count += 1
+
+            logger.warning(f"⚠️ DB fail count: {state.db_fail_count}")
 
             if state.db_fail_count >= state.cb_threshold:
                 state.db_status = False
                 state.db_last_retry = time.time()
 
-                logger.critical(f"🚨 DB DOWN: {e}")
+                logger.critical(f"🚨 CIRCUIT BREAKER OPEN: {e}")
