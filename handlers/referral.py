@@ -106,32 +106,32 @@ async def get_ref_link_callback(callback: types.CallbackQuery, user: dict, state
 
 
 @router.callback_query(F.data == "check_referrals")
-async def check_referrals_callback(callback: types.CallbackQuery, user: dict, session: Any, session_pool: async_sessionmaker):
+async def check_referrals_callback(
+    callback: types.CallbackQuery, 
+    user: dict, 
+    session: Any, 
+    session_pool: async_sessionmaker # Endi middleware orqali aniq keladi
+):
     """
     Referral tekshirish: Kesh va Bazani aqlli sinxronizatsiya qilish.
     """
     user_id = user.get("user_id")
     
-    # 1. LAZY SESSION: Agar middleware sessiya bermagan bo'lsa, yangisini ochamiz[cite: 15, 17]
-    # Bu SafeSession(None) holatida RuntimeError'ni oldini oladi.
+    # 1. LAZY SESSION: SafeSession(None) holatida RuntimeError'ni oldini olish
     actual_session = session._session if hasattr(session, "_session") else session
     
-    # Agar keshdan kelgan bo'lsa, actual_session None bo'ladi
-    session_is_external = actual_session is not None
-    
     try:
-        if not session_is_external:
-            # Yangi sessiya yaratamiz
+        # Sessiya mavjudligiga qarab ishlatish
+        if actual_session is None:
             async with session_pool() as new_session:
                 real_ref_count = await _get_ref_count(new_session, user_id)
         else:
             real_ref_count = await _get_ref_count(actual_session, user_id)
 
-        # 2. KESHNI YANGILASH MANTIQI
+        # 2. KESHNI YANGILASH (Faqat ma'lumot o'zgargan bo'lsa)
         if user.get("referral_count") != real_ref_count:
-            user["referral_count"] = real_ref_count # Local dict update
+            user["referral_count"] = real_ref_count
             
-            # Orchestrator orqali keshni tozalash
             from services.orchestrator import state
             async with state.db_lock:
                 state.l1_cache.pop(user_id, None)
@@ -141,42 +141,53 @@ async def check_referrals_callback(callback: types.CallbackQuery, user: dict, se
         await render_referral_ui(callback, user, real_ref_count)
 
     except Exception as e:
-        logger.error(f"Referral logic error: {e}")
-        await callback.answer("⚠️ Ma'lumotlarni yangilashda xatolik.", show_alert=True)
+        logger.error(f"Referral logic error for {user_id}: {e}")
+        await callback.answer("⚠️ Ma'lumotlarni yuklashda xatolik.", show_alert=True)
 
 async def _get_ref_count(session: AsyncSession, user_id: int) -> int:
-    """Bazadan referral sonini xavfsiz olish[cite: 16]."""
+    """Bazadan referral sonini xavfsiz olish."""
     stmt = select(func.count(DBUser.user_id)).where(DBUser.referred_by == user_id)
     result = await session.execute(stmt)
     return result.scalar() or 0
 
 async def render_referral_ui(callback: types.CallbackQuery, user: dict, ref_count: int):
-    """Chiroyli interfeysni render qilish."""
+    """Chiroyli va tushunarli interfeys."""
     points = user.get("points", 0)
+    
+    # Progress bar mantiqi (100 ballgacha)
+    max_points = 100
     bar_filled = min(points // 10, 10)
     progress_bar = "🟦" * bar_filled + "⬜" * (10 - bar_filled)
+    
+    # Foizni hisoblash
+    percent = min(int((points / max_points) * 100), 100)
     
     text = (
         "<b>📊 REFERRAL STATISTIKASI</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👤 Foydalanuvchi: <b>{html.escape(callback.from_user.full_name)}</b>\n"
-        f"👥 Takliflar: <b>{ref_count} ta</b>\n"
-        f"💰 Ballar: <b>{points} ball</b>\n\n"
-        f"🏆 <b>VIP Progress:</b> ({points}/100)\n"
-        f"{progress_bar}\n\n"
-        "🚀 <i>100 ball to'plab VIP statusiga ega bo'ling!</i>"
+        f"👥 Umumiy takliflar: <b>{ref_count} ta</b>\n"
+        f"💰 To'plangan ballar: <b>{points} ball</b>\n\n"
+        f"🏆 <b>VIP Progress:</b> <code>{percent}%</code>\n"
+        f"{progress_bar}\n"
+        f"└ <i>Yana {max(0, max_points - points)} ball to'plab VIP oling!</i>\n\n"
+        f" 100 ball = 30 kunlik vip💎"
+        "🚀 <i>Do'stlarni taklif qilish orqali imkoniyatlarni kengaytiring!</i>"
     )
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="💎 VIP ga almashtirish", callback_data="exchange_points")],
+        [types.InlineKeyboardButton(text="💎 VIP ga almashtirish (100 ball)", callback_data="exchange_points")],
         [types.InlineKeyboardButton(text="🔗 Taklif havolasi", callback_data="get_ref_link")],
-        [types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="cabinet")]
+        [types.InlineKeyboardButton(text="🔙 Shaxsiy kabinet", callback_data="cabinet")]
     ])
 
     try:
+        # Xabarni faqat o'zgargan bo'lsa yangilash (Telegram API xatosini oldini olish)
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest:
-        pass
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            raise
+    
     await callback.answer()
 
 
@@ -188,79 +199,83 @@ async def render_referral_ui(callback: types.CallbackQuery, user: dict, ref_coun
 
 
 
+logger = logging.getLogger(__name__)
+
 @router.callback_query(F.data == "exchange_points")
-async def exchange_points(callback: types.CallbackQuery, user: dict, session: Any, state_fsm: FSMContext, session_pool: async_sessionmaker):
+async def exchange_points(
+    callback: types.CallbackQuery, 
+    user: dict, 
+    session: Any, 
+    state_fsm: FSMContext, 
+    session_pool: async_sessionmaker # Endi bu xato bermaydi!
+):
     """
-    VIP almashtirish: Lazy session va xavfsiz stacking mantiqi.
+    VIP almashtirish: Ma'lumotlar xavfsizligi va yuqori UX darajasi.
     """
     user_id = user.get("user_id")
     
-    # 1. LAZY SESSION & CIRCUIT BREAKER
-    # Agar middleware sessiya bermagan bo'lsa (keshdan kelgan), yangisini ochamiz.
+    # 1. SESSION MANAGEMENT (Lazy Loading)
+    # Middleware'dan kelgan SafeSession ichidagi haqiqiy sessiyani olamiz
     actual_session = session._session if hasattr(session, "_session") else session
-    
+
     try:
-        # Sessiya boshqaruvini xavfsiz blok ichiga olamiz
         if actual_session is None:
+            # Agar keshdan kelgan bo'lsa, pool'dan yangi sessiya ochamiz
             async with session_pool() as new_session:
-                return await _process_exchange(callback, user_id, new_session, state_fsm)
+                return await _execute_exchange_logic(callback, user_id, new_session, state_fsm)
         else:
-            return await _process_exchange(callback, user_id, actual_session, state_fsm)
+            # Agar keshda bo'lmasa, mavjud sessiyadan foydalanamiz
+            return await _execute_exchange_logic(callback, user_id, actual_session, state_fsm)
 
     except Exception as e:
-        print(f"🚨 Exchange Critical Error: {e}")
-        await callback.answer("❌ Tizimda texnik nosozlik (DB_ERR)", show_alert=True)
+        logger.error(f"🔥 Exchange Critical Error for {user_id}: {e}")
+        await callback.answer("❌ Tizimda texnik xatolik yuz berdi.", show_alert=True)
 
-async def _process_exchange(callback, user_id, session, state_fsm):
-    """Asosiy almashtirish jarayoni - Tranzaksiya xavfsizligi bilan."""
+async def _execute_exchange_logic(callback, user_id, session, state_fsm):
+    """Asosiy almashtirish mantiqi va DB tranzaksiyasi."""
     try:
-        # 2. REAL-TIME DB CHECK (Zararli o'zgarishlardan himoya)
+        # 2. REAL-TIME VALIDATION
         db_user = await session.get(DBUser, user_id)
         if not db_user:
-            return await callback.answer("❌ Foydalanuvchi ma'lumotlari topilmadi.", show_alert=True)
+            return await callback.answer("❌ Ma'lumotlar bazasidan profil topilmadi.", show_alert=True)
 
-        # 3. BALLARNI TEKSHIRISH
-        REQUIRED_POINTS = 100
-        if db_user.points < REQUIRED_POINTS:
-            needed = REQUIRED_POINTS - db_user.points
-            
-            # UX: Progress bar ko'rinishida yetishmayotgan ballarni ko'rsatish
-            filled = int((db_user.points / REQUIRED_POINTS) * 10)
+        # 3. BALLARNI TEKSHIRISH (UX Progress Bar bilan)
+        REQUIRED = 100
+        if db_user.points < REQUIRED:
+            filled = int((db_user.points / REQUIRED) * 10)
             bar = "🟦" * filled + "⬜" * (10 - filled)
             
             text = (
                 "⚠️ <b>BALLARINGIZ YETARLI EMAS</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"Sizda: <b>{db_user.points} ball</b> ✨\n"
-                f"Progress: [{bar}] <b>{db_user.points}%</b>\n\n"
-                f"🚀 VIP uchun yana <b>{needed} ball</b> kerak.\n\n"
+                f"Progress: <code>[{bar}]</code> <b>{db_user.points}%</b>\n\n"
+                f"🚀 VIP uchun yana <b>{REQUIRED - db_user.points} ball</b> kerak.\n\n"
                 "💡 <i>Do'stlarni taklif qilish orqali ball yig'ing!</i>"
             )
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="🔗 Do'stlarni taklif qilish", callback_data="get_ref_link")],
-                [types.InlineKeyboardButton(text="🔙 Kabinetga qaytish", callback_data="cabinet")]
+                [types.InlineKeyboardButton(text="🔙 Kabinet", callback_data="cabinet")]
             ])
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-            return await callback.answer("Ballar yetarli emas ⚠️")
+            return await callback.answer()
 
-        # 4. VIP STACKING LOGIC (Vaqtni to'g'ri hisoblash)
+        # 4. VIP STACKING (Vaqtni to'g'ri qo'shish)
         now = datetime.now(timezone.utc)
         expire_date = db_user.vip_expire_date
         
-        # Datetime obyektini timezone-aware qilish
         if expire_date and expire_date.tzinfo is None:
             expire_date = expire_date.replace(tzinfo=timezone.utc)
 
-        # Agar hozirgi VIP muddati o'tmagan bo'lsa, uning ustiga qo'shamiz
         base_time = expire_date if expire_date and expire_date > now else now
         db_user.vip_expire_date = base_time + timedelta(days=30)
-        db_user.points -= REQUIRED_POINTS
+        db_user.points -= REQUIRED
         db_user.status = "vip"
 
-        # 5. DB COMMIT (Ma'lumotlarni saqlash)
+        # 5. ATOMIC COMMIT
         await session.commit()
 
-        # 6. CACHE INVALIDATION (L1 va L2 keshni tozalash)
+        # 6. CACHE PURGE (L1 va L2 keshni yangilash)
         from services.orchestrator import state
         async with state.db_lock:
             state.l1_cache.pop(user_id, None)
@@ -269,8 +284,8 @@ async def _process_exchange(callback, user_id, session, state_fsm):
         # 7. SUCCESS UX
         await callback.answer("🎉 TABRIKLAYMIZ!\nVIP status 30 kunga faollashtirildi! 👑", show_alert=True)
 
-        # 8. YANGILANGAN KABINETNI KO'RSATISH
-        updated_dict = {
+        # 8. REFRESH UI (Kabinetga qaytish)
+        updated_data = {
             "user_id": db_user.user_id,
             "username": db_user.username,
             "status": db_user.status,
@@ -281,8 +296,8 @@ async def _process_exchange(callback, user_id, session, state_fsm):
         }
         
         from handlers.user import personal_cabinet
-        await personal_cabinet(callback, updated_dict, state_fsm)
+        await personal_cabinet(callback, updated_data, state_fsm)
 
     except Exception as e:
-        await session.rollback() # Xatolik bo'lsa tranzaksiyani bekor qilish
+        await session.rollback()
         raise e

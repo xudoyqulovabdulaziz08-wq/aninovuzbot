@@ -33,7 +33,7 @@ class DbSessionMiddleware(BaseMiddleware):
         super().__init__()
 
     async def __call__(self, handler, event, data):
-
+        data["session_pool"] = self.session_pool
         user_obj: User = data.get("event_from_user")
         if not user_obj:
             return await handler(event, data)
