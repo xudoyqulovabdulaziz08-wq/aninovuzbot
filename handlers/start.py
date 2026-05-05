@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Ichki modullar (Proyektingiz tuzilmasiga qarab)
 from database.cache import valkey
 from database.models import Channel, DBUser
+from database.repository import UserRepository
 from keyboards.reply import get_main_menu
 from config import config
 
@@ -32,170 +33,181 @@ CH_NS, CH_ID = "custom", "active_channels"
 _channel_lock = asyncio.Lock()
 
 # =========================
-# UTILS
+# UTILS & CACHE
 # =========================
 
-def normalize_channel_id(ch_id: int) -> int:
+def normalize_channel_id(ch_id: Union[int, str]) -> int:
     try:
-        ch_id = int(ch_id)
-        return ch_id if str(ch_id).startswith("-100") else int(f"-100{abs(ch_id)}")
-    except:
-        return ch_id
+        val = str(ch_id)
+        return int(val) if val.startswith("-100") else int(f"-100{abs(int(val))}")
+    except (ValueError, TypeError):
+        return 0
 
-
-# =========================
-# FAST CHANNEL CACHE
-# =========================
-
-async def get_active_channels(session: AsyncSession) -> list:
-    if session is None:
-        logger.warning("⚠️ Session yo'q, keshni tekshiraman.") #
-
-    # 1. Keshdan tezkor olish
+async def get_active_channels(session: AsyncSession) -> List[Dict[str, Any]]:
+    """Kanal ro'yxatini keshdan/bazadan xavfsiz olish"""
     try:
         cached = await valkey.get(CH_NS, CH_ID)
         if cached: return cached
     except Exception as e:
-        logger.error(f"Cache error: {e}")
+        logger.error(f"Cache Read Error: {e}")
 
-    # 2. Baza bilan ishlash (SafeSession orqali)
     async with _channel_lock:
-        try:
-            # Ikkinchi marta keshni tekshirish (anti-stampede)
-            cached = await valkey.get(CH_NS, CH_ID)
-            if cached: return cached
+        # Anti-stampede check
+        cached = await valkey.get(CH_NS, CH_ID)
+        if cached: return cached
 
-            if session:
-                result = await session.execute(
-                    select(Channel.channel_id, Channel.url, Channel.title)
-                    .where(Channel.is_active.is_(True))
-                )
-                channels = [
-                    {
-                        "id": normalize_channel_id(ch.channel_id),
-                        "url": ch.url,
-                        "title": ch.title
-                    }
-                    for ch in result.all()
-                ]
-                # 15 daqiqaga keshga yozish
-                await valkey.set(CH_NS, CH_ID, channels, ttl=900)
-                return channels
+        # SafeSession check[cite: 12]
+        if session is None or isinstance(session._session, type(None)):
+            return []
+
+        try:
+            result = await session.execute(
+                select(Channel.channel_id, Channel.url, Channel.title)
+                .where(Channel.is_active.is_(True))
+            )
+            channels = [
+                {"id": normalize_channel_id(ch.channel_id), "url": ch.url, "title": ch.title}
+                for ch in result.all()
+            ]
+            await valkey.set(CH_NS, CH_ID, channels, ttl=900)
+            return channels
         except Exception as e:
             logger.error(f"DB Fetch error: {e}")
             return []
 
 
-# =========================
-# FAST SUB CHECK
-# =========================
-
 
 # =========================
 # KEYBOARD (FAST BUILD)
 # =========================
-# DIQQAT: Bu oddiy def, await bilan chaqirilmaydi!
+
 def build_sub_keyboard(missing: list):
+    """
+    UX jihatdan optimallashtirilgan va bosishga qulay keyboard.
+    """
     builder = InlineKeyboardBuilder()
     
-    # Har bir kanal uchun alohida qator (UX: bosishga qulay)
-    for ch in missing:
+    # Kanallar ro'yxati - har biri alohida qator va tartib raqami bilan
+    for index, ch in enumerate(missing, 1):
         builder.row(types.InlineKeyboardButton(
-            text=f"📢 {ch['title']}", 
-            # go_to_channel handleri orqali o'tish
+            text=f"🔹 {index}-kanal: {ch['title']}", 
             callback_data=f"go_to_channel:{ch['id']}")
         )
     
-    # Tekshirish tugmasi har doim oxirida va ajralib turadi
+    # Tasdiqlash tugmasi - asosiy fokus markazi
     builder.row(types.InlineKeyboardButton(
-        text="🔄 Obunani tekshirish", 
+        text="✅ Obunani tasdiqlash", 
         callback_data="check_sub:all")
     )
+    
+    
+    
     return builder.as_markup()
 
+
+
+
+
 async def check_subscription(bot: Bot, user_id: int, session: AsyncSession):
-    # Kanallarni keshdan yoki bazadan olish
+    """
+    High-Load va Rate-Limit himoyasiga ega tekshiruv.
+    """
+    # 1. Creator uchun VIP yo'lak (Bazada muammo bo'lsa ham ishlaydi)
+    if user_id == config.CREATOR_ID:
+        return True, []
+
+    # 2. Kanallarni kesh/bazadan olish
     channels = await get_active_channels(session)
     if not channels:
         return True, []
 
-    # API so'rovlarni parallel yuborish (Tezkorlik: High-Load uchun)
-    async def check(ch):
-        try:
-            m = await bot.get_chat_member(ch["id"], user_id)
-            return None if m.status in ("member", "administrator", "creator") else ch
-        except Exception:
-            # Xatolik bo'lsa (masalan bot kanalda admin emas), foydalanuvchini kanalga yo'naltiramiz
-            return ch 
+    # 3. Parallel so'rovlar uchun limit (masalan, bir vaqtda max 5 ta API so'rov)
+    sem = asyncio.Semaphore(5)
 
+    async def check(ch):
+        async with sem:
+            try:
+                # Cache-aside: kelajakda bu yerga individual a'zolik keshini qo'shish mumkin
+                m = await bot.get_chat_member(ch["id"], user_id)
+                if m.status in ("member", "administrator", "creator"):
+                    return None
+                return ch
+            except Exception as e:
+                # Bot kanalda admin bo'lmasa yoki kanal topilmasa, xavfsizlik uchun 'missing' deb qaytaradi
+                logger.warning(f"Sub check failed for {ch['id']}: {e}")
+                return ch 
+
+    # Parallel bajarish orqali javob vaqtini minimal qilish
     results = await asyncio.gather(*[check(ch) for ch in channels])
     missing = [r for r in results if r]
+    
     return len(missing) == 0, missing
 # =========================
 # START (ULTRA OPTIMIZED)
 # =========================
 
 @router.message(CommandStart())
-async def cmd_start(message: types.Message, user: any, session: AsyncSession, bot: Bot, state: FSMContext):
+async def cmd_start(message: types.Message, user: dict, session: AsyncSession, bot: Bot, state: FSMContext):
+    """
+    Pro Max Start Handler: Xavfsiz, tezkor va yuqori darajadagi UX.
+    """
     await state.clear()
 
     user_id = message.from_user.id
     full_name = message.from_user.full_name
-    now = datetime.now(timezone.utc)
-
-    if not session:
-        return await message.answer("⚠️ Server band")
+    
+    # Circuit Breaker: Agar middleware sessionni bog'lay olmagan bo'lsa
+    if session is None or isinstance(session._session, type(None)):
+        return await message.answer(
+            "⚠️ <b>Tizimda texnik ishlar:</b>\n"
+            "Hozirda ma'lumotlar bazasi band. Iltimos, 1 daqiqadan so'ng urinib ko'ring.",
+            parse_mode="HTML"
+        )
 
     args = message.text.split()
 
     try:
         # =========================
-        # USER CACHE AVOID EXTRA DB
-        # =========================
-        is_vip = getattr(user, "is_vip", False)
-        status = getattr(user, "status", "user")
-
-        # =========================
-        # REFERRAL (ONLY IF NEW USER)
-        # =========================
-        if len(args) > 1:
-            try:
-                ref_id = int(args[1])
-                if ref_id != user_id:
-                    await session.execute(
-                        update(DBUser)
-                        .where(DBUser.user_id == user_id)
-                        .values(referred_by=ref_id)
-                    )
-            except:
-                pass
-
-        # =========================
-        # PRIVILEGE CHECK (OPTIMIZED UX)
+        # USER DATA (KESHDAN)
         # =========================
         status = user.get("status", "user")
         is_vip = user.get("is_vip", False)
+        points = user.get("points", 0)
+        # CREATOR_ID configdan tekshiriladi
         is_admin = status in ["creator", "admin"] or user_id == config.CREATOR_ID
 
+        # =========================
+        # REFERRAL (OUTBOX COMPATIBLE)
+        # =========================
+        # Faqat yangi foydalanuvchi bo'lsa va argument bo'lsa
+        if len(args) > 1 and not user.get("is_registered", False):
+            try:
+                ref_id = int(args[1])
+                if ref_id != user_id:
+                    # Repository orqali yozish keshni Outbox orqali sinxronlaydi[cite: 12]
+                    await UserRepository.set_referrer(session, user_id, ref_id)
+            except (ValueError, Exception) as e:
+                logger.warning(f"Ref error: {e}")
+
+        # =========================
+        # PRIVILEGE UX (CREATOR & ADMIN)
+        # =========================
         if is_admin or is_vip:
-            # Statusga qarab tegishli sarlavha va emojini tanlash
-            if status == "creator":
+            # Dinamik sarlavha tanlash[cite: 16]
+            if user_id == config.CREATOR_ID:
                 header, icon = "Tizim Yaratuvchisi", "⚡"
             elif status == "admin":
                 header, icon = "Administrator", "🛠"
             else:
                 header, icon = "VIP Foydalanuvchi", "💎"
 
-            # Foydalanuvchi hisobidagi ochkolarni ham ko'rsatish (UX uchun foydali)
-            points = user.get("points", 0)
-            
             text = (
                 f"{icon} <b>Xush kelibsiz, {full_name}!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"👤 <b>Statusingiz:</b> <code>{header}</code>\n"
                 f"💰 <b>Balansingiz:</b> <code>{points} ball</code>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🚀 Botning barcha funksiyalari siz uchun ochiq."
+                f"🚀 <b>Imtiyoz:</b> Barcha cheklovlar olib tashlangan."
             )
 
             return await message.answer(
@@ -205,42 +217,34 @@ async def cmd_start(message: types.Message, user: any, session: AsyncSession, bo
             )
 
         # =========================
-        # SUB CHECK (HIGH-END UX)
+        # SUB CHECK (HIGH-LOAD OPTIMIZED)
         # =========================
-        # start.py ichida
         ok, missing = await check_subscription(bot, user_id, session)
 
         if not ok:
-           
-            kb = build_sub_keyboard(missing) 
-    
             text = (
-                f"👋 <b>Assalomu alaykum, {message.from_user.full_name}!</b>\n\n"
-                f"Botimizdan foydalanish uchun quyidagi kanallarga a'zo bo'lishingiz kerak.\n\n"
-                f"<i>Obuna bo'lib, '🔄 Obunani tekshirish' tugmasini bosing.</i>"
+                f"👋 <b>Assalomu alaykum, {full_name}!</b>\n\n"
+                f"Botimizdan foydalanish uchun quyidagi kanallarga a'zo bo'lishingiz kerak. "
+                f"Bu botning barqaror ishlashini ta'minlaydi 🚀\n\n"
+                f"<i>Obuna bo'lib, pastdagi tekshirish tugmasini bosing:</i>"
             )
-    
+            
             return await message.answer(
                 text=text,
-                reply_markup=kb,
+                reply_markup=build_sub_keyboard(missing), 
                 parse_mode="HTML"
-
             )
 
         # =========================
-        # SUCCESS (PREMIUM UX)
+        # REGULAR SUCCESS UX
         # =========================
-        # Keshdan olingan ballar va statusni ko'rsatish
-        points = user.get("points", 0)
-        
         text = (
-            f"🎉 <b>Tabriklaymiz, {full_name}!</b>\n"
+            f"🎉 <b>Xush kelibsiz, {full_name}!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"✅ <b>Siz muvaffaqiyatli ro‘yxatdan o‘tdingiz.</b>\n\n"
+            f"✅ <b>Hisobingiz:</b> Faol\n"
             f"💰 <b>Balansingiz:</b> <code>{points} ball</code>\n"
-            f"🎁 <b>Siz uchun:</b> Barcha funksiyalar faollashtirildi!\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f" <b>Boshlash uchun quyidagi menyudan foydalaning:</b>"
+            f"<b>Botdan foydalanish uchun menyuni tanlang:</b>"
         )
 
         return await message.answer(
@@ -248,22 +252,19 @@ async def cmd_start(message: types.Message, user: any, session: AsyncSession, bo
             reply_markup=get_main_menu(user_id, is_vip, status),
             parse_mode="HTML"
         )
-    except Exception as e:
-        logger.error(f"start error: {e}", exc_info=True)
-        
-        # Xatolik matnini ham UX jihatdan chiroyli qilish
-        error_text = (
-            "❌ <b>Texnik uzilish!</b>\n\n"
-            "Kutilmagan xatolik tufayli tizimda uzilish yuz berdi. "
-            "Muhandislarimiz bu haqda xabar topishdi. 🛠\n\n"
-            "🔄 <i>Iltimos, bir ozdan so‘ng /start buyrug‘ini qayta bosing.</i>"
-        )
-        
-        await message.answer(
-            text=error_text,
-            parse_mode="HTML"
-        )
 
+    except Exception as e:
+        logger.error(f"Start handler error: {e}", exc_info=True)
+        
+        # Foydalanuvchi uchun chiroyli xatolik xabari[cite: 16]
+        error_text = (
+            "❌ <b>Texnik nosozlik!</b>\n\n"
+            "Tizimda kutilmagan xatolik yuz berdi. "
+            "Xavotir olmang, muammo qayd etildi va tuzatilmoqda 🛠\n\n"
+            "🔄 <i>Iltimos, qaytadan /start buyrug'ini yuboring.</i>"
+        )
+        
+        await message.answer(text=error_text, parse_mode="HTML")
 # =========================
 # CHANNEL REDIRECT (OPTIMIZED)
 # =========================
@@ -271,50 +272,57 @@ async def cmd_start(message: types.Message, user: any, session: AsyncSession, bo
 @router.callback_query(F.data.startswith("go_to_channel:"))
 async def redirect_handler(callback: types.CallbackQuery, session: AsyncSession):
     """
-    DbSessionMiddleware'ning SafeSession xususiyatiga moslashtirilgan handler.
+    Kesh bilan optimallashtirilgan va xavfsiz redirect handler[cite: 12, 16].
     """
-    await callback.answer()
+    await callback.answer() # Callback yuklanishini darhol to'xtatish
     
-    # 1. CIRCUIT BREAKER TEKSHIRUVI
-    # Agar baza o'chgan bo'lsa, SafeSession ichidagi haqiqiy sessiya None bo'ladi.
-    # Bu holatda session.scalar() chaqirish RuntimeError beradi.[cite: 12]
-    if isinstance(session._session, type(None)):
+    # 1. CIRCUIT BREAKER (Sessiya xavfsizligi)
+    if session is None or isinstance(session._session, type(None)):
         return await callback.answer(
-            "⚠️ Ma'lumotlar bazasi vaqtincha mavjud emas.\n"
-            "Iltimos, keyinroq qayta urinib ko'ring.",
+            "⚠️ Tizimda texnik ishlar ketmoqda.\n"
+            "Iltimos, 1 daqiqadan so'ng urinib ko'ring.",
             show_alert=True
         )
 
     try:
-        # Callback'dan kanal ID sini ajratib olish
-        ch_id_str = callback.data.split(":")[1]
-        ch_id = int(ch_id_str)
+        ch_id = int(callback.data.split(":")[1])
 
-        # 2. BAZADAN QIDIRISH (Sessiya borligi aniq)[cite: 12, 19]
-        # Bu yerda SafeSession orqali haqiqiy session.execute ishga tushadi
-        stmt = select(Channel).where(Channel.channel_id == ch_id)
-        channel = await session.scalar(stmt)
+        # 2. CACHE-FIRST STRATEGY (Tezkorlik uchun)
+        # Avval keshdan faol kanallarni olamiz
+        all_channels = await get_active_channels(session)
+        channel_data = next((c for c in all_channels if c['id'] == ch_id), None)
 
-        if not channel or not channel.url:
+        # 3. AGAR KESHDA BO'LMASA, BAZADAN QIDIRISH[cite: 12]
+        if not channel_data:
+            stmt = select(Channel).where(Channel.channel_id == ch_id, Channel.is_active.is_(True))
+            channel = await session.scalar(stmt)
+            if channel:
+                channel_data = {"title": channel.title, "url": channel.url}
+        
+        if not channel_data or not channel_data.get("url"):
             return await callback.answer(
                 "❌ Kanal topilmadi yoki o'chirilgan.", 
                 show_alert=True
             )
 
-        # 3. INTERFEYS (UX)
+        # 4. PREMIUM UX DIZAYN
         text = (
-            f"📢 <b>Kanal: {channel.title}</b>\n"
+            f"📢 <b>Kanal: {channel_data['title']}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Botdan foydalanishni davom ettirish uchun "
-            f"ushbu kanalga a'zo bo'lishingiz shart.\n"
+            f"🚀 <b>Qadam:</b> Botdan to'liq foydalanish uchun "
+            f"ushbu kanalga a'zo bo'lishingiz lozim.\n\n"
+            f"<i>Obuna bo'lgach, 'Tasdiqlash' tugmasini bosing.</i>"
         )
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Kanalga o'tish", url=channel.url)],
-            [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"check_sub:{ch_id}")],
-            [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="check_sub:all")]
+            [InlineKeyboardButton(text="🔗 Kanalga o'tish", url=channel_data['url'])],
+            [
+                InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"check_sub:{ch_id}"),
+                InlineKeyboardButton(text="⬅️ Orqaga", callback_data="check_sub:all")
+            ]
         ])
 
+        # Faqat o'zgargan bo'lsa edit qilish (API tejash)
         await callback.message.edit_text(
             text=text, 
             reply_markup=kb, 
@@ -324,87 +332,72 @@ async def redirect_handler(callback: types.CallbackQuery, session: AsyncSession)
     except Exception as e:
         logger.error(f"Redirect handler error: {e}", exc_info=True)
         await callback.answer(
-            "❌ Xatolik yuz berdi. Qayta urinib ko'ring.", 
+            "❌ Kutilmagan xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.", 
             show_alert=True
         )
-
 # =========================
 # CHECK SUB (FAST PATH)
 # =========================
 
 @router.callback_query(F.data.startswith("check_sub"))
 async def check_sub(callback: types.CallbackQuery, user: dict, session: AsyncSession, bot: Bot):
-    # 1. Instant Feedback
-    await callback.answer("⏳ Tekshirilmoqda...")
+    """
+    Obunani tekshirish va referral mukofotlashning optimallashgan handleri.
+    """
+    # 1. Instant Feedback (UX uchun muhim)
+    await callback.answer("⏳ Tekshirilmoqda, iltimos kuting...")
 
     user_id = callback.from_user.id
     
-    # 2. Obunani tekshirish
+    # 2. Parallel Obunani tekshirish (Tezkorlik: High-Load)[cite: 16]
     ok, missing = await check_subscription(bot, user_id, session)
 
     if not ok:
         count = len(missing)
         return await callback.answer(
-            f"❌ Obuna to'liq emas!\nYana {count} ta kanalga a'zo bo'lishingiz kerak.", 
+            f"⚠️ Obuna to'liq emas!\n"
+            f"Yana {count} ta kanalga a'zo bo'lishingiz shart.", 
             show_alert=True
         )
-
-    # 3. Referral mantiqi (Faqat session mavjud bo'lsa)
+    # Hozirgi holat
+    
+    # 3. Referral mantiqi (Repository orqali - Outbox mosligi)[cite: 8, 12]
     if not isinstance(session._session, type(None)):
         try:
-            # Foydalanuvchini bazadan olish
-            db_user = await session.scalar(
-                select(DBUser).where(DBUser.user_id == user_id)
-            )
-
-            # Agar foydalanuvchi taklif qilingan bo'lsa va hali ochko berilmagan bo'lsa
-            if db_user and db_user.referred_by:
-                ref_id = db_user.referred_by
-                
-                # Taklif qilgan odamni (referrer) topish
-                referrer = await session.scalar(
-                    select(DBUser).where(DBUser.user_id == ref_id)
-                )
-
-                if referrer:
-                    referrer.points += 10
-                    referrer.referral_count += 1
-                    # Referral mantiqi takrorlanmasligi uchun referred_by ni tozalaymiz
-                    db_user.referred_by = None 
-                    
-                    await session.commit()
-                    
-                    # Referrer keshini o'chirish (Middleware keyingi safar yangi ochkolarni keshlaydi)
-                    await valkey.delete("db_users", ref_id)
-
-                    # Referrerga bildirishnoma yuborish (Async Task)
-                    asyncio.create_task(
-                        bot.send_message(
-                            ref_id, 
-                            "🎊 <b>Tabriklaymiz!</b>\nSizning taklifingiz muvaffaqiyatli obuna bo'ldi: +10 ball! 🔥",
-                            parse_mode="HTML"
-                        )
+            # UserRepository ball qo'shish va Outbox event yaratishni o'z ichiga oladi[cite: 8]
+            # referred_by ni tozalash va ochko berish bir tranzaksiyada bajariladi
+            reward_sent, ref_id = await UserRepository.process_referral_reward(session, user_id, amount=10)
+            
+            if reward_sent:
+                # Referrerga bildirishnoma (Fonda bajariladi)[cite: 16]
+                asyncio.create_task(
+                    bot.send_message(
+                        ref_id, 
+                        "🎊 <b>Yangi muvaffaqiyat!</b>\n"
+                        "Siz taklif qilgan foydalanuvchi obuna bo'ldi: <b>+10 ball</b> 🔥",
+                        parse_mode="HTML"
                     )
+                )
         except Exception as e:
-            logger.error(f"Referral reward error: {e}")
+            logger.error(f"Referral reward logic error: {e}")
 
-    # 4. Success UX
+    # 4. Success UX (Premium dizayn)[cite: 16]
     status = user.get("status", "user")
     is_vip = user.get("is_vip", False)
     
-    # Xabarni chiroyli tozalash
+    # Eskisini tozalab, yangi menyuni chiqarish
     try:
         await callback.message.delete()
-    except:
+    except Exception:
         pass
 
     success_text = (
         f"✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🎉 <b>Xush kelibsiz, {callback.from_user.first_name}!</b>\n"
-        f"Endi botdan cheklovlarsiz foydalanishingiz mumkin.\n"
+        f"Barcha cheklovlar olib tashlandi. Endi botdan to'liq foydalanishingiz mumkin.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👇 <b>Asosiy menyu:</b>"
+        f"🚀 <b>Asosiy menyu orqali davom eting:</b>"
     )
 
     await callback.message.answer(

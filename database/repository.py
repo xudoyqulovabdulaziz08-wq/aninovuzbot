@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
 from datetime import datetime, timedelta, timezone
-
+from sqlalchemy import select, update, and_  
 from database.models import DBUser
 from database.cache import valkey
 
@@ -201,3 +201,75 @@ class UserRepository:
         except Exception as e:
             logger.error(f"❌ add_referral error: {e}")
             raise
+    # ================= SET REFERRER =================
+    @staticmethod
+    async def set_referrer(session: AsyncSession, user_id: int, ref_id: int):
+        """
+        🔥 Yangi foydalanuvchiga taklif qilgan odamni biriktirish.
+        """
+        try:
+            # Faqat referred_by bo'sh bo'lsagina yangilaymiz (takroriy referral oldini olish)
+            stmt = (
+                update(DBUser)
+                .where(and_(DBUser.user_id == user_id, DBUser.referred_by.is_(None)))
+                .values(referred_by=ref_id)
+            )
+            result = await session.execute(stmt)
+            
+            if result.rowcount > 0:
+                await UserRepository._invalidate_cache(user_id)
+                
+        except Exception as e:
+            logger.error(f"❌ set_referrer error: {e}")
+            raise
+
+    # ================= PROCESS REFERRAL REWARD =================
+    @staticmethod
+    async def process_referral_reward(session: AsyncSession, user_id: int, amount: int = 10) -> tuple[bool, Optional[int]]:
+        """
+        🔥 ATOMIC REWARD PROCESS
+        1. Taklif qilingan foydalanuvchini tekshiradi.
+        2. Taklifchiga (referrer) ball qo'shadi.
+        3. Referred_by ni tozalaydi (bir marta ochko berish uchun).
+        4. Keshni yangilaydi.
+        """
+        try:
+            # 1. Foydalanuvchini va uning taklifchisini olish
+            result = await session.execute(
+                select(DBUser).where(DBUser.user_id == user_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if not user or not user.referred_by:
+                return False, None
+
+            ref_id = user.referred_by
+
+            # 2. Taklif qilgan odamga ball qo'shish va hisoblagichni oshirish
+            ref_update = await session.execute(
+                update(DBUser)
+                .where(DBUser.user_id == ref_id)
+                .values(
+                    points=DBUser.points + amount,
+                    referral_count=DBUser.referral_count + 1
+                )
+            )
+
+            if ref_update.rowcount == 0:
+                return False, None
+
+            # 3. Foydalanuvchidan taklifchini tozalash (qayta ball bermaslik uchun)
+            user.referred_by = None
+            
+            # 4. Tranzaksiyani saqlash (Middleware commit qiladi, lekin biz keshni tozalashimiz kerak)
+            await session.flush() 
+
+            # 5. KESH TOZALASH (L1 + L2)
+            await UserRepository._invalidate_cache(user_id) # O'zining referred_by o'zgardi
+            await UserRepository._invalidate_cache(ref_id)  # Taklifchining ballari o'zgardi
+
+            return True, ref_id
+
+        except Exception as e:
+            logger.error(f"❌ process_referral_reward error: {e}")
+            return False, None
