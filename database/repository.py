@@ -3,7 +3,7 @@ from typing import Dict, Any
 from collections import OrderedDict
 
 from database.cache import valkey
-from database.repository import UserRepository  # <-- SHUNI QO'SHING
+
 
 logger = logging.getLogger("Orchestrator")
 
@@ -33,41 +33,42 @@ class Orchestrator:
         }
 
     # ================= MAIN FETCH =================
+   # ================= MAIN FETCH =================
     async def get_user(self, session_pool, tg_user):
-
         user_id = tg_user.id
 
         # ================= L1 CACHE =================
         cached = self.l1_cache.get(user_id)
         if cached:
             self.l1_cache.move_to_end(user_id)
-
             self.stats["l1_hits"] += 1
             return cached
 
         # ================= L2 CACHE =================
         if valkey.is_alive:
             try:
+                # CacheManager.get metodini chaqirish (table va obj_id bilan)
                 cached = await valkey.get("users", user_id)
-
                 if cached:
                     self._set_l1(user_id, cached)
-
                     self.stats["l2_hits"] += 1
                     return cached
-
             except Exception as e:
                 logger.debug(f"L2 error: {e}")
 
         # ================= DB FALLBACK =================
         self.stats["db_hits"] += 1
 
+        # !!! MUAMMONING YECHIMI SHU YERDA !!!
+        # Local import: Aylanma importning oldini oladi
+        from database.repository import UserRepository 
+
         async with session_pool() as session:
+            # UserRepository metodini chaqirish
             user = await UserRepository.get_or_create(session, tg_user)
             data = self._to_dict(user)
 
             await self._sync_cache(user_id, data)
-
             return data
 
     # ================= L1 SET =================
