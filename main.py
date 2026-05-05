@@ -237,13 +237,12 @@ def main():
     dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
 
     # Routerlarni qo'shish
-    for r in [
-        admin.router, start.router, anime.router,
-        user.router, vip.router, referral.router,
-        reyting.router, channel.router,
-        statisika.router, search.router
-    ]:
-        dp.include_router(r)
+    dp.include_routers(
+        start.router,
+        admin.router
+    )
+                      
+
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
