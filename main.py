@@ -33,7 +33,8 @@ logger = logging.getLogger("Main")
 background_tasks: set[asyncio.Task] = set()
 workers = []
 
-
+async def health_check(request):
+    return web.Response(text="Bot is alive!", status=200)
 # =========================================================
 # 🧠 AI CACHE BRAIN v2 (HOOK LAYER)
 # =========================================================
@@ -70,12 +71,10 @@ class AICacheBrain:
 
 ai_brain = AICacheBrain()
 
-# create_dashboard ichida
-async def index_handler(_):
-    return web.Response(text="Bot is running!")
 
-async def health_check(request):
-    return web.Response(text="Bot is alive!", status=200)
+
+
+
 # =========================================================
 # 🌐 FASTAPI ADMIN DASHBOARD
 # =========================================================
@@ -106,14 +105,14 @@ async def create_dashboard():
             return web.json_response([d.decode() for d in data])
         except:
             return web.json_response([])
-
+    app = web.Application()
+    app.router.add_get('/', health_check)
     app.router.add_get("/health", health)
     app.router.add_get("/metrics/cache", cache_metrics)
     app.router.add_get("/metrics/workers", worker_status)
     app.router.add_get("/dlq", dlq_view)
-    app.router.add_get("/", index_handler)
-    app = web.Application()
-    app.router.add_get('/', health_check)
+    
+    
     return app
 
 
@@ -221,6 +220,8 @@ async def on_shutdown(bot: Bot):
 # =========================================================
 # 🚀 MAIN ENTRY
 # =========================================================
+# ... (avvalgi importlar va funksiyalar)
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -233,13 +234,9 @@ def main():
     )
 
     dp = Dispatcher()
+    dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
 
-    # middleware
-    dp.update.outer_middleware(
-        DbSessionMiddleware(session_pool=AsyncSessionLocal)
-    )
-
-    # routers
+    # Routerlarni qo'shish
     for r in [
         admin.router, start.router, anime.router,
         user.router, vip.router, referral.router,
@@ -251,24 +248,41 @@ def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # webhook app
-    bot_app = web.Application()
+    # 1. Asosiy ilova (Main App)
+    app = web.Application()
 
+    # 2. Render Health Check uchun aynan ildiz yo'lakka (/) handler qo'shamiz
+    # Bu logdagi 404 xatosini 200 ga aylantiradi
+    async def render_health_check(request):
+        return web.Response(text="Bot is live and healthy!", status=200)
+    
+    app.router.add_get('/', render_health_check)
+
+    # 3. Bot ilovasi (Webhook)
+    bot_app = web.Application()
     handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     handler.register(bot_app, path=config.WEBHOOK_PATH)
     setup_application(bot_app, dp, bot=bot)
-
-    # attach dashboard (FASTAPI style inside aiohttp)
-    dashboard = asyncio.run(create_dashboard())
-
-    app = web.Application()
+    
     app.add_subapp("/bot", bot_app)
+
+    # 4. Admin Dashboard ilovasi
+    # asyncio.run ishlatmaslik uchun dashboard yaratishni soddalashtiramiz
+    dashboard = web.Application()
+    
+    async def health(_):
+        return web.json_response({"status": "ok", "mode": "ultra"})
+    
+    dashboard.router.add_get("/health", health)
+    # ... boshqa dashboard routerlarini shu yerga qo'shing ...
+    
     app.add_subapp("/admin", dashboard)
 
-    logger.info("🚀 SERVER START")
-    port = int(os.environ.get("PORT", 8000))
+    logger.info("🚀 SERVER STARTING ON PORT %s", config.PORT)
+    
+    # Render uchun portni config'dan yoki os.environ'dan oling
+    # config.PORT Render'da 10000 bo'lishi kerak
     web.run_app(app, host="0.0.0.0", port=config.PORT)
-
 
 if __name__ == "__main__":
     main()
