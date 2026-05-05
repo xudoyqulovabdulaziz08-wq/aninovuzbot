@@ -79,8 +79,30 @@ class CacheInvalidationWorker:
             pass
 
     # ================= MAIN LOOP =================
+    async def _setup_redis_stream(self):
+        """Redis Stream va Group mavjudligini ta'minlaydi"""
+        if not self.redis:
+            return
+
+        stream_key = "cache:invalidate"  # Logdagi xatoga ko'ra
+        group_name = "cache_group"
+
+        try:
+            # Guruhni yaratish (mkstream=True stream bo'lmasa uni ham yaratadi)
+            await self.redis.xgroup_create(stream_key, group_name, id='0', mkstream=True)
+            logger.info(f"✅ Redis Stream Group '{group_name}' yaratildi.")
+        except Exception as e:
+            if "BUSYGROUP" in str(e):
+                # Guruh allaqachon bor, bu normal holat
+                pass
+            else:
+                logger.error(f"❌ Redis Stream sozlashda xato: {e}")
+
+
     async def run(self):
         logger.info("🚀 Cache Worker STARTED (ZERO-LOSS MODE)")
+        
+        await self._setup_redis_stream()
 
         while self._running:
             try:
