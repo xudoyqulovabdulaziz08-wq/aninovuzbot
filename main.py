@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 import pytz
@@ -69,6 +70,10 @@ class AICacheBrain:
 
 ai_brain = AICacheBrain()
 
+# create_dashboard ichida
+async def index_handler(_):
+    return web.Response(text="Bot is running!")
+
 
 # =========================================================
 # 🌐 FASTAPI ADMIN DASHBOARD
@@ -105,6 +110,7 @@ async def create_dashboard():
     app.router.add_get("/metrics/cache", cache_metrics)
     app.router.add_get("/metrics/workers", worker_status)
     app.router.add_get("/dlq", dlq_view)
+    app.router.add_get("/", index_handler)
 
     return app
 
@@ -258,7 +264,7 @@ def main():
     app.add_subapp("/admin", dashboard)
 
     logger.info("🚀 SERVER START")
-
+    port = int(os.environ.get("PORT", 8000))
     web.run_app(app, host="0.0.0.0", port=config.PORT)
 
 
