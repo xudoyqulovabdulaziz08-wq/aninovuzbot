@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from datetime import datetime, timedelta, timezone
 
 from database.models import DBUser
+from database.cache import valkey
 
 logger = logging.getLogger("UserRepository")
 
@@ -18,10 +19,9 @@ class UserRepository:
     @staticmethod
     async def get_or_create(session: AsyncSession, tg_user) -> DBUser:
         """
-        🔥 ULTRA FAST:
-        - 1 query (Postgres UPSERT)
-        - race-safe
-        - high-load optimized
+        🔥 1 QUERY UPSERT
+        🔥 RACE SAFE
+        🔥 HIGH LOAD READY
         """
 
         try:
@@ -47,12 +47,18 @@ class UserRepository:
             result = await session.execute(stmt)
             user = result.scalar_one()
 
+            # 🔥 IMPORTANT: ensure fully loaded object
+            try:
+                await session.refresh(user)
+            except Exception:
+                pass
+
             return user
 
         except Exception as e:
             logger.error(f"❌ get_or_create error: {e}")
 
-            # fallback (VERY RARE)
+            # fallback
             result = await session.execute(
                 select(DBUser).where(DBUser.user_id == tg_user.id)
             )
@@ -76,13 +82,33 @@ class UserRepository:
             logger.error(f"❌ get_by_id error: {e}")
             return None
 
-    # ================= ATOMIC POINTS UPDATE =================
+    # ================= CACHE INVALIDATION =================
+    @staticmethod
+    async def _invalidate_cache(user_id: int):
+        """
+        🔥 L1 + L2 cache cleanup
+        """
+        try:
+            # L2 (Redis)
+            if valkey.is_alive:
+                await valkey.delete("users", user_id)
+
+            # L1 (Orchestrator)
+            try:
+                from services.orchestrator import state
+                state.l1_cache.pop(user_id, None)
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.debug(f"cache invalidate error: {e}")
+
+    # ================= UPDATE POINTS =================
     @staticmethod
     async def update_points(session: AsyncSession, user_id: int, points: int):
         """
-        🔥 SAFE:
-        - SQL atomic increment
-        - race condition yo‘q
+        🔥 ATOMIC
+        🔥 CACHE SAFE
         """
 
         try:
@@ -94,6 +120,10 @@ class UserRepository:
 
             if result.rowcount == 0:
                 logger.warning(f"⚠️ update_points: user not found {user_id}")
+                return
+
+            # 🔥 CACHE CLEAR
+            await UserRepository._invalidate_cache(user_id)
 
         except Exception as e:
             logger.error(f"❌ update_points error: {e}")
@@ -102,6 +132,7 @@ class UserRepository:
     # ================= SET VIP =================
     @staticmethod
     async def set_vip(session: AsyncSession, user_id: int, days: int):
+
         try:
             expire_date = datetime.now(timezone.utc) + timedelta(days=days)
 
@@ -117,6 +148,9 @@ class UserRepository:
 
             if result.rowcount == 0:
                 logger.warning(f"⚠️ set_vip: user not found {user_id}")
+                return
+
+            await UserRepository._invalidate_cache(user_id)
 
         except Exception as e:
             logger.error(f"❌ set_vip error: {e}")
@@ -125,6 +159,7 @@ class UserRepository:
     # ================= REMOVE VIP =================
     @staticmethod
     async def remove_vip(session: AsyncSession, user_id: int):
+
         try:
             result = await session.execute(
                 update(DBUser)
@@ -138,6 +173,9 @@ class UserRepository:
 
             if result.rowcount == 0:
                 logger.warning(f"⚠️ remove_vip: user not found {user_id}")
+                return
+
+            await UserRepository._invalidate_cache(user_id)
 
         except Exception as e:
             logger.error(f"❌ remove_vip error: {e}")
@@ -146,6 +184,7 @@ class UserRepository:
     # ================= ADD REFERRAL =================
     @staticmethod
     async def add_referral(session: AsyncSession, user_id: int):
+
         try:
             result = await session.execute(
                 update(DBUser)
@@ -155,6 +194,9 @@ class UserRepository:
 
             if result.rowcount == 0:
                 logger.warning(f"⚠️ add_referral: user not found {user_id}")
+                return
+
+            await UserRepository._invalidate_cache(user_id)
 
         except Exception as e:
             logger.error(f"❌ add_referral error: {e}")
