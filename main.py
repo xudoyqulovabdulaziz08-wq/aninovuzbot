@@ -113,7 +113,7 @@ async def create_dashboard():
 # 🚀 WORKER BOOTSTRAP
 # =========================================================
 async def start_workers():
-    outbox = OutboxWorker(AsyncSessionLocal)
+    outbox = OutboxWorker(AsyncSessionLocal, valkey)
     cache = CacheInvalidationWorker(AsyncSessionLocal, valkey)
 
     async def safe(name, coro):
