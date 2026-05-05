@@ -74,7 +74,8 @@ ai_brain = AICacheBrain()
 async def index_handler(_):
     return web.Response(text="Bot is running!")
 
-
+async def health_check(request):
+    return web.Response(text="Bot is alive!", status=200)
 # =========================================================
 # 🌐 FASTAPI ADMIN DASHBOARD
 # =========================================================
@@ -111,7 +112,8 @@ async def create_dashboard():
     app.router.add_get("/metrics/workers", worker_status)
     app.router.add_get("/dlq", dlq_view)
     app.router.add_get("/", index_handler)
-
+    app = web.Application()
+    app.router.add_get('/', health_check)
     return app
 
 
