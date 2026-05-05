@@ -120,19 +120,11 @@ class CacheManager:
     # ================= START =================
     async def start(self):
         await self._connect()
-
         try:
             await self.redis.ping()
-
-            try:
-                await self.redis.xgroup_create(
-                    self._stream_name,
-                    self._group_name,
-                    id="0",
-                    mkstream=True
-                )
-            except ResponseError:
-                pass
+        
+            # Stream va Guruhni majburiy yaratish (Silent Mode)
+            await self._ensure_stream_setup()
 
             self._tasks = [
                 asyncio.create_task(self._stream_listener()),
@@ -141,9 +133,7 @@ class CacheManager:
                 asyncio.create_task(self._metrics_logger()),
                 asyncio.create_task(self._event_listener())
             ]
-
             logger.info(f"🚀 CACHE ONLINE [{self.node_id}]")
-
         except Exception as e:
             logger.critical(f"START FAIL: {e}")
             self.is_alive = False
@@ -266,6 +256,24 @@ class CacheManager:
                 self._l1_cache.popitem(last=False)
 
     # ================= STREAM LISTENER =================
+    async def _ensure_stream_setup(self):
+        """Stream va Guruh mavjudligini xatosiz ta'minlaydi"""
+        try:
+            # mkstream=True stream bo'lmasa uni ham yaratadi
+            await self.redis.xgroup_create(
+                self._stream_name, 
+                self._group_name, 
+                id="0", 
+                mkstream=True
+            )
+            logger.info(f"✅ Redis Stream Group '{self._group_name}' tayyor.")
+        except ResponseError as e:
+            if "BUSYGROUP" in str(e):
+                pass # Guruh allaqachon bor, muammo yo'q
+            else:
+                logger.warning(f"⚠️ Stream sozlashda kutilmagan holat: {e}")
+
+
     async def _stream_listener(self):
         while self.is_alive:
             try:
@@ -274,9 +282,8 @@ class CacheManager:
                     self._consumer,
                     {self._stream_name: ">"},
                     count=30,
-                    block=500
+                    block=2000 # Blok vaqtini biroz uzaytirdik (resurs tejash)
                 )
-
                 if not res:
                     continue
 
@@ -284,9 +291,20 @@ class CacheManager:
                     for msg_id, payload in messages:
                         await self._process(msg_id, payload)
 
+            except ResponseError as e:
+                if "NOGROUP" in str(e):
+                    # AVTO-TUZATISH: Agar guruh o'chib ketgan bo'lsa, qayta yaratamiz
+                    await self._ensure_stream_setup()
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"STREAM ERROR: {e}")
+                    await asyncio.sleep(5)
             except Exception as e:
-                logger.error(f"STREAM ERROR: {e}")
-                await asyncio.sleep(1)
+                logger.error(f"STREAM UNKNOWN ERROR: {e}")
+                await asyncio.sleep(5)
+
+
+
 
     async def _process(self, msg_id, payload):
         data = orjson.loads(payload[b"data"])
@@ -366,22 +384,18 @@ class CacheManager:
     # ================= STOP =================
     async def stop(self):
         self.is_alive = False
-
+    
+    
+    
         for t in self._tasks:
-            t.cancel()
-
+           t.cancel()
+    
         await asyncio.gather(*self._tasks, return_exceptions=True)
-
-        try:
-            if self.redis:
-                await self.redis.xgroup_destroy(self._stream_name, self._group_name)
-        except Exception:
-            pass
-
+    
         if self.redis:
             await self.redis.close()
-
-        logger.info("🛑 CACHE SHUTDOWN CLEAN")
+    
+        logger.info("✅ CACHE SHUTDOWN CLEAN (Group Preserved)")
 
 
 
