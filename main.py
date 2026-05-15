@@ -33,6 +33,13 @@ logger = logging.getLogger("Main")
 background_tasks: set[asyncio.Task] = set()
 workers = []
 
+
+
+@dp.message()
+async def echo_handler(message: types.Message):
+    print(f"Xabar keldi: {message.text}")
+    await message.answer("Men ishlayapman!")
+
 async def health_check(request):
     return web.Response(text="Bot is alive!", status=200)
 # =========================================================
