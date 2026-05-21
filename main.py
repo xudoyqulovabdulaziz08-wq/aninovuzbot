@@ -244,49 +244,33 @@ def main():
     # Routerlarni qo'shish
     dp.include_routers(
         start.router
-        
     )
-                      
-
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # 1. Asosiy ilova (Main App)
+    # 1. Yagona va asosiy ilova (Main App)
     app = web.Application()
 
-    # 2. Render Health Check uchun aynan ildiz yo'lakka (/) handler qo'shamiz
-    # Bu logdagi 404 xatosini 200 ga aylantiradi
+    # 2. Render Health Check (Bosh sahifa)
     async def render_health_check(request):
         return web.Response(text="Bot is live and healthy!", status=200)
-    
     app.router.add_get('/', render_health_check)
 
-    # 3. Bot ilovasi (Webhook)
-    bot_app = web.Application()
+    # 3. Bot Webhook Handler (Hech qanday sub-app'larsiz, to'g'ridan-to'g'ri app'ga)
+    # Aiogram token bilan keladigan dinamik xabarlarni tutishi uchun oxiriga /{bot_token} qo'shamiz
     handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    handler.register(bot_app, path=config.WEBHOOK_PATH)
-    setup_application(bot_app, dp, bot=bot)
     
-    app.add_subapp("/bot", bot_app)
+    # DIQQAT: Bu yerda yo'lak qat'iy qilib beriladi. Masalan: "/webhook/{bot_token}"
+    handler.register(app, path="/webhook/{bot_token}")
+    setup_application(app, dp, bot=bot)
 
-    # 4. Admin Dashboard ilovasi
-    # asyncio.run ishlatmaslik uchun dashboard yaratishni soddalashtiramiz
-    dashboard = web.Application()
-    
+    # 4. Admin Dashboard Routerlari (To'g'ridan-to'g'ri asosiy app'ga)
     async def health(_):
         return web.json_response({"status": "ok", "mode": "ultra"})
     
-    dashboard.router.add_get("/health", health)
-    # ... boshqa dashboard routerlarini shu yerga qo'shing ...
-    
-    app.add_subapp("/admin", dashboard)
+    app.router.add_get("/admin/health", health)
+    # ... agar boshqa dashboard'lar bo'lsa, /admin/... qilib shu yerga qo'shing
 
     logger.info("🚀 SERVER STARTING ON PORT %s", config.PORT)
-    
-    # Render uchun portni config'dan yoki os.environ'dan oling
-    # config.PORT Render'da 10000 bo'lishi kerak
     web.run_app(app, host="0.0.0.0", port=config.PORT)
-
-if __name__ == "__main__":
-    main()
