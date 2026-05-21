@@ -1,11 +1,10 @@
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from database.models import Base
 from alembic import context
-from database.models import Base
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -20,6 +19,7 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -51,35 +51,28 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    # Alembic konfiguratsiyasini yuklaymiz
-    configuration = config.get_section(config.config_ini_section)
-    if configuration is None:
-        configuration = {}
-        
-    # DATABASE_URL ni to'g'ridan-to'g'ri .env yoki tizimdan olamiz
-    # Agar u yerda asyncpg yozilgan bo'lsa, uni psycopg2 ga almashtiramiz
-    db_url = os.getenv("DATABASE_URL")
-    
-    if db_url and "postgresql+asyncpg2" in db_url:
-        db_url = db_url.replace("postgresql+asyncpg2", "postgresql+psycopg2")
-    elif db_url and "postgresql+asyncpg" in db_url:
-        db_url = db_url.replace("postgresql+asyncpg", "postgresql+psycopg2")
-        
-    # Agar atrof-muhitda DATABASE_URL topilmasa, alembic.ini dagi url ishlatiladi
-    if db_url:
-        configuration["sqlalchemy.url"] = db_url
-    
+    """Run migrations in 'online' mode.
+
+    In this scenario we need to create an Engine
+    and associate a connection with the context.
+
+    """
     connectable = engine_from_config(
-        configuration,
+        config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, 
-            target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata
         )
 
         with context.begin_transaction():
             context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
