@@ -25,7 +25,7 @@ from handlers import (
 )
 
 logger = logging.getLogger("Main")
-
+dp = Dispatcher()
 
 # ================= GLOBAL STATE =================
 background_tasks: set[asyncio.Task] = set()

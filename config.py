@@ -36,7 +36,7 @@ class Config:
     # ================= INFRA =================
     VALKEY_URL: str = os.getenv(
         "VALKEY_URL",
-        os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        os.getenv("VALKEY_UR", "")
     )
 
     VALKEY_SSL_SKIP: bool = os.getenv("VALKEY_SSL_SKIP", "true").lower() == "true"
