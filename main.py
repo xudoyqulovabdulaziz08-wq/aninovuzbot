@@ -150,36 +150,79 @@ async def start_workers():
 # =========================================================
 # ⚡ STARTUP
 # =========================================================
+# Fondagi abadiy vazifalar o'chib ketmasligi uchun global to'plam (Set) ochamiz
+background_tasks = set()
+
 async def on_startup(bot: Bot):
     logger.info("⚡ SYSTEM BOOTING ULTRA MODE")
 
-    await bot.delete_webhook(drop_pending_updates=True)
+    # 1. Eski webhooklarni tozalash
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("🧹 Pending updates cleared and old webhook deleted.")
+    except Exception as e:
+        logger.error(f"❌ Error deleting webhook: {e}")
 
-    # parallel core init
-    await asyncio.gather(
-        check_db(),
-        valkey.start()
-    )
+    # 2. Parallel core xizmatlarni yoqish (DB va Valkey)
+    try:
+        await asyncio.gather(
+            check_db(),
+            valkey.start()
+        )
+        logger.info("🔋 Database and Valkey storage connected successfully.")
+    except Exception as e:
+        logger.critical(f"💥 Core Infrastructure Failure (DB/Valkey): {e}")
+        raise e
 
-    await start_workers()
+    # 3. WORKER'LARNI ISHGA TUSHIRISH
+    # Agar start_workers ichida 'while True' bo'lsa, u pastdagi kodni bloklamasligi kerak
+    try:
+        # Workerlarni fonda xavfsiz ishga tushirish varianti (agar ichida abadiy loop bo'lsa):
+        # worker_task = asyncio.create_task(start_workers())
+        # background_tasks.add(worker_task)
+        # worker_task.add_done_callback(background_tasks.discard)
+        
+        # Agar start_workers shunchaki tasklarni yaratib beradigan tezkor funksiya bo'lsa:
+        await start_workers()
+        logger.info("🤖 Background Outbox and Cleanup Workers deployed.")
+    except Exception as e:
+        logger.error(f"⚠️ Workers initialization error: {e}")
 
-    # DB init
-    async with engine.begin() as conn:
-        from database.models import Base
-        await conn.run_sync(Base.metadata.create_all)
+    # 4. Ma'lumotlar ombori jadvallarini tekshirish/yaratish
+    try:
+        async with engine.begin() as conn:
+            from database.models import Base
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("📚 Database schemas synchronized.")
+    except Exception as e:
+        logger.error(f"⚠️ Database sync warning (tables might already exist): {e}")
 
+    # 5. Kesh tinglovchilarini ulash
     attach_cache_listeners()
 
-    await bot.set_webhook(
-        url=config.WEBHOOK_URL,
-        allowed_updates=["message", "callback_query"]
-    )
+    # 6. TELEGRAM WEBHOOK'NI O'RNATISH
+    if not config.WEBHOOK_URL:
+        logger.critical("❌ WEBHOOK_URL is empty! Check your WEBHOOK_HOST environment variable.")
+        raise RuntimeError("WEBHOOK_HOST is missing in production config!")
 
-    # background monitor
-    asyncio.create_task(system_monitor())
+    try:
+        logger.info(f"📡 Registering webhook url: {config.WEBHOOK_URL}")
+        await bot.set_webhook(
+            url=config.WEBHOOK_URL,
+            allowed_updates=["message", "callback_query"]
+        )
+        logger.info("✅ Webhook successfully bound to Telegram API.")
+    except Exception as e:
+        logger.critical(f"💥 Failed to set webhook: {e}")
+        raise e
 
-    logger.info("🌍 SYSTEM READY")
+    # 7. TIZIM MONITORINGINI FONDA XAVFSIZ RUN QILISH
+    # Garbage Collector urib yubormasligi uchun background_tasks'ga qo'shamiz
+    monitor_task = asyncio.create_task(system_monitor())
+    background_tasks.add(monitor_task)
+    monitor_task.add_done_callback(background_tasks.discard) # Task tugasa to'plamdan o'chadi
 
+    logger.info("🌍 SYSTEM READY | PLATFORM IS ONLINE")
 
 # =========================================================
 # 🧠 SYSTEM MONITOR (AI OBSERVER)
@@ -238,39 +281,47 @@ def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
 
+    # Dispatcher va Middleware'larni sozlash
     dp = Dispatcher()
-    dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
+    # dp.update.outer_middleware(DbSessionMiddleware(session_pool=AsyncSessionLocal))
 
     # Routerlarni qo'shish
-    dp.include_routers(
-        start.router
-    )
+    # dp.include_routers(start.router)
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # 1. Yagona va asosiy ilova (Main App)
+    # 1. Bitta asosiy aiohttp ilovasi (Sub-app'larsiz)
     app = web.Application()
 
-    # 2. Render Health Check (Bosh sahifa)
+    # 2. Render Health Check (/) -> Render xizmati o'chib qolmasligi uchun shart!
     async def render_health_check(request):
         return web.Response(text="Bot is live and healthy!", status=200)
     app.router.add_get('/', render_health_check)
 
-    # 3. Bot Webhook Handler (Hech qanday sub-app'larsiz, to'g'ridan-to'g'ri app'ga)
-    # Aiogram token bilan keladigan dinamik xabarlarni tutishi uchun oxiriga /{bot_token} qo'shamiz
+    # 3. Webhook Handler integratsiyasi
+    # Sizning config.WEBHOOK_PATH qiymatingiz avtomatik ravishda "/webhook/{token}" ni qaytaradi
     handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    handler.register(app, path=config.WEBHOOK_PATH) 
     
-    # DIQQAT: Bu yerda yo'lak qat'iy qilib beriladi. Masalan: "/webhook/{bot_token}"
-    handler.register(app, path="/webhook/{bot_token}")
+    # Aiogram dasturini asosiy ilovaga ulaymiz
     setup_application(app, dp, bot=bot)
 
-    # 4. Admin Dashboard Routerlari (To'g'ridan-to'g'ri asosiy app'ga)
+    # 4. Admin Dashboard Routerlari (Agar kerak bo'lsa)
     async def health(_):
         return web.json_response({"status": "ok", "mode": "ultra"})
-    
     app.router.add_get("/admin/health", health)
-    # ... agar boshqa dashboard'lar bo'lsa, /admin/... qilib shu yerga qo'shing
 
-    logger.info("🚀 SERVER STARTING ON PORT %s", config.PORT)
-    web.run_app(app, host="0.0.0.0", port=config.PORT)
+    # ================= PORT BINDING FIX =================
+    # Render o'zi taqdim etadigan PORT o'zgaruvchisini birinchi navbatda tekshiramiz.
+    # Agar u bo'lmasa, config.PORT (8000) ga qaytadi.
+    server_port = int(os.getenv("PORT", config.PORT))
+
+    logger.info(f"🚀 SERVER STARTING ON PORT {server_port}")
+    logger.info(f"🔒 Webhook path registered at: {config.WEBHOOK_PATH}")
+    
+    # run_app aiohttp event loop'ni Render'da barqaror ushlab turadi
+    web.run_app(app, host="0.0.0.0", port=server_port)
+
+if __name__ == "__main__":
+    main()
