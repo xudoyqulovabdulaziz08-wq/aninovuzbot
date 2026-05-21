@@ -21,10 +21,8 @@ from database.cache import valkey
 from config import config
 
 from handlers import (
-    start, admin, user, anime, vip,
-    reyting, search, referral
+    start, 
 )
-from handlers.admin_panel import channel, statisika
 
 logger = logging.getLogger("Main")
 
@@ -245,8 +243,8 @@ def main():
 
     # Routerlarni qo'shish
     dp.include_routers(
-        start.router,
-        admin.router
+        start.router
+        
     )
                       
 
