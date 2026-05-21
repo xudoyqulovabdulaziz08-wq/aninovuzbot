@@ -287,6 +287,7 @@ def main():
 
     # Routerlarni qo'shish
     # dp.include_routers(start.router)
+    dp.include_router(start.router)
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
