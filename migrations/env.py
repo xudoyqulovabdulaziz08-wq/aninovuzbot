@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -49,14 +50,24 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-from config import config as my_config # O'zingizning config.py dagi obyektingiz
-
 def run_migrations_online() -> None:
     # Alembic konfiguratsiyasini yuklaymiz
     configuration = config.get_section(config.config_ini_section)
+    if configuration is None:
+        configuration = {}
+        
+    # DATABASE_URL ni to'g'ridan-to'g'ri .env yoki tizimdan olamiz
+    # Agar u yerda asyncpg yozilgan bo'lsa, uni psycopg2 ga almashtiramiz
+    db_url = os.getenv("DATABASE_URL")
     
-    # DATABASE_URL ni dinamik ravishda o'zgaruvchidan olib, u yerga joylaymiz[cite: 20]
-    configuration["sqlalchemy.url"] = my_config.DATABASE_URL
+    if db_url and "postgresql+asyncpg2" in db_url:
+        db_url = db_url.replace("postgresql+asyncpg2", "postgresql+psycopg2")
+    elif db_url and "postgresql+asyncpg" in db_url:
+        db_url = db_url.replace("postgresql+asyncpg", "postgresql+psycopg2")
+        
+    # Agar atrof-muhitda DATABASE_URL topilmasa, alembic.ini dagi url ishlatiladi
+    if db_url:
+        configuration["sqlalchemy.url"] = db_url
     
     connectable = engine_from_config(
         configuration,
