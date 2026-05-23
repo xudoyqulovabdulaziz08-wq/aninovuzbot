@@ -1,27 +1,33 @@
-
 import logging
+from typing import Optional, Tuple
+from urllib.parse import quote  # 🔥 FIX: URL encode uchun shart!
 
-from aiogram import types, F, Router
-
-from sqlalchemy import select, desc
-from database.models import DBUser
-
-from config import config
+from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
-from database.cache import valkey
-from urllib.parse import quote
 from aiogram.exceptions import TelegramBadRequest
 
-GUIDE_PHOTO_FILE_ID = "AgACAgIAAxkBA..." # Telegram serveridagi yuklangan rasm File ID'si (Tezkor yuklanish uchun)
+# Config yoki main'dan keladigan o'zgaruvchilar (misol tariqasida)
+from config import config  
 
-router = Router()
+router = Router(name="guide_router")
 logger = logging.getLogger(__name__)
 
-def get_guide_content(user: dict) -> tuple[str, types.InlineKeyboardMarkup]:
+# 🔥 Loyihangizdagi rasm File ID'sini shu yerga qo'ying yoki config'dan oling
+GUIDE_PHOTO_FILE_ID = getattr(config, "GUIDE_PHOTO_FILE_ID", "AgACAgIAAxkBAAM...") 
+
+
+# ======================================================
+# 🔥 DINAMIK TARKIB SHAKLLANTIRUVCHI YORDAMCHI FUNKSIYA
+# ======================================================
+def get_guide_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMarkup]:
     """
     Qo'llanma matni va klaviaturasini dinamik shakllantiruvchi yordamchi funksiya.
     L1 kesh ma'lumotlaridan UXni oshirish uchun foydalanamiz.
     """
+    # Middleware'dan user kelmasa fallback default qiymatlar
+    if not user:
+        user = {}
+
     user_id = user.get("user_id", 0)
     current_points = user.get("points", 0)
     is_vip = user.get("is_vip", False)
@@ -51,7 +57,7 @@ def get_guide_content(user: dict) -> tuple[str, types.InlineKeyboardMarkup]:
     )
 
     admin_username = "Khudoyqulov_pg"
-    raw_msg = f"Assalomu alaykum, yordam kerak. ID: {user_id}"
+    raw_msg = f"Assalomu alaykum, yordam kerak. ID: {user_id if user_id else 'Noma/lum'}"
     admin_url = f"https://t.me/{admin_username}?text={quote(raw_msg)}"
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -70,37 +76,53 @@ def get_guide_content(user: dict) -> tuple[str, types.InlineKeyboardMarkup]:
     return text, kb
 
 
-# 1-KIRISH: Matnli tugma bosilganda (Yangi xabar yuboriladi, rasm bilan)
+# ======================================================
+# 📑 1-KIRISH: TEXTLI TUGMA BOSILGANDA (RASM BILAN YUBORISH)
+# ======================================================
 @router.message(F.text == "❓ Qo'llanma")
-async def help_page_message(message: types.Message, user: dict, state: FSMContext):
+async def help_page_message(message: types.Message, state: FSMContext, user: Optional[dict] = None):
     """
     Reply klaviaturadan 'Qo'llanma' bosilganda ishlaydi.
     Rasm va dinamik tekst bilan ultra-tez (L1) javob beradi.
     """
     await state.clear()
+    
+    # 🔥 CRITICAL FIX: Agar middleware'dan user kelmasa, fonga xabar beramiz lekin bot o'chmaydi
+    if user is None:
+        logger.warning(f"⚠️ DbMiddleware 'user' bera olmadi (Message). User ID: {message.from_user.id}")
+        user = {"user_id": message.from_user.id}
+
     text, kb = get_guide_content(user)
 
     try:
-        # UX uchun rasm bilan yuborish (Brending uchun zo'r vizual beradi)
-        # Agar rasm hali yuklanmagan bo'lsa, shunchaki message.answer ishlatishingiz mumkin
+        # UX uchun rasm bilan yuborish
         await message.answer_photo(
             photo=GUIDE_PHOTO_FILE_ID,
             caption=text,
             reply_markup=kb
         )
-    except TelegramBadRequest:
-        # Agar File ID xato bo'lsa yoki topilmasa, fallback rejimida oddiy tekst yuboriladi
+    except (TelegramBadRequest, Exception) as e:
+        # Rasm o'chib ketgan bo'lsa yoki File ID xato bo'lsa fallback: oddiy tekst yuboriladi
+        logger.error(f"❌ answer_photo xatoligi, tekst rejimiga o'tildi: {e}")
         await message.answer(text=text, reply_markup=kb)
 
 
-# 2-KIRISH: Boshqa bo'limlardan "Ortga" qaytganda xabarni tahrirlash (Edit message)
+# ======================================================
+# 🔄 2-KIRISH: ORTGA QAYTGANDA XABARNI TAHRIRLASH
+# ======================================================
 @router.callback_query(F.data == "open_guide")
-async def help_page_callback(callback: types.CallbackQuery, user: dict, state: FSMContext):
+async def help_page_callback(callback: types.CallbackQuery, state: FSMContext, user: Optional[dict] = None):
     """
-    Boshqa bo'limlardan (masalan, VIP menyudan) 'Ortga' tugmasi bosilganda
-    ekranni o'chirmasdan qo'llanmani o'rniga tahrirlab qo'yadi.
+    Boshqa bo'limlardan 'Ortga' tugmasi bosilganda ekranni o'chirmasdan
+    qo'llanmani o'rniga tahrirlab qo'yadi.
     """
     await state.clear()
+    
+    # 🔥 CRITICAL FIX: Callback holatida ham user'ni xavfsiz tekshirish
+    if user is None:
+        logger.warning(f"⚠️ DbMiddleware 'user' bera olmadi (Callback). User ID: {callback.from_user.id}")
+        user = {"user_id": callback.from_user.id}
+
     text, kb = get_guide_content(user)
     
     try:
@@ -110,7 +132,9 @@ async def help_page_callback(callback: types.CallbackQuery, user: dict, state: F
         else:
             await callback.message.edit_text(text=text, reply_markup=kb)
     except TelegramBadRequest:
-        # Agar xabarda o'zgarish bo'lmasa xatolik bermasligi uchun
+        # Agar xabarda o'zgarish bo'lmasa, Aiogram xato tashlamasligi uchun yopamiz
         pass
+    except Exception as e:
+        logger.error(f"❌ Callback edit xatoligi: {e}")
     
     await callback.answer()
