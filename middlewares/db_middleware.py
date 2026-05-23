@@ -71,11 +71,24 @@ class DbSessionMiddleware(BaseMiddleware):
         super().__init__()
 
     async def __call__(self, handler, event, data):
-
         data["session_pool"] = self.session_pool
         user_obj: Optional[User] = data.get("event_from_user")
 
+        # ======================================================
+        # 🔥 CRITICAL FIX: Foydalanuvchi bo'lmasa xavfsiz fallback yaratish
+        # ======================================================
         if not user_obj:
+            data["user"] = {
+                "user_id": 0,
+                "username": "System",
+                "status": "system",
+                "points": 0,
+                "referral_count": 0,
+                "is_vip": False,
+                "vip_expire_date": None,
+                "is_system": True
+            }
+            data["session"] = SafeSession(None)
             return await handler(event, data)
 
         user_id = user_obj.id
@@ -84,24 +97,20 @@ class DbSessionMiddleware(BaseMiddleware):
         # 🔥 L1 CACHE (FASTEST)
         # ======================================================
         cached_l1 = state.l1_cache.get(user_id)
-
         if cached_l1:
             try:
-                # 🔥 LRU refresh (IMPORTANT)
                 state.l1_cache.set(user_id, cached_l1)
-
                 cached_copy = copy.deepcopy(cached_l1)
 
-                # username sync check
                 if (cached_copy.get("username") or "") != (user_obj.username or ""):
                     logger.info(f"🔄 Username updated (L1): {user_id}")
                     cached_copy["username"] = user_obj.username
+                    # Fonga berib yuboramiz, handler kutib qolmasligi uchun
+                    asyncio.create_task(self._enqueue_cache_update(cached_copy))
 
                 data["user"] = cached_copy
                 data["session"] = SafeSession(None)
-
                 logger.debug(f"⚡ L1 hit user_id={user_id}")
-
                 return await handler(event, data)
 
             except Exception as e:
@@ -113,25 +122,19 @@ class DbSessionMiddleware(BaseMiddleware):
         if valkey.is_alive:
             try:
                 cached_l2 = await valkey.get("db_users", user_id)
-
                 if cached_l2:
                     cached_l2 = dict(cached_l2)
 
-                    # username sync
                     if (cached_l2.get("username") or "") != (user_obj.username or ""):
                         logger.info(f"🔄 Username updated (L2): {user_id}")
-
                         cached_l2["username"] = user_obj.username
-                        await self._enqueue_cache_update(cached_l2)
+                        # FIX: await emas, fonga task qilib beramiz UX tezligi uchun
+                        asyncio.create_task(self._enqueue_cache_update(cached_l2))
 
-                    # promote to L1
                     state.l1_cache.set(user_id, copy.deepcopy(cached_l2))
-
                     data["user"] = cached_l2
                     data["session"] = SafeSession(None)
-
                     logger.debug(f"⚡ L2 hit user_id={user_id}")
-
                     return await handler(event, data)
 
             except Exception as e:
@@ -143,12 +146,9 @@ class DbSessionMiddleware(BaseMiddleware):
         async with state.db_lock:
             if not state.db_status:
                 if time.time() - state.db_last_retry < state.cb_recovery_time:
-
                     logger.warning(f"🚫 DB blocked (circuit open) user_id={user_id}")
-
                     data["user"] = self._emergency_user(user_obj)
                     data["session"] = SafeSession(None)
-
                     return await handler(event, data)
 
         # ======================================================
@@ -156,49 +156,35 @@ class DbSessionMiddleware(BaseMiddleware):
         # ======================================================
         try:
             async with self.session_pool() as session:
-
                 try:
                     start = time.time()
-
                     async with asyncio.timeout(2.5):
                         db_user = await UserRepository.get_or_create(session, user_obj)
 
                     duration = round(time.time() - start, 4)
-
                     user_data = self._model_to_dict(db_user)
-
-                    # deep copy for safety
                     safe_data = copy.deepcopy(user_data)
 
-                    # cache updates (async safe)
+                    # Fon rejimidagi kesh yangilanishi
                     asyncio.create_task(self._enqueue_cache_update(safe_data))
-
-                    # L1 update
                     state.l1_cache.set(user_id, safe_data)
 
                     data["user"] = user_data
                     data["session"] = SafeSession(session)
-
                     logger.info(f"🟢 DB HIT user_id={user_id} time={duration}s")
-
                     return await handler(event, data)
 
                 except Exception as e:
                     await self._handle_db_failure(e)
-
                     logger.exception(f"❌ DB ERROR user_id={user_id}")
-
                     data["user"] = self._emergency_user(user_obj)
                     data["session"] = SafeSession(None)
-
                     return await handler(event, data)
 
         except Exception as e:
             logger.critical(f"💥 DB POOL ERROR user_id={user_id}: {e}")
-
             data["user"] = self._emergency_user(user_obj)
             data["session"] = SafeSession(None)
-
             return await handler(event, data)
 
     # ======================================================
