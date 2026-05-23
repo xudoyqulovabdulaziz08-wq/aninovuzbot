@@ -111,3 +111,17 @@ def vip_buy_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton(text="👤 Kabinet", callback_data="cabinet")
     )
     return builder.as_markup()
+
+def cabinet_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    
+    if is_vip:
+        builder.row(types.InlineKeyboardButton(text="💫 VIP muddatini uzaytirish", callback_data="activate_vip"))
+    else:
+        builder.row(types.InlineKeyboardButton(text="💎 VIP sotib olish", callback_data="buy_vip_menu"))
+        
+    builder.row(
+        types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link"),
+        types.InlineKeyboardButton(text="🌐 Saytdagi profil", url="https://aninowuz.uz/profile")
+    )
+    return builder.as_markup()
