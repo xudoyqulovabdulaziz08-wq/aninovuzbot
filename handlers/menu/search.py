@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 
 # Kesh va boshqa modullar (o'zingizniki)
 from keyboards.inline import search_inline_kb 
@@ -77,12 +78,19 @@ async def search_by_name(callback_query: types.CallbackQuery, state: FSMContext)
         callback_data="back_to_search_menu"
     ))
     
-    await callback_query.message.edit_text(
-        "📝 <b>Iltimos, qidirilayotgan anime nomini kiriting:</b>",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
-
+    try:
+        await callback_query.message.edit_text(
+            "📝 <b>Iltimos, qidirilayotgan anime nomini kiriting:</b>",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            # Xabarni o'zgartirish shart emas, barchasi joyida
+            pass
+        else:
+            # Agar boshqa xatolik bo'lsa (masalan, xabar topilmadi), uni ko'taramiz
+            raise e
 
 
 
@@ -98,11 +106,19 @@ async def search_by_id(callback_query: types.CallbackQuery, state: FSMContext):
         callback_data="back_to_search_menu"
     ))
 
-    await callback_query.message.edit_text(
-        "🆔 <b>Iltimos, qidirilayotgan anime IDsini kiriting:</b>",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
+    try:
+        await callback_query.message.edit_text(
+            "🆔 <b>Iltimos, qidirilayotgan anime ID raqamini kiriting:</b>",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            # Xabarni o'zgartirish shart emas, barchasi joyida
+            pass
+        else:
+            # Agar boshqa xatolik bo'lsa (masalan, xabar topilmadi), uni ko'taramiz
+            raise e
 
 @router.callback_query(F.data == "search_by_genre")
 async def search_by_genre(callback_query: types.CallbackQuery, state: FSMContext):
@@ -115,8 +131,16 @@ async def search_by_genre(callback_query: types.CallbackQuery, state: FSMContext
         callback_data="back_to_search_menu"
     ))
 
-    await callback_query.message.edit_text(
-        "🆔 <b>Iltimos, qidirilayotgan anime janrini kiriting:</b>",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
+    try:
+        await callback_query.message.edit_text(
+            "🎭 <b>Iltimos, qidirilayotgan anime janrini kiriting:</b>",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            # Xabarni o'zgartirish shart emas, barchasi joyida
+            pass
+        else:
+            # Agar boshqa xatolik bo'lsa (masalan, xabar topilmadi), uni ko'taramiz
+            raise e
