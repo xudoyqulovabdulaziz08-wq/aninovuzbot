@@ -24,7 +24,7 @@ from handlers import (
     start 
 )
 from handlers.menu import(
-    qolnlanma
+    qolnlanma, reklama
 )
 
 logger = logging.getLogger("Main")
@@ -291,8 +291,8 @@ def main():
     # Routerlarni qo'shish
     # dp.include_routers(start.router)
     dp.include_router(start.router)
-    dp.include_router(qolnlanma.router)
-
+    dp.include_router(qolnlanma.router, reklama.router)
+    
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 

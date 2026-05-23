@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 # Agarda rasmni alohida faylda (masalan, config) saqlasangiz, o'sha yerdan chaqiring
 # Reklama bo'limi uchun alohida File ID ishlatsangiz bo'ladi
-ADVERTISEMENT_PHOTO_FILE_ID = "AgACAgIAAxkBAAFKaLBqEXjJE7WagX7tPbA0lvlspODk3wACtRtrG851kUgHt4HF2CzpNAEAAwIAA3cAAzsE"
+ADVERTISEMENT_PHOTO_FILE_ID = "AgACAgIAAxkBAAFKaZRqEX9aJdksu2s4ZBw2j7WiPwM7ewAC6xtrG851kUhC8OgMkhJIGAEAAwIAA3kAAzsE"
 
 router = Router(name="advertisement_router")
 logger = logging.getLogger(__name__)
@@ -51,10 +51,8 @@ def get_adv_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMark
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
             types.InlineKeyboardButton(text="📩 Adminga ariza yuborish", url=admin_url)
-        ],
-        [
-            types.InlineKeyboardButton(text="📊 Statistika (Tez kunda)", callback_data="adv_stats")
         ]
+        
         
     ])
 

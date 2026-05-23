@@ -13,7 +13,7 @@ router = Router(name="guide_router")
 logger = logging.getLogger(__name__)
 
 # 🔥 Loyihangizdagi rasm File ID'sini shu yerga qo'ying yoki config'dan oling
-GUIDE_PHOTO_FILE_ID = getattr(config, "GUIDE_PHOTO_FILE_ID", "AgACAgIAAxkBAAFKaJdqEXchjS-q7bZPU1xl-1Utm1EZ7QACqRtrG851kUjNcrx3yYhBOQEAAwIAA3gAAzsE") 
+GUIDE_PHOTO_FILE_ID = getattr(config, "GUIDE_PHOTO_FILE_ID", "AgACAgIAAxkBAAFKaWtqEX4ZZBnoIqvg4b1uXliNoJs-iAAC3xtrG851kUgpJfPIbaWCxgEAAwIAA3kAAzsE") 
 
 
 # ======================================================
@@ -63,13 +63,6 @@ def get_guide_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMa
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
             types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url=admin_url)
-        ],
-        [
-            types.InlineKeyboardButton(text="👤 Kabinet", callback_data="cabinet"),
-            types.InlineKeyboardButton(text="💎 VIP menyu", callback_data="buy_vip_menu"),
-        ],
-        [
-            types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link")
         ]
     ])
     
