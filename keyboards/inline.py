@@ -1,7 +1,7 @@
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
-from config import config
+
 
 CREATOR_ID = config.CREATOR_ID
 
@@ -28,7 +28,7 @@ def search_inline_kb(is_privileged: bool = False) -> types.InlineKeyboardMarkup:
     # 3. Janr va Sayt
     builder.row(
         types.InlineKeyboardButton(text="🎭 Janr bo'yicha", callback_data="search_by_genre"),
-        types.InlineKeyboardButton(text="🔗 Rasmiy sayt (Tez kunda)", url="https://aninovuz.uz")
+        types.InlineKeyboardButton(text="🔗 Rasmiy sayt", url="https://aninovuz.uz")
     )
 
     return builder.as_markup()
