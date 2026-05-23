@@ -49,8 +49,6 @@ def get_guide_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMa
         "🎯 <b>Referal dasturi:</b>\n"
         "Do'stlaringizni taklif qilib, har bir faol foydalanuvchi uchun ball yig'ing.\n\n"
         "📊 <b>Sizning holatingiz:</b>\n"
-        f"└ ✨ Ballaringiz: <code>{current_points} XP</code>\n"
-        f"└ 👑 VIP status: <b>{vip_status}</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📩 <b>Yordam kerakmi?</b>\n"
         "Savollar yoki takliflar bo'lsa, adminga murojaat qiling:"
