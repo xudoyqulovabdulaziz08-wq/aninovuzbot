@@ -1,5 +1,8 @@
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from database.models import DBUser
+from database.repository import UserRepository
+from database.cache import cache_manager
 from config import config
 
 
@@ -91,5 +94,21 @@ def get_ranked_kb():
     builder.row(
         types.InlineKeyboardButton(text="🎬 Anime Reyting", callback_data="Anime_ranked"),
         types.InlineKeyboardButton(text="🏆 User Reyting", callback_data="User_ranked")
+    )
+    return builder.as_markup()
+
+
+def vip_buy_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    
+    # is_vip argumenti orqali tugma nomini avtomatik tanlaymiz
+    if is_vip:
+        builder.row(types.InlineKeyboardButton(text="💫 VIP uzaytirish", callback_data="activate_vip"))
+    else:
+        builder.row(types.InlineKeyboardButton(text="💎 100 ballga VIP sotib olish", callback_data="activate_vip"))
+        
+    builder.row(
+        types.InlineKeyboardButton(text="🎁 Ball yig'ish", callback_data="get_ref_link"),
+        types.InlineKeyboardButton(text="👤 Kabinet", callback_data="cabinet")
     )
     return builder.as_markup()

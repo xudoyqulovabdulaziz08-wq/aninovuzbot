@@ -8,6 +8,8 @@ from aiogram.exceptions import TelegramBadRequest
 from config import config
 
 from keyboards.inline import get_ranked_kb
+
+
 router = Router(name="reyting_router")
 logger = logging.getLogger(__name__)
 
