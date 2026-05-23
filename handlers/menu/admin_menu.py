@@ -60,7 +60,7 @@ async def creator_panel_handler(event: types.Message | types.CallbackQuery, stat
             await event.answer("🚫 Bu bo'lim faqat Creator uchun!")
         return
 
-    kb = creator_panel_kb(user_id=user_id, user_status="creator")
+    kb = creator_panel_kb(creator_id=user_id)
 
     text = (
         f"👑 <b>CREATOR PANEL</b>\n"

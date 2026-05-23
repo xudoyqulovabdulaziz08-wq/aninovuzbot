@@ -67,19 +67,18 @@ def admin_panel_kb(user_id: int, user_status: str) -> types.InlineKeyboardMarkup
     return builder.as_markup()
 
 
-def creator_panel_kb(Creator_ID: str) -> types.InlineKeyboardMarkup:
+# creator_id ni int qilib o'zgartirdik va ortiqcha 'user_status' ni olib tashladik
+def creator_panel_kb(creator_id: int) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
-    if Creator_ID == config.CREATOR_ID:
-        # Katta tugma alohida qatorda
+    # config.CREATOR_ID ham int bo'lishi kerak
+    if creator_id == config.CREATOR_ID:
         builder.row(
             types.InlineKeyboardButton(text="👑 Barcha adminlarni boshqarish", callback_data="creator_manage_admins")
         )
-        # Kichikroq tugmalar yonma-yon bitta qatorda
         builder.row(
             types.InlineKeyboardButton(text="📊 To'liq statistika", callback_data="creator_statistics"),
             types.InlineKeyboardButton(text="🗄️ Baza control", callback_data="creator_db_panel")
         )
     
     return builder.as_markup()
-
