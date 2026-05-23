@@ -20,12 +20,10 @@ logger = logging.getLogger(__name__)
 
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
-async def buy_vip_menu(
-    event: types.Message | types.CallbackQuery, 
-    state: FSMContext, 
-    user: dict, 
-    session: Any
-):
+async def buy_vip_menu(event: types.Message, state: FSMContext, **data):
+    user = data.get("user")
+    session = data.get("session")
+    
     is_vip = user.get("is_vip", False)
     points = user.get("points", 0)
     
