@@ -20,7 +20,7 @@ from config import config
 
 # Router importlari (Faqat bitta joyda tartibli ulanadi)
 from handlers import start
-from handlers.menu import qolnlanma, reklama
+from handlers.menu import ( qolnlanma, reklama)
 
 logger = logging.getLogger("Main")
 
@@ -206,23 +206,23 @@ def main():
         format="%(asctime)s | %(name)s | %(levelname)s | %(message)s"
     )
 
-    # 1. Bot va bitta unifikatsiyalangan Dispatcher yaratish (Shadowing fix)
+    # 1. Bot va bitta unifikatsiyalangan Dispatcher yaratish
     bot = Bot(
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = Dispatcher()
 
-    # 2. Routerlarni global dispatcherga ulash
+    # 2. Routerlarni global dispatcherga ulash (Ketma-ketlik muhim!)
     dp.include_router(start.router)
     dp.include_router(qolnlanma.router)
     dp.include_router(reklama.router)
 
-    # Fallback echo handler (Faqat routerlardan o'tib ketgan xabarlar uchun)
+    # 🟢 FALLBACK ECHO HANDLER: Faqat yuqoridagi routerlarga tushmagan xabarlarni tutadi
     @dp.message()
     async def echo_handler(message: types.Message):
         logger.info(f"Incoming unhandled message from {message.from_user.id}: {message.text}")
-        await message.answer("Men ishlayapman!")
+        await message.answer("⚠️ Noma'lum buyruq. Iltimos, menyudan foydalaning.")
 
     # Startup va Shutdown signallarini ro'yxatdan o'tkazish
     dp.startup.register(on_startup)
@@ -236,7 +236,7 @@ def main():
         return web.Response(text="AniNowuz Bot is live and healthy!", status=200)
     app.router.add_get('/', render_health_check)
 
-    # 4. ADMIN DASHBOARD ENDPOINTLARI (Integratsiya qilindi)
+    # 4. ADMIN DASHBOARD ENDPOINTLARI (FIXED)
     async def admin_health(_):
         return web.json_response({"status": "ok", "mode": "ultra", "engine": "Valkey-AI"})
 
@@ -254,11 +254,29 @@ def main():
     async def dlq_view(_):
         try:
             if valkey.redis:
-                data = await valkey.redis.lrange("{outbox}:dlq", 0, 49)
-                return web.json_response([d.decode("utf-8") for d in data])
-            return web.json_response({"error": "Valkey disconnected"})
+                # 💡 FIX: Worker yozadigan real kalitlar tekshiriladi
+                # Sharded bo'lgani uchun barcha shard kalitlaridan yoki asosiy outbox navbatidan o'qiladi
+                # Quyida eng ko'p xato yig'iladigan 'dlq:outbox' va 'cache:dlq' nazarda tutilgan
+                data = await valkey.redis.lrange("dlq:outbox", 0, 49)
+                
+                # Agar klasterli sharding ishlatayotgan bo'lsangiz va kalit topilmasa, muqobil kalit:
+                if not data:
+                    data = await valkey.redis.lrange("{shard:0}:dlq:outbox", 0, 49)
+
+                # 💡 FIX: JSON stringni real obyektga o'girib, chiroyli JSON holatda qaytaramiz
+                cleaned_data = []
+                for d in data:
+                    try:
+                        cleaned_data.append(orjson.loads(d))
+                    except Exception:
+                        cleaned_data.append(d.decode("utf-8")) # Agar string bo'lsa fallback
+                
+                return web.json_response(cleaned_data)
+                
+            return web.json_response({"error": "Valkey disconnected"}, status=503)
         except Exception as e:
-            return web.json_response({"error": str(e)})
+            logger.error(f"Error in admin dlq endpoint: {e}")
+            return web.json_response({"error": str(e)}, status=500)
 
     # Admin routerlarini asosiy ilovaga qo'shish
     app.router.add_get("/admin/health", admin_health)
@@ -277,7 +295,7 @@ def main():
     server_port = int(os.getenv("PORT", config.PORT))
     logger.info(f"🚀 SERVER STARTING ON PORT {server_port}")
     
-    # Ilovani ishga tushirish (Siklni bloklovchi asosiy nuqta)
+    # Ilovani ishga tushirish
     web.run_app(app, host="0.0.0.0", port=server_port)
 
 
