@@ -103,21 +103,18 @@ class DbSessionMiddleware(BaseMiddleware):
         data["session_pool"] = self.session_pool
         user_obj: Optional[User] = data.get("event_from_user")
 
-        # System/Channel/Chat postlari uchun xavfsiz fallback layer
+        # 1. System/Channel/Chat uchun fallback
         if not user_obj:
             data["user"] = {
-                "user_id": 0,
-                "username": "System",
-                "status": "system",
-                "points": 0,
-                "referral_count": 0,
-                "is_vip": False,
-                "vip_expire_date": None,
-                "is_system": True
+                "user_id": 0, "username": "System", "status": "system",
+                "points": 0, "referral_count": 0, "is_vip": False,
+                "vip_expire_date": None, "is_system": True
             }
             data["session"] = SafeSession(None)
+            # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
+        if "user" not in data or data["user"] is None:
+            data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
             return await handler(event, data)
-
         user_id = user_obj.id
 
         # ======================================================
@@ -132,6 +129,9 @@ class DbSessionMiddleware(BaseMiddleware):
 
             data["user"] = cached_l1
             data["session"] = SafeSession(None)  # Kesh ishladi -> sessiya ochilmaydi
+            # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
+        if "user" not in data or data["user"] is None:
+            data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
             return await handler(event, data)
 
         # ======================================================
@@ -152,6 +152,9 @@ class DbSessionMiddleware(BaseMiddleware):
                     await state.l1_cache.set(user_id, cached_l2)
                     data["user"] = cached_l2
                     data["session"] = SafeSession(None)
+                    # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
+                    if "user" not in data or data["user"] is None:
+                        data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
                     return await handler(event, data)
 
             except Exception as e:
@@ -175,34 +178,33 @@ class DbSessionMiddleware(BaseMiddleware):
         session = self.session_pool()
         try:
             start_time = time.time()
-            async with asyncio.timeout(3.0):  # Yuklama ostida timeout biroz oshirildi (3.0s)
+            # Timeout va baza operatsiyasi
+            async with asyncio.timeout(3.0):
                 db_user = await UserRepository.get_or_create(session, user_obj)
 
-            duration = round(time.time() - start_time, 4)
             user_data = self._model_to_dict(db_user)
-
-            # L1 va L2 keshlarini yangilash buyrug'ini yuborish
             await state.l1_cache.set(user_id, user_data)
             self._fire_and_forget_cache_update(user_data)
 
             data["user"] = copy.deepcopy(user_data)
-            data["session"] = SafeSession(session)  # Handler ichida tranzaksiya qilishga ruxsat
+            data["session"] = SafeSession(session)
             
-            logger.info(f"🟢 DB HIT user_id={user_id} duration={duration}s")
-            
-            # Handlerni sessiya ochiq holatda ishga tushiramiz
+            # Handler chaqiruvini o'zgaruvchiga olamiz
             return await handler(event, data)
 
         except Exception as e:
             await self._handle_db_failure(e)
             logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
+            
+            # Xatolik yuz berganda xavfsiz user va bo'sh sessiya
             data["user"] = self._emergency_user(user_obj)
             data["session"] = SafeSession(None)
             return await handler(event, data)
             
         finally:
-            # Handler tugagandan so'ng (yoki xato bo'lganda) sessiyani toza yopish
-            await session.close()
+            # 'session' borligini tekshirish xavfsizroq
+            if 'session' in locals() and session:
+                await session.close()
 
     # ======================================================
     # 🔥 SAFE FIRE-AND-FORGET GARBAGE COLLECTOR PROOF

@@ -21,9 +21,15 @@ logger = logging.getLogger(__name__)
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
 async def buy_vip_menu(event: types.Message, state: FSMContext, **data):
+    # 1. User ni xavfsiz olish
     user = data.get("user")
-    session = data.get("session")
     
+    # 2. Xavfsizlik tekshiruvi (AGAR USER NONE BO'LSA)
+    if user is None:
+        await event.answer("⚠️ Tizim xatosi: Foydalanuvchi ma'lumotlari topilmadi. Iltimos, /start bosing.")
+        return
+
+    # 3. Endi 'user' None emasligiga ishonchimiz komil
     is_vip = user.get("is_vip", False)
     points = user.get("points", 0)
     
