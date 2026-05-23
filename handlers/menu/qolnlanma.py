@@ -13,7 +13,7 @@ router = Router(name="guide_router")
 logger = logging.getLogger(__name__)
 
 # 🔥 Loyihangizdagi rasm File ID'sini shu yerga qo'ying yoki config'dan oling
-GUIDE_PHOTO_FILE_ID = getattr(config, "GUIDE_PHOTO_FILE_ID", "AgACAgIAAxkBAAM...") 
+GUIDE_PHOTO_FILE_ID = getattr(config, "GUIDE_PHOTO_FILE_ID", "AgACAgIAAxkBAAFKaJdqEXchjS-q7bZPU1xl-1Utm1EZ7QACqRtrG851kUjNcrx3yYhBOQEAAwIAA3gAAzsE") 
 
 
 # ======================================================
