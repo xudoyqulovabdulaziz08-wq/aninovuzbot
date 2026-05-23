@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from config import config
 from database.repository import UserRepository
-from keyboards.inline import get_vip_kb
+from keyboards.inline import vip_buy_kb
 
 router = Router(name="vip_router")
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
         "👇 VIP faollashtirish uchun tugmani bosing:"
     )
     
-    kb = get_vip_kb(is_vip=is_vip) # Klaviatura statusga qarab o'zgarishi mumkin
+    kb = vip_buy_kb(is_vip=is_vip) # Klaviatura statusga qarab o'zgarishi mumkin
     
     if isinstance(event, types.Message):
         await event.answer(text, reply_markup=kb, parse_mode="HTML")
