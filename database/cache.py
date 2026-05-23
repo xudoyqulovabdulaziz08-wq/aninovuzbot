@@ -359,7 +359,8 @@ class CacheManager:
         while self.is_alive:
             event = await q.get()
 
-            if event["type"] == "SET":
+            # Agar xabar aynan shu bot nusxasidan chiqqan bo'lsa, L1 keshni o'chirmaymiz!
+            if event["type"] == "SET" and event.get("node") != self.node_id:
                 async with self._l1_lock:
                     self._l1_cache.pop(event["key"], None)
 

@@ -11,72 +11,99 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from database.cache import valkey
 from database.repository import UserRepository
-from services.orchestrator import state
+from services.orchestrator import state, metrics
 
 logger = logging.getLogger("DbMiddleware")
 
 
 # ======================================================
-# 🔥 L1 CACHE (LRU SAFE IMPLEMENTATION)
+# 🔥 L1 CACHE (LRU SAFE IMPLEMENTATION WITH THREAD-SAFETY)
 # ======================================================
 class L1Cache:
     def __init__(self, max_size: int = 5000):
         self.max_size = max_size
         self._cache = OrderedDict()
+        self._lock = asyncio.Lock()  # Konkurent so'rovlar uchun xavfsizlik balansi
 
-    def get(self, key):
-        if key not in self._cache:
-            return None
-        self._cache.move_to_end(key)
-        return self._cache[key]
-
-    def set(self, key, value):
-        if key in self._cache:
+    async def get(self, key) -> Optional[Dict[str, Any]]:
+        async with self._lock:
+            if key not in self._cache:
+                return None
             self._cache.move_to_end(key)
+            # Keshdan olingan ma'lumotni mutatsiyadan asrash uchun nusxasini qaytaramiz
+            return copy.deepcopy(self._cache[key])
 
-        self._cache[key] = value
+    async def set(self, key, value):
+        async with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            
+            # Ichki xotiradagi ma'lumot faqat toza nusxa bo'lishi shart
+            self._cache[key] = copy.deepcopy(value)
 
-        if len(self._cache) > self.max_size:
-            removed = self._cache.popitem(last=False)
-            logger.debug(f"🧹 L1 cache evicted: user_id={removed[0]}")
+            if len(self._cache) > self.max_size:
+                removed = self._cache.popitem(last=False)
+                logger.debug(f"🧹 L1 cache evicted: user_id={removed[0]}")
 
     def size(self):
         return len(self._cache)
 
 
-# global L1 cache
+# Global L1 keshni xavfsiz ishga tushirish
 state.l1_cache = L1Cache(max_size=5000)
 
+# Circuit Breaker boshlang'ich holatlarini xavfsiz tekshirish/yuklash
+if not hasattr(state, 'db_status'): state.db_status = True
+if not hasattr(state, 'db_fail_count'): state.db_fail_count = 0
+if not hasattr(state, 'db_last_retry'): state.db_last_retry = 0.0
+if not hasattr(state, 'db_lock'): state.db_lock = asyncio.Lock()
+if not hasattr(state, 'cb_threshold'): state.cb_threshold = 5
+if not hasattr(state, 'cb_recovery_time'): state.cb_recovery_time = 30.0
+
 
 # ======================================================
-# 🔥 SAFE SESSION WRAPPER
+# 🔥 SAFE SESSION PROXY (CONTEXT-AWARE MULTI-MODE)
 # ======================================================
 class SafeSession:
+    """
+    Kesh rejimida bazaga ulanish taqiqlanganini nazorat qiluvchi,
+    baza rejimida esa barcha metodlarni (jumladan context managerlarni) transparent o'tkazuvchi proxy.
+    """
     def __init__(self, session):
-        self._session = session
+        self.__dict__["_session"] = session
+
+    async def __aenter__(self):
+        if self._session is None:
+            raise RuntimeError("❌ DB session is None (cache-only mode). Can't use context manager!")
+        return await self._session.__aenter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._session is None:
+            return
+        return await self._session.__aexit__(exc_type, exc_val, exc_tb)
 
     def __getattr__(self, item):
         if self._session is None:
-            raise RuntimeError("❌ DB session is None (cache-only mode)")
+            raise RuntimeError(f"❌ DB session is None (cache-only mode). Can't access .{item}")
         return getattr(self._session, item)
 
 
 # ======================================================
-# 🔥 MIDDLEWARE
+# 🔥 MIDDLEWARE CORE
 # ======================================================
 class DbSessionMiddleware(BaseMiddleware):
 
     def __init__(self, session_pool: async_sessionmaker):
         self.session_pool = session_pool
+        # GC urib yubormasligi uchun fondagi vazifalarni vaqtincha saqlash to'plami
+        self._background_tasks = set()
         super().__init__()
 
     async def __call__(self, handler, event, data):
         data["session_pool"] = self.session_pool
         user_obj: Optional[User] = data.get("event_from_user")
 
-        # ======================================================
-        # 🔥 CRITICAL FIX: Foydalanuvchi bo'lmasa xavfsiz fallback yaratish
-        # ======================================================
+        # System/Channel/Chat postlari uchun xavfsiz fallback layer
         if not user_obj:
             data["user"] = {
                 "user_id": 0,
@@ -94,102 +121,98 @@ class DbSessionMiddleware(BaseMiddleware):
         user_id = user_obj.id
 
         # ======================================================
-        # 🔥 L1 CACHE (FASTEST)
+        # 🔥 LEVEL 1: IN-MEMORY LRU CACHE (FAST PATH)
         # ======================================================
-        cached_l1 = state.l1_cache.get(user_id)
+        cached_l1 = await state.l1_cache.get(user_id)
         if cached_l1:
-            try:
-                state.l1_cache.set(user_id, cached_l1)
-                cached_copy = copy.deepcopy(cached_l1)
+            if (cached_l1.get("username") or "") != (user_obj.username or ""):
+                logger.info(f"🔄 Username updated (L1): {user_id}")
+                cached_l1["username"] = user_obj.username
+                self._fire_and_forget_cache_update(cached_l1)
 
-                if (cached_copy.get("username") or "") != (user_obj.username or ""):
-                    logger.info(f"🔄 Username updated (L1): {user_id}")
-                    cached_copy["username"] = user_obj.username
-                    # Fonga berib yuboramiz, handler kutib qolmasligi uchun
-                    asyncio.create_task(self._enqueue_cache_update(cached_copy))
-
-                data["user"] = cached_copy
-                data["session"] = SafeSession(None)
-                logger.debug(f"⚡ L1 hit user_id={user_id}")
-                return await handler(event, data)
-
-            except Exception as e:
-                logger.exception(f"❌ L1 CACHE ERROR user_id={user_id}: {e}")
+            data["user"] = cached_l1
+            data["session"] = SafeSession(None)  # Kesh ishladi -> sessiya ochilmaydi
+            return await handler(event, data)
 
         # ======================================================
-        # 🔥 L2 CACHE (VALKEY/REDIS)
+        # 🔥 LEVEL 2: VALKEY/REDIS DISTRIBUTED CACHE
         # ======================================================
         if valkey.is_alive:
             try:
-                cached_l2 = await valkey.get("db_users", user_id)
+                # Key pattern loyiha standartiga moslashtirildi `{db_users}`
+                cached_l2 = await valkey.get("{db_users}", user_id)
                 if cached_l2:
                     cached_l2 = dict(cached_l2)
 
                     if (cached_l2.get("username") or "") != (user_obj.username or ""):
                         logger.info(f"🔄 Username updated (L2): {user_id}")
                         cached_l2["username"] = user_obj.username
-                        # FIX: await emas, fonga task qilib beramiz UX tezligi uchun
-                        asyncio.create_task(self._enqueue_cache_update(cached_l2))
+                        self._fire_and_forget_cache_update(cached_l2)
 
-                    state.l1_cache.set(user_id, copy.deepcopy(cached_l2))
+                    await state.l1_cache.set(user_id, cached_l2)
                     data["user"] = cached_l2
                     data["session"] = SafeSession(None)
-                    logger.debug(f"⚡ L2 hit user_id={user_id}")
                     return await handler(event, data)
 
             except Exception as e:
-                logger.exception(f"❌ L2 CACHE ERROR user_id={user_id}: {e}")
+                logger.exception(f"❌ L2 CACHE FAILURE user_id={user_id}: {e}")
 
         # ======================================================
-        # 🔥 CIRCUIT BREAKER CHECK
+        # 🔥 CIRCUIT BREAKER CHECK (PROTECTION LAYER)
         # ======================================================
         async with state.db_lock:
             if not state.db_status:
                 if time.time() - state.db_last_retry < state.cb_recovery_time:
-                    logger.warning(f"🚫 DB blocked (circuit open) user_id={user_id}")
+                    logger.warning(f"🚫 DB blocked (circuit open). Emergency mode for user_id={user_id}")
                     data["user"] = self._emergency_user(user_obj)
                     data["session"] = SafeSession(None)
                     return await handler(event, data)
 
         # ======================================================
-        # 🔥 DATABASE ACCESS (SLOW PATH)
+        # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
         # ======================================================
+        # Tranzaksiya hayotiy tsikli (Lifecycle) handler to'liq tugaguncha ochiq qolishi shart!
+        session = self.session_pool()
         try:
-            async with self.session_pool() as session:
-                try:
-                    start = time.time()
-                    async with asyncio.timeout(2.5):
-                        db_user = await UserRepository.get_or_create(session, user_obj)
+            start_time = time.time()
+            async with asyncio.timeout(3.0):  # Yuklama ostida timeout biroz oshirildi (3.0s)
+                db_user = await UserRepository.get_or_create(session, user_obj)
 
-                    duration = round(time.time() - start, 4)
-                    user_data = self._model_to_dict(db_user)
-                    safe_data = copy.deepcopy(user_data)
+            duration = round(time.time() - start_time, 4)
+            user_data = self._model_to_dict(db_user)
 
-                    # Fon rejimidagi kesh yangilanishi
-                    asyncio.create_task(self._enqueue_cache_update(safe_data))
-                    state.l1_cache.set(user_id, safe_data)
+            # L1 va L2 keshlarini yangilash buyrug'ini yuborish
+            await state.l1_cache.set(user_id, user_data)
+            self._fire_and_forget_cache_update(user_data)
 
-                    data["user"] = user_data
-                    data["session"] = SafeSession(session)
-                    logger.info(f"🟢 DB HIT user_id={user_id} time={duration}s")
-                    return await handler(event, data)
-
-                except Exception as e:
-                    await self._handle_db_failure(e)
-                    logger.exception(f"❌ DB ERROR user_id={user_id}")
-                    data["user"] = self._emergency_user(user_obj)
-                    data["session"] = SafeSession(None)
-                    return await handler(event, data)
+            data["user"] = copy.deepcopy(user_data)
+            data["session"] = SafeSession(session)  # Handler ichida tranzaksiya qilishga ruxsat
+            
+            logger.info(f"🟢 DB HIT user_id={user_id} duration={duration}s")
+            
+            # Handlerni sessiya ochiq holatda ishga tushiramiz
+            return await handler(event, data)
 
         except Exception as e:
-            logger.critical(f"💥 DB POOL ERROR user_id={user_id}: {e}")
+            await self._handle_db_failure(e)
+            logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
             data["user"] = self._emergency_user(user_obj)
             data["session"] = SafeSession(None)
             return await handler(event, data)
+            
+        finally:
+            # Handler tugagandan so'ng (yoki xato bo'lganda) sessiyani toza yopish
+            await session.close()
 
     # ======================================================
-    # 🔥 CACHE QUEUE
+    # 🔥 SAFE FIRE-AND-FORGET GARBAGE COLLECTOR PROOF
     # ======================================================
+    def _fire_and_forget_cache_update(self, user_data: Dict[str, Any]):
+        """GC urib yubormasligi kafolatlangan fondagi kesh yangilash taski"""
+        task = asyncio.create_task(self._enqueue_cache_update(copy.deepcopy(user_data)))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     async def _enqueue_cache_update(self, user_data: Dict[str, Any]):
         try:
             state.cache_queue.put_nowait(user_data)
@@ -199,11 +222,8 @@ class DbSessionMiddleware(BaseMiddleware):
                 logger.warning(f"⚠️ Cache queue overflow, dropped: {dropped.get('user_id')}")
                 state.cache_queue.put_nowait(user_data)
             except Exception as e:
-                logger.error(f"❌ Cache queue fatal error: {e}")
+                logger.error(f"❌ Cache queue push exception: {e}")
 
-    # ======================================================
-    # 🔥 MODEL SERIALIZER
-    # ======================================================
     def _model_to_dict(self, db_user) -> Dict[str, Any]:
         return {
             "user_id": db_user.user_id,
@@ -218,10 +238,7 @@ class DbSessionMiddleware(BaseMiddleware):
             )
         }
 
-    # ======================================================
-    # 🔥 EMERGENCY MODE
-    # ======================================================
-    def _emergency_user(self, user_obj: User):
+    def _emergency_user(self, user_obj: User) -> Dict[str, Any]:
         return {
             "user_id": user_obj.id,
             "username": user_obj.username,
@@ -233,17 +250,12 @@ class DbSessionMiddleware(BaseMiddleware):
             "is_emergency": True
         }
 
-    # ======================================================
-    # 🔥 CIRCUIT BREAKER
-    # ======================================================
     async def _handle_db_failure(self, e):
         async with state.db_lock:
             state.db_fail_count += 1
-
-            logger.warning(f"⚠️ DB fail count: {state.db_fail_count}")
+            logger.warning(f"⚠️ Circuit Breaker Fail Counter: {state.db_fail_count}")
 
             if state.db_fail_count >= state.cb_threshold:
                 state.db_status = False
                 state.db_last_retry = time.time()
-
-                logger.critical(f"🚨 CIRCUIT BREAKER OPEN: {e}")
+                logger.critical(f"🚨 CIRCUIT BREAKER STEPPED IN (OPENED): {e}")

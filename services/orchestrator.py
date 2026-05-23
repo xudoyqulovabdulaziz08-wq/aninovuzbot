@@ -1,5 +1,3 @@
-# services/orchestrator.py
-
 import asyncio
 import logging
 import time
@@ -17,10 +15,10 @@ logger = logging.getLogger("AI-Orchestrator")
 @dataclass
 class AIMetrics:
     total_requests: int = 0
-    cache_hits_l1: int = 0
-    cache_hits_l2: int = 0
-    cache_misses: int = 0
-
+    cache_writes_l1: int = 0  # To'g'ri nomlandi (Hit emas, Write)
+    cache_writes_l2: int = 0
+    
+    # RAM to'lib ketmasligi uchun vaqti-vaqti bilan tozalanadigan issiqlik lug'ati
     hot_users: Dict[int, int] = field(default_factory=lambda: defaultdict(int))
 
     avg_latency: float = 0.0
@@ -40,31 +38,39 @@ class AppState:
     )
 
     l1_max_size: int = 8000
-
     is_running: bool = True
 
-    # adaptive engine
+    # adaptive engine speed
     dynamic_sleep: float = 0.01
 
     # prediction cache (AI TTL simulation)
     user_score: Dict[int, float] = field(default_factory=lambda: defaultdict(float))
+    
+    # Issiqlik xaritasini tozalash intervali (masalan, har 10 minutda)
+    last_decay_time: float = field(default_factory=time.time)
 
 
 state = AppState()
 
 
-# ================= AI: HOT USER DETECTION =================
+# ================= AI: HOT USER DETECTION (SAFE MEMORY) =================
 def update_user_heat(user_id: int):
     """
-    AI-style behavior tracking
+    AI-style behavior tracking with memory expiration.
     """
-    metrics.hot_users[user_id] += 1
+    # Vaqti-vaqti bilan eski foydalanuvchilar lug'atini tozalash (Memory Leak Fix)
+    current_time = time.time()
+    if current_time - state.last_decay_time > 600:  # Har 10 minutda
+        logger.info("🧹 Decaying AI user heat map to free memory...")
+        metrics.hot_users.clear()
+        state.user_score.clear()
+        state.last_decay_time = current_time
 
-    # normalize score
+    metrics.hot_users[user_id] += 1
     score = metrics.hot_users[user_id]
 
     if score > 50:
-        state.user_score[user_id] = 0.2   # VERY HOT → long cache
+        state.user_score[user_id] = 0.2   # VERY HOT → uzoq muddatli kesh (Aninowuz)
     elif score > 20:
         state.user_score[user_id] = 0.5   # medium hot
     else:
@@ -73,133 +79,136 @@ def update_user_heat(user_id: int):
 
 def predict_ttl(user_id: int) -> int:
     """
-    AI TTL prediction engine
+    AI TTL prediction engine based on behavior scores
     """
     score = state.user_score.get(user_id, 1.0)
 
-    # hot users → longer cache
     if score < 0.3:
-        return 3600   # 1 hour
+        return 3600   # 1 soat (Ko'p ko'rilayotgan anime/foydalanuvchi ma'lumoti)
     elif score < 0.7:
-        return 1800   # 30 min
+        return 1800   # 30 minut
     else:
-        return 600    # 10 min
+        return 600    # 10 minut
 
 
-# ================= L1 CACHE =================
+# ================= L1 CACHE MANAGEMENT =================
 def l1_set(user_id: int, data: Dict[str, Any]):
+    """LRU uslubida ishlaydigan xavfsiz L1 xotira keshi"""
+    if user_id in state.l1_cache:
+        state.l1_cache.move_to_end(user_id)
     state.l1_cache[user_id] = data
-    state.l1_cache.move_to_end(user_id)
 
     if len(state.l1_cache) > state.l1_max_size:
-        state.l1_cache.popitem(last=False)
+        state.l1_cache.popitem(last=False)  # Eng birinchi (eski) elementni o'chirish
 
 
 # ================= MAIN ORCHESTRATOR =================
 async def cache_orchestrator():
     """
-    🚀 AI CACHE BRAIN ENGINE
+    🚀 AI CACHE BRAIN ENGINE - High Throughput, Cluster-Safe
     """
-
-    logger.info("🧠 AI CACHE ORCHESTRATOR STARTED")
+    logger.info("🧠 AI CACHE ORCHESTRATOR STARTED (PRO MODE)")
 
     while state.is_running:
-        batch: List[Dict[str, Any]] = []
+        raw_batch: List[Dict[str, Any]] = []
         start_time = time.time()
 
         try:
-            # ================= WAIT FIRST =================
+            # Queue-dan birinchi elementni bloklanib kutish
             item = await state.cache_queue.get()
-            batch.append(item)
+            raw_batch.append(item)
 
-            # ================= BATCH COLLECT =================
-            for _ in range(300):  # HIGH THROUGHPUT MODE
+            # High-Throughput: Qolgan elementlarni tezda yig'ib olish (Non-blocking)
+            for _ in range(300):
                 try:
-                    batch.append(state.cache_queue.get_nowait())
+                    raw_batch.append(state.cache_queue.get_nowait())
                 except asyncio.QueueEmpty:
                     break
 
-            # ================= PROCESS =================
-            redis_pipe = None
+            # ================= DEDUPLICATION (OPTIMIZATION) =================
+            # Agar bitta batch ichida bir xil foydalanuvchining ko'p so'rovlari bo'lsa,
+            # faqat eng oxirgisini qoldiramiz (Valkey/Redis yuklamasini kamaytiradi)
+            deduplicated_batch = {}
+            for entry in raw_batch:
+                u_id = entry.get("user_id")
+                if u_id:
+                    deduplicated_batch[u_id] = entry
 
+            # ================= PROCESS BATCH =================
+            redis_pipe = None
             if valkey.is_alive and valkey.redis:
+                # Asinxron drayver pipeline yaratish
                 redis_pipe = valkey.redis.pipeline(transaction=False)
 
-            for entry in batch:
-                user_id = entry.get("user_id")
-
-                if not user_id:
-                    continue
-
+            for user_id, entry in deduplicated_batch.items():
                 metrics.total_requests += 1
                 update_user_heat(user_id)
 
-                # TTL prediction
+                # AI model orqali optimal TTL aniqlash
                 ttl = predict_ttl(user_id)
 
-                # ================= L1 CACHE =================
+                # 1. L1 Local Memory Cache-ga yozish
                 l1_set(user_id, entry)
-                metrics.cache_hits_l1 += 1
+                metrics.cache_writes_l1 += 1
 
-                # ================= L2 CACHE (REDIS) =================
+                # 2. L2 Distributed Valkey/Redis Cache-ga pipeline orqali yozish
                 if redis_pipe:
-                    key = f"ai:users:{user_id}:v1"
-
+                    # Redis Cluster uchun mos keluvchi Hash Tags {...} pattern
+                    key = f"{{ai:users}}:{user_id}:v1"
                     redis_pipe.set(
                         key,
                         orjson.dumps(entry),
                         ex=ttl
                     )
+                    metrics.cache_writes_l2 += 1
 
-            # ================= EXECUTE REDIS =================
-            if redis_pipe:
+            # ================= EXECUTE PIPELINE ASYNC =================
+            if redis_pipe and len(deduplicated_batch) > 0:
                 try:
                     await redis_pipe.execute()
                 except Exception as e:
-                    logger.error(f"Redis pipeline error: {e}")
+                    logger.error(f"❌ Valkey Pipeline execution error: {e}")
 
-            # ================= METRICS =================
-            metrics.last_batch_size = len(batch)
+            # Queue-ga ishlangan elementlar sonini bildirish
+            for _ in range(len(raw_batch)):
+                state.cache_queue.task_done()
 
+            # ================= METRICS UPDATE =================
+            metrics.last_batch_size = len(raw_batch)
             latency = time.time() - start_time
             metrics.avg_latency = (metrics.avg_latency * 0.9) + (latency * 0.1)
 
-            # ================= ADAPTIVE SPEED =================
-            if len(batch) > 200:
-                state.dynamic_sleep = max(0.001, state.dynamic_sleep * 0.7)
-            elif len(batch) < 50:
-                state.dynamic_sleep = min(0.05, state.dynamic_sleep * 1.1)
+            # ================= ADAPTIVE SPEED ENGINE =================
+            if len(raw_batch) > 200:
+                state.dynamic_sleep = max(0.001, state.dynamic_sleep * 0.7)  # Tezlashtirish
+            elif len(raw_batch) < 50:
+                state.dynamic_sleep = min(0.05, state.dynamic_sleep * 1.1)   # Sekinlashtirish
 
             await asyncio.sleep(state.dynamic_sleep)
 
         except asyncio.CancelledError:
-            logger.warning("🛑 AI Orchestrator stopped")
+            logger.warning("🛑 AI Orchestrator execution stopped via signal")
             break
-
         except Exception as e:
-            logger.error(f"🔥 Orchestrator crash: {e}")
-            await asyncio.sleep(1)
+            logger.error(f"🔥 Orchestrator loop unexpected crash: {e}")
+            await asyncio.sleep(1.0)
 
 
 # ================= STATS API =================
 def get_ai_stats():
     total = metrics.total_requests
-
-    hit_rate = (
-        (metrics.cache_hits_l1 / total) * 100
-        if total > 0 else 0
-    )
-
     return {
-        "total_requests": total,
-        "l1_hit_rate": round(hit_rate, 2),
-        "avg_latency": round(metrics.avg_latency * 1000, 2),
-        "hot_users": len(metrics.hot_users),
-        "batch_size": metrics.last_batch_size
+        "total_processed_requests": total,
+        "l1_total_writes": metrics.cache_writes_l1,
+        "l2_total_writes": metrics.cache_writes_l2,
+        "avg_latency_ms": round(metrics.avg_latency * 1000, 2),
+        "tracked_hot_users_count": len(metrics.hot_users),
+        "last_batch_size": metrics.last_batch_size,
+        "current_dynamic_sleep": round(state.dynamic_sleep, 4)
     }
 
 
 # ================= STOP =================
 async def stop_orchestrator():
     state.is_running = False
-    logger.info("🛑 AI Cache Brain stopping...")
+    logger.info("🛑 AI Cache Brain system stopping...")
