@@ -20,19 +20,17 @@ logger = logging.getLogger(__name__)
 
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
-async def buy_vip_menu(event: types.Message, state: FSMContext, **data):
-    # 1. User ni xavfsiz olish
-    user = data.get("user")
+async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMContext, **data):
+    # 1. XAVFSIZ QO'LGA KIRITISH
+    # Agar 'user' data ichida bo'lmasa yoki None bo'lsa, bo'sh lug'at {} qaytaradi.
+    user = data.get("user") or {}
     
-    # 2. Xavfsizlik tekshiruvi (AGAR USER NONE BO'LSA)
-    if user is None:
-        await event.answer("⚠️ Tizim xatosi: Foydalanuvchi ma'lumotlari topilmadi. Iltimos, /start bosing.")
-        return
-
-    # 3. Endi 'user' None emasligiga ishonchimiz komil
+    # 2. XAVFSIZ MA'LUMOTLARNI O'QISH
+    # .get() endi 'NoneType' xatosini bermaydi, chunki user hech qachon None emas
     is_vip = user.get("is_vip", False)
     points = user.get("points", 0)
     
+    # 3. UI MANTIQI
     status_info = "👑 <b>Status:</b> VIP" if is_vip else "👤 <b>Status:</b> Oddiy foydalanuvchi"
     
     text = (
@@ -51,8 +49,10 @@ async def buy_vip_menu(event: types.Message, state: FSMContext, **data):
     
     kb = vip_buy_kb(is_vip=is_vip)
     
+    # 4. XAVFSIZ JAVOB BERISH
     if isinstance(event, types.Message):
         await event.answer(text, reply_markup=kb, parse_mode="HTML")
     else:
+        # Callback holatida tugmani tahrirlash yoki yangi xabar yuborish
         await event.answer()
         await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
