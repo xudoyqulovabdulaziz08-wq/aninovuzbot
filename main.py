@@ -20,13 +20,7 @@ from database.cache import valkey
 from config import config
 
 # Router importlari (Faqat bitta joyda tartibli ulanadi)
-from handlers import start
-from handlers.menu import (
-    qolnlanma, 
-    reklama,
-    search
-    
-)
+from routers import main_router
 
 logger = logging.getLogger("Main")
 
@@ -220,10 +214,8 @@ def main():
     dp = Dispatcher()
 
     # 2. Routerlarni global dispatcherga ulash (Ketma-ketlik muhim!)
-    dp.include_router(start.router)
-    dp.include_router(qolnlanma.router)
-    dp.include_router(reklama.router)
-    dp.include_router(search.router)
+    dp.include_router(main_router)
+    
 
    
 
