@@ -21,17 +21,27 @@ logger = logging.getLogger(__name__)
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
 async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMContext, **data):
-    # 1. XAVFSIZ QO'LGA KIRITISH
-    # Agar 'user' data ichida bo'lmasa yoki None bo'lsa, bo'sh lug'at {} qaytaradi.
     user = data.get("user") or {}
-    
-    # 2. XAVFSIZ MA'LUMOTLARNI O'QISH
-    # .get() endi 'NoneType' xatosini bermaydi, chunki user hech qachon None emas
+    user_id = user.get("user_id")
+    user_status = user.get("status", "user")
     is_vip = user.get("is_vip", False)
     points = user.get("points", 0)
+
+    # 1. Creator tekshiruvi (config dan)
+    if user_id == config.CREATOR_ID:
+        status_info = "👑 <b>Status:</b> Creator"
     
-    # 3. UI MANTIQI
-    status_info = "👑 <b>Status:</b> VIP" if is_vip else "👤 <b>Status:</b> Oddiy foydalanuvchi"
+    # 2. Admin tekshiruvi (bazadagi status bo'yicha)
+    elif user_status == "admin":
+        status_info = "🛡 <b>Status:</b> Admin"
+        
+    # 3. VIP tekshiruvi
+    elif is_vip:
+        status_info = "💎 <b>Status:</b> VIP"
+        
+    # 4. Oddiy foydalanuvchi
+    else:
+        status_info = "👤 <b>Status:</b> Oddiy foydalanuvchi"
     
     text = (
         "💎 <b>VIP PREMIYUM</b>\n"
