@@ -7,22 +7,19 @@ CREATOR_ID = config.CREATOR_ID
 
 
 # Search bo'limidagi inline klaviaturani yaratish funksiyasi
-def search_inline_kb(is_vip: bool = False) -> types.InlineKeyboardMarkup:
-    """
-    is_vip: Handlerdan keladigan foydalanuvchi statusi.
-    """
+def search_inline_kb(is_privileged: bool = False) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
-    # 1. Faqat VIP foydalanuvchilar uchun Tezkor qidiruv tugmasi
-    if is_vip or config.CREATOR_ID == config.CREATOR_ID:  # Creator ham VIP imkoniyatlarga ega bo'lishi kerak:
+    # 1. Tezkor qidiruv (Faqat VIP/Creator uchun)
+    if is_privileged:
         builder.row(
             types.InlineKeyboardButton(
                 text="⚡️ Tezkor qidiruv (VIP)",
-                switch_inline_query_current_chat="" # Bo'sh joy bilan inline rejimni ochadi
+                switch_inline_query_current_chat=""
             )
         )
     
-    # 2. Oddiy qidiruv usullari (Hamma uchun)
+    # 2. Oddiy qidiruv usullari
     builder.row(
         types.InlineKeyboardButton(text="🔍 Nomi bo'yicha", callback_data="search_by_name"),
         types.InlineKeyboardButton(text="🆔 ID bo'yicha", callback_data="search_by_id")
@@ -31,12 +28,10 @@ def search_inline_kb(is_vip: bool = False) -> types.InlineKeyboardMarkup:
     # 3. Janr va Sayt
     builder.row(
         types.InlineKeyboardButton(text="🎭 Janr bo'yicha", callback_data="search_by_genre"),
-        types.InlineKeyboardButton(text="🔗 Rasmiy sayt", url="https://aninovuz.uz")
+        types.InlineKeyboardButton(text="🔗 Rasmiy sayt (Tez kunda)", url="https://aninovuz.uz")
     )
 
     return builder.as_markup()
-
-
 
 
 

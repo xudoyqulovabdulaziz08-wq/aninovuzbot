@@ -21,7 +21,12 @@ from config import config
 
 # Router importlari (Faqat bitta joyda tartibli ulanadi)
 from handlers import start
-from handlers.menu import ( qolnlanma, reklama)
+from handlers.menu import (
+    qolnlanma, 
+    reklama,
+    search
+    
+)
 
 logger = logging.getLogger("Main")
 
@@ -218,6 +223,7 @@ def main():
     dp.include_router(start.router)
     dp.include_router(qolnlanma.router)
     dp.include_router(reklama.router)
+    dp.include_router(search.router)
 
    
 
