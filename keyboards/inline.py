@@ -82,3 +82,14 @@ def creator_panel_kb(creator_id: int) -> types.InlineKeyboardMarkup:
         )
     
     return builder.as_markup()
+
+
+
+# keyboards/inline.py faylida:
+def get_ranked_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="🎬 Anime Reyting", callback_data="Anime_ranked"),
+        types.InlineKeyboardButton(text="🏆 User Reyting", callback_data="User_ranked")
+    )
+    return builder.as_markup()

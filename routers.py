@@ -5,7 +5,9 @@ from handlers.menu import (
     qolnlanma, 
     reklama,
     search,
-    admin_menu
+    admin_menu,
+    reyting
+    
     
 )
 
@@ -19,5 +21,6 @@ main_router.include_routers(
     admin_menu.router,
     qolnlanma.router,
     reklama.router,
+    reyting.router,
     search.router
 )

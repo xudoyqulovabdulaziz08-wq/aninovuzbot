@@ -65,7 +65,7 @@ async def creator_panel_handler(event: types.Message | types.CallbackQuery, stat
     text = (
         f"👑 <b>CREATOR PANEL</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Salom Boss, {event.from_user.full_name}!\n"
+        f"Salom Boss, <b>{event.from_user.full_name}</b>!\n"
         f"Bu yerda siz botning barcha boshqaruv imkoniyatlariga ega bo'lasiz. "
         f"Kerakli bo'limni tanlang."
     )
