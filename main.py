@@ -21,7 +21,10 @@ from database.cache import valkey
 from config import config
 
 from handlers import (
-    start, 
+    start 
+)
+from handlers.menu import(
+    qolnlanma
 )
 
 logger = logging.getLogger("Main")
@@ -288,6 +291,7 @@ def main():
     # Routerlarni qo'shish
     # dp.include_routers(start.router)
     dp.include_router(start.router)
+    dp.include_router(qolnlanma.router)
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
