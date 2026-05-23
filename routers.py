@@ -6,7 +6,8 @@ from handlers.menu import (
     reklama,
     search,
     admin_menu,
-    reyting
+    reyting,
+    vip_buy
     
     
 )
@@ -22,5 +23,6 @@ main_router.include_routers(
     qolnlanma.router,
     reklama.router,
     reyting.router,
-    search.router
+    search.router,
+    vip_buy.router
 )
