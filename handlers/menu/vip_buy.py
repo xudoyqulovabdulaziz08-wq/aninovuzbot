@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -19,10 +20,12 @@ logger = logging.getLogger(__name__)
 
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
-async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMContext, session: AsyncSession, user: dict):
-    # 'user' - bu middleware orqali kelayotgan keshdagi ma'lumot
-    # user['is_vip'] - bazadagi logic asosida avtomatik keladi
-    
+async def buy_vip_menu(
+    event: types.Message | types.CallbackQuery, 
+    state: FSMContext, 
+    user: dict, 
+    session: Any
+):
     is_vip = user.get("is_vip", False)
     points = user.get("points", 0)
     
@@ -34,16 +37,15 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
         f"{status_info}\n"
         f"💰 Balans: <b>{points} ball</b>\n\n"
         "✨ <b>VIP imkoniyatlari:</b>\n"
-        "🚀 <b>Yuqori tezlik:</b> Kontentga cheksiz kirish\n"
-        "🚫 <b>Reklamasiz:</b> Hech qanday ortiqcha xabarlarsiz\n"
-        "📂 <b>Eksklyuziv:</b> Faqat VIP uchun maxsus kanallar\n"
-        "👑 <b>Status:</b> Ismingiz yonida maxsus belgi\n\n"
+        "🚀 <b>Yuqori tezlik:</b> Cheksiz kirish\n"
+        "🚫 <b>Reklamasiz:</b> Toza kontent\n"
+        "👑 <b>Status:</b> Maxsus belgi\n\n"
         "🏷 <b>Tarif:</b> <code>100 ball = 30 kun</code>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "👇 VIP faollashtirish uchun tugmani bosing:"
     )
     
-    kb = vip_buy_kb(is_vip=is_vip) # Klaviatura statusga qarab o'zgarishi mumkin
+    kb = vip_buy_kb(is_vip=is_vip)
     
     if isinstance(event, types.Message):
         await event.answer(text, reply_markup=kb, parse_mode="HTML")

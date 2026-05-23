@@ -101,9 +101,8 @@ def get_ranked_kb():
 def vip_buy_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
-    # is_vip argumenti orqali tugma nomini avtomatik tanlaymiz
     if is_vip:
-        builder.row(types.InlineKeyboardButton(text="💫 VIP uzaytirish", callback_data="activate_vip"))
+        builder.row(types.InlineKeyboardButton(text="💫 VIP muddatini uzaytirish", callback_data="activate_vip"))
     else:
         builder.row(types.InlineKeyboardButton(text="💎 100 ballga VIP sotib olish", callback_data="activate_vip"))
         
