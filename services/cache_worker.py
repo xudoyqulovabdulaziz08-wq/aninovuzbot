@@ -17,7 +17,7 @@ logger = logging.getLogger("CacheWorker")
 class CacheInvalidationWorker:
     """
     🚀 PRO MAX DISTRIBUTED ZERO-LOSS EVENT SYSTEM
-    🛠 FIXED: Concurrency Bugs, Hang Retries, and Loose Locks.
+    🛠 FIXED: Model attributes, SQLAlchemy best practices, and Non-blocking Cleanup.
     """
 
     def __init__(self, session_factory, cache_manager, redis=None):
@@ -26,7 +26,6 @@ class CacheInvalidationWorker:
         self.redis = redis
 
         self._running = True
-        # Har bir instansiya uchun unikal ID (Lock xavfsizligi uchun)
         self.instance_id = str(uuid.uuid4())
 
         # ================= TUNING =================
@@ -38,23 +37,21 @@ class CacheInvalidationWorker:
         self.max_retries = 5
         self._last_cleanup = time.time()
 
-        # Local buffer faqat xavfsiz to'xtash paytida saqlab qolish uchun
         self.retry_buffer: list[OutboxEvent] = []
 
         self.dlq_key = "cache:dlq"
         self.lock_key = "cache_worker_lock"
 
-    # ================= DISTRIBUTED LOCK (SAFE UUID PATTERN) =================
+    # ================= DISTRIBUTED LOCK =================
     async def _acquire_lock(self) -> bool:
         if not self.redis:
             return True
         try:
-            # Faqat o'zimizga tegishli instance_id ni yozamiz
             return await self.redis.set(
                 self.lock_key,
                 self.instance_id,
                 nx=True,
-                ex=30  # High-load uchun 30 soniya xavfsizroq
+                ex=30  
             )
         except Exception as e:
             logger.error(f"Lock acquire error: {e}")
@@ -64,7 +61,6 @@ class CacheInvalidationWorker:
         if not self.redis:
             return
         try:
-            # Lua skript yordamida faqat o'zimiz yaratgan lockni o'chiramiz (Atomic Release)
             lua_release = """
             if redis.call('get', KEYS[1]) == ARGV[1] then
                 return redis.call('del', KEYS[1])
@@ -97,7 +93,7 @@ class CacheInvalidationWorker:
         while self._running:
             try:
                 if not await self._acquire_lock():
-                    await asyncio.sleep(1.0)  # Lock band bo'lsa kutish
+                    await asyncio.sleep(1.0)
                     continue
 
                 processed = await self.process_events()
@@ -118,20 +114,21 @@ class CacheInvalidationWorker:
                 await self._release_lock()
                 await asyncio.sleep(2)
 
-    # ================= EVENT PROCESS (SAFE SEQUENTIAL) =================
+    # ================= EVENT PROCESS =================
     async def process_events(self) -> int:
         async with self.session_factory() as session:
             try:
                 now = datetime.now(timezone.utc)
-                # Faqat qayta ishlanmagan yoki retry vaqti kelgan voqealarni saralab olish
+                
+                # SQLAlchemy-da 'is_(False)' ishlatish eng xavfsiz usul hisoblanadi
                 stmt = (
                     select(OutboxEvent)
                     .where(
                         and_(
-                            OutboxEvent.processed == False,
+                            OutboxEvent.processed.is_(False),
                             or_(
-                                OutboxEvent.next_retry_at.is_(None),
-                                OutboxEvent.next_retry_at <= now
+                                OutboxEvent.created_at.is_(None),
+                                OutboxEvent.created_at <= now
                             )
                         )
                     )
@@ -145,7 +142,6 @@ class CacheInvalidationWorker:
                 if not events:
                     return 0
 
-                # Ketma-ket xavfsiz va tezkor bajarish (Sessiya to'qnashuvi fix qilindi)
                 for ev in events:
                     try:
                         await self._process_single(ev)
@@ -167,28 +163,29 @@ class CacheInvalidationWorker:
         await self.cache.invalidate(ev.aggregate, ev.aggregate_id)
         
         ev.processed = True
-        ev.processed_at = datetime.now(timezone.utc)
+        # 💡 FIX: Modelda bo'lmagan 'processed_at' olib tashlandi,created_at kesh vaqti bilan yangilandi
+        ev.created_at = datetime.now(timezone.utc)
 
-    # ================= FAILURE HANDLING (NON-BLOCKING) =================
+    # ================= FAILURE HANDLING =================
     async def _handle_failure(self, session, ev: OutboxEvent, error: str):
         ev.retry_count += 1
 
         if ev.retry_count <= self.max_retries:
-            # 💡 Kutish o'rniga dinamik Exponential Backoff vaqtini belgilaymiz
+            # Exponential Backoff
             delay_seconds = 5 * ev.retry_count
-            ev.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+            ev.created_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
             
-            logger.warning(f"🔁 Event [ID: {ev.id}] scheduled for retry {ev.retry_count}/{self.max_retries} at {ev.next_retry_at}")
-            session.add(ev)  # O'zgarishni sessiyaga qo'shish
+            logger.warning(f"🔁 Event [ID: {ev.id}] scheduled for retry {ev.retry_count}/{self.max_retries}")
+            session.add(ev)
             return
 
-        # Max retries tugasa DLQ ga yuboramiz va qayta o'qilmasligi uchun processed qilamiz
+        # Max retries tugasa DLQ ga yuboramiz
         await self._send_to_dlq(ev, error)
         ev.processed = True
-        ev.processed_at = datetime.now(timezone.utc)
+        ev.created_at = datetime.now(timezone.utc)
         session.add(ev)
 
-    # ================= DEAD LETTER QUEUE (CLEAN JSON) =================
+    # ================= DEAD LETTER QUEUE =================
     async def _send_to_dlq(self, ev: OutboxEvent, error: str):
         try:
             payload = {
@@ -201,7 +198,6 @@ class CacheInvalidationWorker:
             }
 
             if self.redis:
-                # `str(dict)` xatosi toza JSON byte stream (`orjson`) ga almashtirildi
                 await self.redis.lpush(self.dlq_key, orjson.dumps(payload))
 
             logger.critical(f"💀 EVENT PERMANENTLY MOVED TO DLQ: {ev.id}")
@@ -211,6 +207,7 @@ class CacheInvalidationWorker:
 
     # ================= CLEANUP OLD PROCESSED EVENTS =================
     async def _maybe_cleanup(self):
+        """ Bazani bloklamaslik uchun faqat subquery orqali tozalash """
         now = time.time()
         if now - self._last_cleanup < self.cleanup_interval:
             return
@@ -218,12 +215,17 @@ class CacheInvalidationWorker:
         self._last_cleanup = now
         try:
             async with self.session_factory() as session:
-                # Qayta ishlangan eski ma'lumotlarni o'chirib tozalash
-                await session.execute(
-                    delete(OutboxEvent).where(OutboxEvent.processed == True)
-                )
-                await session.commit()
-            logger.info("🧹 Outbox processed events storage database cleaned.")
+                # 💡 FIX: Katta yuklamada deadlock bermasligi uchun xavfsiz o'chirish subquery mantiqi
+                subq = select(OutboxEvent.id).where(OutboxEvent.processed.is_(True)).limit(500)
+                result = await session.execute(subq)
+                ids_to_delete = result.scalars().all()
+
+                if ids_to_delete:
+                    await session.execute(
+                        delete(OutboxEvent).where(OutboxEvent.id.in_(ids_to_delete))
+                    )
+                    await session.commit()
+                    logger.info(f"🧹 Storage cleaned: {len(ids_to_delete)} processed events purged.")
         except Exception as e:
             logger.error(f"Cleanup storage error: {e}")
 
