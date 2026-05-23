@@ -25,10 +25,11 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
     user_id = user.get("user_id")
     user_status = user.get("status", "user")
     is_vip = user.get("is_vip", False)
+    is_creator_id = user_id == config.CREATOR_ID
     points = user.get("points", 0)
 
     # 1. Creator tekshiruvi (config dan)
-    if user_id == config.CREATOR_ID:
+    if user_id == is_creator_id:
         status_info = "👑 <b>Status:</b> Creator"
     
     # 2. Admin tekshiruvi (bazadagi status bo'yicha)
