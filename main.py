@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import orjson
 from contextlib import suppress
 from aiohttp import web
 
