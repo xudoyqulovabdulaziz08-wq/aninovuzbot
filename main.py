@@ -218,11 +218,7 @@ def main():
     dp.include_router(qolnlanma.router)
     dp.include_router(reklama.router)
 
-    # 🟢 FALLBACK ECHO HANDLER: Faqat yuqoridagi routerlarga tushmagan xabarlarni tutadi
-    @dp.message()
-    async def echo_handler(message: types.Message):
-        logger.info(f"Incoming unhandled message from {message.from_user.id}: {message.text}")
-        await message.answer("⚠️ Noma'lum buyruq. Iltimos, menyudan foydalaning.")
+   
 
     # Startup va Shutdown signallarini ro'yxatdan o'tkazish
     dp.startup.register(on_startup)
