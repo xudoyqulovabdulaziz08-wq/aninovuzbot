@@ -149,10 +149,11 @@ class OutboxWorker:
         """
         async with self.session_pool() as session:
             try:
+                # 🟢 TO'G'RILANDI: .order_id() o'rniga .order_by() qo'yildi va Boolean tekshiruvi .is_(False) qilindi
                 stmt = (
                     select(OutboxEvent)
-                    .where(OutboxEvent.processed == False)
-                    .order_id(OutboxEvent.id) # Tartibli olish
+                    .where(OutboxEvent.processed.is_(False))
+                    .order_by(OutboxEvent.id.asc()) 
                     .limit(self.batch_size)
                 )
 
@@ -162,22 +163,27 @@ class OutboxWorker:
                 if not events:
                     return 0
 
-                # High-load xavfsizligi: Har bir elementni ketma-ket bajaramiz,
-                # chunki ular asinxron I/O va bitta sessiyaga ulangan.
+                # High-load xavfsizligi: Har bir elementni ketma-ket bajaramiz
                 for ev in events:
                     try:
                         # Event yuklamasini qayta ishlash
                         success = await self.handle_event(ev)
                         if success:
                             ev.processed = True
-                            ev.processed_at = datetime.now(timezone.utc)
+                            # 💡 FIX: Modelda bo'lmagan processed_at o'rniga created_at yangilandi
+                            ev.created_at = datetime.now(timezone.utc)
                             metrics.events_processed += 1
                     except Exception as res_err:
-                        # Alohida element xatoga uchrasa, butun batchni qulatmymiz
+                        # Alohida element xatoga uchrasa, butun batchni qulatmaymiz
                         await self.handle_failure(session, ev, res_err)
 
                 # Barcha muvaffaqiyatli o'zgarishlarni bitta tranzaksiyada saqlaymiz
                 await session.commit()
+                
+                # Agar muvaffaqiyatli yakunlansa, Circuit Breaker hisoblagichini kamaytiramiz (Heal mantiqi)
+                if self.failure_count > 0:
+                    self.failure_count = max(0, self.failure_count - 1)
+                
                 return len(events)
 
             except SQLAlchemyError as e:
@@ -249,10 +255,11 @@ class OutboxWorker:
         logger.warning(f"⚠️ Event operational failure [ID: {ev.id} | Attempt: {ev.retry_count}]: {err}")
 
         if ev.retry_count >= self.max_retry:
-            # DLQ ga yuborish va bazada processed qilib belgilash (tizim tiqilib qolmasligi uchun)
+            # DLQ ga yuborish va bazada processed qilib belgilash
             await self.send_to_dlq(ev, str(err))
             ev.processed = True
-            ev.processed_at = datetime.now(timezone.utc)
+            # 💡 FIX: processed_at o'rniga joriy vaqt yaratilish vaqtiga tenglashtirildi
+            ev.created_at = datetime.now(timezone.utc)
         
         # O'zgarishlarni sessiyaga qayta yuklash
         session.add(ev)
