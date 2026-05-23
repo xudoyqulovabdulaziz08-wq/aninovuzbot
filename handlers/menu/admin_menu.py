@@ -6,7 +6,7 @@ from config import config
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 
-from keyboards.inline import admin_panel_kb
+from keyboards.inline import admin_panel_kb, creator_panel_kb
 from    config import config
 
 router = Router(name="admin_menu_router")
@@ -60,13 +60,14 @@ async def creator_panel_handler(event: types.Message | types.CallbackQuery, stat
             await event.answer("🚫 Bu bo'lim faqat Creator uchun!")
         return
 
-    kb = admin_panel_kb(user_id=user_id, user_status="creator")
+    kb = creator_panel_kb(user_id=user_id, user_status="creator")
 
     text = (
-        "👑 <b>CREATOR PANEL</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Bu yerda siz botning barcha boshqaruv imkoniyatlariga ega bo'lasiz. "
-        "Kerakli bo'limni tanlang."
+        f"👑 <b>CREATOR PANEL</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Salom Boss, {event.from_user.full_name}!\n"
+        f"Bu yerda siz botning barcha boshqaruv imkoniyatlariga ega bo'lasiz. "
+        f"Kerakli bo'limni tanlang."
     )
 
     if isinstance(event, types.Message):
