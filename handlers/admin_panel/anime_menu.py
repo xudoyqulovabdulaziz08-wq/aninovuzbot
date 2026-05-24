@@ -42,10 +42,7 @@ async def admin_anime_panel(callback: types.CallbackQuery, state: FSMContext): #
 
 
 
-@router.callback_query(F.data == "back_to_anime_panel")
-async def back_to_anime_panel(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await admin_anime_panel(callback, state)
+
 
 
 

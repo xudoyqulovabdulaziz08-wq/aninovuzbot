@@ -16,35 +16,35 @@ logger = logging.getLogger(__name__)
 
 
 
-#===========================⚙️ SC ADMIN PANEL============================#
+#==========================⚙️ SC ADMIN PANEL============================#
 #========================================================================#
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
-@router.callback_query(F.data == "admin_anime_panel")
+@router.callback_query(F.data == "admin_panel")
 async def admin_panel_handler(event: types.Message | types.CallbackQuery, state: FSMContext):
     await state.clear()
+    
+    # Statusni tekshirish logikangizni shu yerda chaqiring
     user_id = event.from_user.id
-    user_status = "admin" 
-     # Bu yerda haqiqiy statusni tekshirish kerak
-
+    user_status = "admin" # DB dan olingan qiymat
+    
     kb = admin_panel_kb(user_id=user_id, user_status=user_status)
-
     text = (
-        "🎛️ <b>ANIME BOSHQARUV PANELI</b>\n"
+        "🎛️ <b>ADMIN BOSHQARUV PANELI</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Bu yerda siz anime ma'lumotlarini boshqarishingiz mumkin. "
         "Kerakli bo'limni tanlang."
     )
 
     if isinstance(event, types.Message):
         await event.answer(text, reply_markup=kb, parse_mode="HTML")
-        
+    
     elif isinstance(event, types.CallbackQuery):
-        await event.answer() # Tugmadagi yuklanish animatsiyasini yopish
+        # Callback bilan ishlaganda har doim 'answer' qiling
+        await event.answer("Admin panel yuklandi")
         try:
             await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except TelegramBadRequest as e:
-            if "message is not modified" not in str(e):
-                raise e # Agar boshqa xatolik bo'lsa, uni ko'taramiz
+            if "message is not modified" not in str(e).lower():
+                logger.error(f"❌ Admin panel xatosi: {e}")
 
 
 
@@ -52,8 +52,6 @@ async def admin_panel_handler(event: types.Message | types.CallbackQuery, state:
 
 
 
-#===========================👑 CREATOR PANEL=============================#
-#========================================================================#
 @router.message(F.text == "👑 CREATOR PANEL")
 @router.callback_query(F.data == "creator_panel")
 async def creator_panel_handler(event: types.Message | types.CallbackQuery, state: FSMContext):
@@ -87,7 +85,3 @@ async def creator_panel_handler(event: types.Message | types.CallbackQuery, stat
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
                 raise e
-            
-
-
-
