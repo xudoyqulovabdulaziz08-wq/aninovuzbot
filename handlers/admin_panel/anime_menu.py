@@ -47,3 +47,5 @@ async def back_to_anime_panel(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await admin_anime_panel(callback, state)
 
+
+
