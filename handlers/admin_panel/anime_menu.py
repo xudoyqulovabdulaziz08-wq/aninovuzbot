@@ -39,3 +39,9 @@ async def admin_anime_panel(callback: types.CallbackQuery, state: FSMContext): #
             logger.error(f"❌ Anime panel xatosi: {e}")
     finally:
         await callback.answer("🎛️ Anime boshqaruv menyusi")
+
+
+@router.callback_query()
+async def catch_all(callback: types.CallbackQuery):
+    logger.warning(f"⚠️ Tutilmagan callback keldi: {callback.data} (User: {callback.from_user.id})")
+    await callback.answer(f"Xatolik: {callback.data} bo'limi topilmadi!", show_alert=True)

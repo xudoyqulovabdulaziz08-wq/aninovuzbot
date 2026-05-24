@@ -86,3 +86,9 @@ async def back_to_channels(callback: types.CallbackQuery, state: FSMContext):
     await state.clear() # Muhim: State ni tozalab, keyin menyuni ko'rsatamiz
     await admin_channels(callback, state) # Eski funksiyangizni chaqiramiz
 
+
+
+@router.callback_query()
+async def catch_all(callback: types.CallbackQuery):
+    logger.warning(f"⚠️ Tutilmagan callback keldi: {callback.data} (User: {callback.from_user.id})")
+    await callback.answer(f"Xatolik: {callback.data} bo'limi topilmadi!", show_alert=True)
