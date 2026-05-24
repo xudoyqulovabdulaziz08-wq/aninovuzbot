@@ -63,7 +63,7 @@ async def add_channel(callback: types.CallbackQuery, state: FSMContext):
     text = "➕ <b>KANAL QO'SHISH</b>\n\nKanal ID yoki username (misol: @kanal_nomi) yuboring:"
     
     kb = InlineKeyboardBuilder()
-    kb.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_channels"))
+    kb.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_admin_channels"))
     
     # 3. Matnni va tugmani bir vaqtda yangilash (foydalanuvchi uchun tushunarliroq)
     try:
@@ -75,4 +75,11 @@ async def add_channel(callback: types.CallbackQuery, state: FSMContext):
     
     await callback.answer("Kanal qo'shish rejimiga o'tildi. Kanal ID yoki username yuboring.")
 
+
+
+# Barcha state lardan "admin_channels" ga qaytishni osonlashtirish
+@router.callback_query(F.data == "back_admin_channels")
+async def back_to_channels(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear() # Muhim: State ni tozalab, keyin menyuni ko'rsatamiz
+    await admin_channels(callback, state) # Eski funksiyangizni chaqiramiz
 

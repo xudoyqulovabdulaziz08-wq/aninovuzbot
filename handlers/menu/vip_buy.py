@@ -37,19 +37,13 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
 
     # 1. Creator tekshiruvi (config dan)
     if int(user_id) == int(CREATOR_ID):
-        status_info = "👑 <b>Status:</b> Creator"
-    
-    # 2. Admin tekshiruvi (bazadagi status bo'yicha)
+        status_info = "👑 <b>CREATOR</b>"
     elif user_status == "admin":
-        status_info = "🛡 <b>Status:</b> Admin"
-        
-    # 3. VIP tekshiruvi
+        status_info = "🛡 <b>ADMIN</b>"
     elif is_vip:
-        status_info = "💎 <b>Status:</b> VIP"
-        
-    # 4. Oddiy foydalanuvchi
+        status_info = "💎 <b>VIP</b>"
     else:
-        status_info = "👤 <b>Status:</b> Oddiy foydalanuvchi"
+        status_info = "👤 <b>USER</b>"
     
     text = (
         "💎 <b>VIP PREMIYUM</b>\n"
