@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 @router.message(F.text == "🌟 Reyting")
 @router.callback_query(F.data == "reyting_menu")
 async def ranked_menu(event: types.Message | types.CallbackQuery, state: FSMContext):
+    await state.clear()
 
     kb = get_ranked_kb()
     

@@ -13,6 +13,7 @@ async def command_start_handler(message: Message):
     """
     Foydalanuvchi /start bosganda ishlaydigan handler
     """
+    
     user_id = message.from_user.id
     
     # Bu yerda rollarni DB yoki middleware'dan olishingiz mumkin.

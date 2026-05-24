@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
 @router.callback_query(F.data == "admin_anime_panel")
 async def admin_panel_handler(event: types.Message | types.CallbackQuery, state: FSMContext):
+    await state.clear()
     user_id = event.from_user.id
     user_status = "admin" 
      # Bu yerda haqiqiy statusni tekshirish kerak

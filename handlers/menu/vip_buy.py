@@ -27,6 +27,7 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
 async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMContext, **data):
+    await state.clear()
     user = data.get("user") or {}
     user_id = user.get("user_id")
     user_status = user.get("status", "user")

@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 #========================================================================#
 @router.message(F.text == "🔍 Anime qidirish")
 async def search_menu_handler(message: types.Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
     is_vip = False 
     is_privileged = is_vip or (user_id == config.CREATOR_ID)
