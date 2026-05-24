@@ -23,7 +23,7 @@ from config import config
 from routers import main_router
 
 logger = logging.getLogger("Main")
-
+logging.basicConfig(level=logging.DEBUG)
 # ================= GLOBAL STATE =================
 background_tasks: set[asyncio.Task] = set()
 

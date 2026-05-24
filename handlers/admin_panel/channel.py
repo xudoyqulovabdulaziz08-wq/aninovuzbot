@@ -1,19 +1,15 @@
-import pytz
+
 import logging
-from datetime import datetime, timezone
-from typing import Any, Union 
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
-from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 
 
 
 from config import config
-from database.repository import UserRepository
 from keyboards.inline import admin_channels_kb
 
 class AdminChannelsState(StatesGroup):
@@ -22,7 +18,7 @@ class AdminChannelsState(StatesGroup):
     broadcasting = State()
 
 
-router = Router(name="channel_router")
+router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 

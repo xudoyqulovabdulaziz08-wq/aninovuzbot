@@ -29,14 +29,14 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMContext, **data):
     await state.clear()
     user = data.get("user") or {}
-    user_id = user.get("user_id")
+    user_id = user.get("user_id") or event.from_user.id
     user_status = user.get("status", "user")
     is_vip = user.get("is_vip", False)
     
     points = user.get("points", 0)
 
     # 1. Creator tekshiruvi (config dan)
-    if user_id == CREATOR_ID:
+    if int(user_id) == int(CREATOR_ID):
         status_info = "👑 <b>Status:</b> Creator"
     
     # 2. Admin tekshiruvi (bazadagi status bo'yicha)
