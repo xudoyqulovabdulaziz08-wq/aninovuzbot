@@ -19,6 +19,7 @@ GUIDE_PHOTO_FILE_ID = getattr(config, "GUIDE_PHOTO_FILE_ID", "AgACAgIAAxkBAAFKaW
 # ======================================================
 # 🔥 DINAMIK TARKIB SHAKLLANTIRUVCHI YORDAMCHI FUNKSIYA
 # ======================================================
+
 def get_guide_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMarkup]:
     """
     Qo'llanma matni va klaviaturasini dinamik shakllantiruvchi yordamchi funksiya.

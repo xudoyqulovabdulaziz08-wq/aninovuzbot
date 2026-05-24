@@ -1,6 +1,12 @@
 from aiogram import types
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
+
+
+
+
+#============================get_main_menu===============================#
+#========================================================================#
 def get_main_menu(is_vip: bool, is_admin: bool, is_creator: bool) -> types.ReplyKeyboardMarkup:
     """Asosiy menyu klaviaturasi (aiogram 3.x uchun optimallashtirilgan)."""
     builder = ReplyKeyboardBuilder()

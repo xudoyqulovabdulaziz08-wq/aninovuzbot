@@ -18,8 +18,9 @@ router = Router(name="search_router")
 logger = logging.getLogger(__name__)
 
 
-#===========================🔍 Anime qidirish=============================#
 
+#==========================🔍 Anime qidirish=============================#
+#========================================================================#
 @router.message(F.text == "🔍 Anime qidirish")
 async def search_menu_handler(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -39,8 +40,11 @@ async def search_menu_handler(message: types.Message, state: FSMContext):
 
 
 
-#===========================back_to_search_menu=============================#
 
+
+
+#=========================back_to_search_menu============================#
+#========================================================================#
 # 🔥 TUZATISH: Dekorator qo'shildi va state.clear() await qilindi
 @router.callback_query(F.data == "back_to_search_menu")
 async def back_to_search_menu(callback_query: types.CallbackQuery, state: FSMContext):
@@ -65,8 +69,9 @@ async def back_to_search_menu(callback_query: types.CallbackQuery, state: FSMCon
 
 
 
-#===========================search_by_name=============================#
 
+#============================search_by_name==============================#
+#========================================================================#
 @router.callback_query(F.data == "search_by_name")
 async def search_by_name(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer("Nomi bo'yicha qidiruv tanlandi.")
@@ -94,7 +99,11 @@ async def search_by_name(callback_query: types.CallbackQuery, state: FSMContext)
 
 
 
-#===========================search_by_id=============================#
+
+
+
+#=============================search_by_id===============================#
+#========================================================================#
 @router.callback_query(F.data == "search_by_id")
 async def search_by_id(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer("ID bo'yicha qidiruv tanlandi.")
@@ -120,6 +129,11 @@ async def search_by_id(callback_query: types.CallbackQuery, state: FSMContext):
             # Agar boshqa xatolik bo'lsa (masalan, xabar topilmadi), uni ko'taramiz
             raise e
 
+
+
+
+#===========================search_by_genre==============================#
+#========================================================================#
 @router.callback_query(F.data == "search_by_genre")
 async def search_by_genre(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer("Genre bo'yicha qidiruv tanlandi.")

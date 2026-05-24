@@ -18,6 +18,12 @@ router = Router(name="vip_router")
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 
+
+
+
+
+#==========================💎 VIP sotib olish=============================#
+#========================================================================#
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
 async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMContext, **data):

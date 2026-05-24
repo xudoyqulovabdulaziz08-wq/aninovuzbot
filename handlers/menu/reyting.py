@@ -14,7 +14,8 @@ router = Router(name="reyting_router")
 logger = logging.getLogger(__name__)
 
 
-
+#==============================🌟 Reyting================================#
+#========================================================================#
 @router.message(F.text == "🌟 Reyting")
 @router.callback_query(F.data == "reyting_menu")
 async def ranked_menu(event: types.Message | types.CallbackQuery, state: FSMContext):

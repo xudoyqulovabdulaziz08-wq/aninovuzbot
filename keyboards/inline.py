@@ -9,6 +9,9 @@ from config import config
 CREATOR_ID = config.CREATOR_ID
 
 
+
+#===========================search_inline_kb=============================#
+#========================================================================#
 # Search bo'limidagi inline klaviaturani yaratish funksiyasi
 def search_inline_kb(is_privileged: bool = False) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -39,6 +42,9 @@ def search_inline_kb(is_privileged: bool = False) -> types.InlineKeyboardMarkup:
 
 
 
+
+#============================admin_panel_kb==============================#
+#========================================================================#
 def admin_panel_kb(user_id: int, user_status: str) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
@@ -70,6 +76,10 @@ def admin_panel_kb(user_id: int, user_status: str) -> types.InlineKeyboardMarkup
     return builder.as_markup()
 
 
+
+
+#===========================creator_panel_kb=============================#
+#========================================================================#
 # creator_id ni int qilib o'zgartirdik va ortiqcha 'user_status' ni olib tashladik
 def creator_panel_kb(creator_id: int) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -88,6 +98,11 @@ def creator_panel_kb(creator_id: int) -> types.InlineKeyboardMarkup:
 
 
 
+
+
+
+#============================get_ranked_kb===============================#
+#========================================================================#
 # keyboards/inline.py faylida:
 def get_ranked_kb():
     builder = InlineKeyboardBuilder()
@@ -98,6 +113,12 @@ def get_ranked_kb():
     return builder.as_markup()
 
 
+
+
+
+
+#==============================vip_buy_kb================================#
+#========================================================================#
 def vip_buy_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
@@ -112,6 +133,15 @@ def vip_buy_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+
+
+
+
+
+
+
+#==============================cabinet_kb================================#
+#========================================================================#
 def cabinet_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
@@ -124,4 +154,18 @@ def cabinet_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link"),
         types.InlineKeyboardButton(text="🌐 Saytdagi profil", url="https://aninowuz.uz/profile")
     )
+    return builder.as_markup()
+
+
+
+
+
+#============================admin_channels_kb===========================#
+#========================================================================#
+def admin_channels_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="➕ Kanal qo'shish", callback_data="add_channel"))
+    builder.row(types.InlineKeyboardButton(text="📋 Kanal ro'yxati", callback_data="list_channels"))
+    builder.row(types.InlineKeyboardButton(text="➖ Kanal o'chirish", callback_data="remove_channel"))
+    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin_panel"))
     return builder.as_markup()

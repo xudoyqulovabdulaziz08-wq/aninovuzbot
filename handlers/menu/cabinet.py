@@ -22,6 +22,9 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 
 
 
+
+#==========================👤 Shaxsiy kabinet============================#
+#========================================================================#
 @router.message(F.text == "👤 Shaxsiy kabinet")
 @router.callback_query(F.data == "cabinet")
 async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], **data):
@@ -34,7 +37,8 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], **d
     message = event.message if is_cb else event
 
     # 1. STATUS MANTIQI (Creator, Admin, VIP, User)
-    user_id = user.get("user_id")
+    
+    
     raw_status = user.get("status", "user")
     is_vip = user.get("is_vip", False)
 
@@ -64,7 +68,7 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], **d
     else:
         vip_status = "❌ Faol emas"
 
-  
+    user_id = event.from_user.id
     text = (
         "👤 <b>SHAXSIY KABINET</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"

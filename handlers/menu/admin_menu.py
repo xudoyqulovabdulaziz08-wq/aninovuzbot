@@ -13,6 +13,11 @@ router = Router(name="admin_menu_router")
 logger = logging.getLogger(__name__)
 
 
+
+
+
+#===========================⚙️ SC ADMIN PANEL============================#
+#========================================================================#
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
 @router.callback_query(F.data == "admin_anime_panel")
 async def admin_panel_handler(event: types.Message | types.CallbackQuery, state: FSMContext):
@@ -46,7 +51,8 @@ async def admin_panel_handler(event: types.Message | types.CallbackQuery, state:
 
 
 
-
+#===========================👑 CREATOR PANEL=============================#
+#========================================================================#
 @router.message(F.text == "👑 CREATOR PANEL")
 @router.callback_query(F.data == "creator_panel")
 async def creator_panel_handler(event: types.Message | types.CallbackQuery, state: FSMContext):
