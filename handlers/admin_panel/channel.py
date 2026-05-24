@@ -77,6 +77,9 @@ async def add_channel(callback: types.CallbackQuery, state: FSMContext):
 
 
 
+
+#===========================back_to_channels=============================#
+#========================================================================#
 # Barcha state lardan "admin_channels" ga qaytishni osonlashtirish
 @router.callback_query(F.data == "back_admin_channels")
 async def back_to_channels(callback: types.CallbackQuery, state: FSMContext):
