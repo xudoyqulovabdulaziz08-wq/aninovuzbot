@@ -28,6 +28,7 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 @router.message(F.text == "👤 Shaxsiy kabinet")
 @router.callback_query(F.data == "cabinet")
 async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], **data):
+    user_id = event.from_user.id
     # Middleware'dan kelgan 'user' ni xavfsiz olish
     user = data.get("user") or {}
     state = data.get("state")
@@ -42,7 +43,7 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], **d
     raw_status = user.get("status", "user")
     is_vip = user.get("is_vip", False)
 
-    if user_id == CREATOR_ID:
+    if int(user_id) == int(CREATOR_ID):
         status_label = "👑 CREATOR"
     elif raw_status == "admin":
         status_label = "🛡 ADMIN"
@@ -68,7 +69,7 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], **d
     else:
         vip_status = "❌ Faol emas"
 
-    user_id = event.from_user.id
+    
     text = (
         "👤 <b>SHAXSIY KABINET</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
