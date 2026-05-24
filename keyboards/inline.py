@@ -163,6 +163,6 @@ def admin_channels_kb():
     builder.row(types.InlineKeyboardButton(text="➕ Kanal qo'shish", callback_data="add_channel"))
     builder.row(types.InlineKeyboardButton(text="📋 Kanal ro'yxati", callback_data="list_channels"))
     builder.row(types.InlineKeyboardButton(text="➖ Kanal o'chirish", callback_data="remove_channel"))
-    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin_panel"))
+    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel"))
     return builder.as_markup()
 
