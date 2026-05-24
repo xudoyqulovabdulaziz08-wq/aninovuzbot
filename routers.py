@@ -13,7 +13,8 @@ from handlers.menu import (
     
 )
 from handlers.admin_panel import (
-    channel
+    channel,
+    anime_menu
 )
 
 # Asosiy router
@@ -23,6 +24,7 @@ main_router = Router()
 main_router.include_routers(
     start.router, # start router
     admin_menu.router, #menu/admin va creator menu router
+    anime_menu.router, #admin_panel/anime_menu router
     channel.router, #admin_panel/channel router
     qolnlanma.router, #menu/qollanma router (fayl yozilisida xatolik)
     reklama.router, #menu/reklama router
