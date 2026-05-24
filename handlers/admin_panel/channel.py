@@ -44,7 +44,7 @@ async def admin_channels(callback: types.CallbackQuery, state: FSMContext):
     kb = admin_channels_kb()
     
     try:
-        await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
             logger.error(f"❌ Admin kanallar xatosi: {e}")
