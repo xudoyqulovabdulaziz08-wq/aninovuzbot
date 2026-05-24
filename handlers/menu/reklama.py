@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 # Reklama bo'limi uchun alohida File ID ishlatsangiz bo'ladi
 ADVERTISEMENT_PHOTO_FILE_ID = "AgACAgIAAxkBAAFKaZRqEX9aJdksu2s4ZBw2j7WiPwM7ewAC6xtrG851kUhC8OgMkhJIGAEAAwIAA3kAAzsE"
 
-router = Router(name="advertisement_router")
+router = Router()
 logger = logging.getLogger(__name__)
 
 

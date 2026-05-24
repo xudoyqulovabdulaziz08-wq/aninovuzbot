@@ -10,7 +10,7 @@ from config import config
 from keyboards.inline import get_ranked_kb
 
 
-router = Router(name="reyting_router")
+router = Router()
 logger = logging.getLogger(__name__)
 
 

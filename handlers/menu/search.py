@@ -14,7 +14,7 @@ class SearchState(StatesGroup):
     waiting_for_id = State()
     waiting_for_genre = State()
 
-router = Router(name="search_router")
+router = Router()
 logger = logging.getLogger(__name__)
 
 

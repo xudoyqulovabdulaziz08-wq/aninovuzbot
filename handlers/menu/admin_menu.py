@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from keyboards.inline import admin_panel_kb, creator_panel_kb
 from    config import config
 
-router = Router(name="admin_menu_router")
+router = Router()
 logger = logging.getLogger(__name__)
 
 
@@ -87,3 +87,7 @@ async def creator_panel_handler(event: types.Message | types.CallbackQuery, stat
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
                 raise e
+            
+
+
+

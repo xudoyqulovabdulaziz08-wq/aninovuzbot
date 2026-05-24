@@ -12,7 +12,7 @@ from config import config
 from keyboards.inline import anime_menu_kb
 
 
-router = Router(name="anime_menu_router")
+router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 
@@ -41,7 +41,9 @@ async def admin_anime_panel(callback: types.CallbackQuery, state: FSMContext): #
         await callback.answer("🎛️ Anime boshqaruv menyusi")
 
 
-@router.callback_query()
-async def catch_all(callback: types.CallbackQuery):
-    logger.warning(f"⚠️ Tutilmagan callback keldi: {callback.data} (User: {callback.from_user.id})")
-    await callback.answer(f"Xatolik: {callback.data} bo'limi topilmadi!", show_alert=True)
+
+@router.callback_query(F.data == "back_to_anime_panel")
+async def back_to_anime_panel(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await admin_anime_panel(callback, state)
+

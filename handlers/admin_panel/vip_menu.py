@@ -12,7 +12,7 @@ from config import config
 from keyboards.inline import anime_menu_kb
 
 
-router = Router(name="vip_menu_router")
+router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 

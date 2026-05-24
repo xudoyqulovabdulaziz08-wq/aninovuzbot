@@ -16,7 +16,7 @@ from config import config
 from database.repository import UserRepository
 from keyboards.inline import vip_buy_kb, cabinet_kb
 
-router = Router(name="cabinet_router")
+router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 

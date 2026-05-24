@@ -5,7 +5,7 @@ from keyboards.reply import get_main_menu
 from config import config  # Agar config kerak bo'lsa
 
 # 1. Router obyektini yaratamiz
-router = Router(name="start_router")
+router = Router()
 
 # 2. Handlerga filtrlarni yangi uslubda beramiz
 @router.message(CommandStart())

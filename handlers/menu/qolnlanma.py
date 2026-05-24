@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 # Config yoki main'dan keladigan o'zgaruvchilar (misol tariqasida)
 from config import config  
 
-router = Router(name="guide_router")
+router = Router()
 logger = logging.getLogger(__name__)
 
 # 🔥 Loyihangizdagi rasm File ID'sini shu yerga qo'ying yoki config'dan oling
