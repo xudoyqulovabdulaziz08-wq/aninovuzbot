@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 # Agarda rasmni alohida faylda (masalan, config) saqlasangiz, o'sha yerdan chaqiring
 # Reklama bo'limi uchun alohida File ID ishlatsangiz bo'ladi
-ADVERTISEMENT_PHOTO_FILE_ID = "AgACAgIAAxkBAAFKaZRqEX9aJdksu2s4ZBw2j7WiPwM7ewAC6xtrG851kUhC8OgMkhJIGAEAAwIAA3kAAzsE"
+ADVERTISEMENT_PHOTO_FILE_ID = "AgACAgIAAxkBAAFKl-xqFC9X-BM2FNEMYYfCOmreyecdUAACbhprG-q2oUjbbZLrFzFdJgEAAwIAA3cAAzsE"
 
 router = Router()
 logger = logging.getLogger(__name__)
