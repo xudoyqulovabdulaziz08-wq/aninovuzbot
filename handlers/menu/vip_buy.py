@@ -76,6 +76,7 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
 @router.callback_query(F.data == "buy_vip_med")
 async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear() # Har doim yaxshi amaliyot
+    user_id = callback.from_user.id
     VIP_PRICES = {
         "1m": "20,000",
         "3m": "55,000",
@@ -96,7 +97,7 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
         f"👇 VIP faollashtirish uchun admin bilan bog'laning:"
     )
     
-    kb = buy_vip_med_kb()
+    kb = buy_vip_med_kb(users_id=user_id)
     
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")

@@ -301,7 +301,7 @@ def admin_users_panel_kb():
         types.InlineKeyboardButton(text="👑 VIP berish/olish", callback_data="admin_add_vip")
         
     )
-    builder.now(
+    builder.row(
         types.InlineKeyboardButton(text="🚫 Bloklanganlar ro'yxati", callback_data="blocked_users")
     )
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel"))
@@ -374,10 +374,10 @@ def creator_db_panel_kb():
 
 #===========================buy_vip_med_kb===============================#
 #========================================================================#
-def buy_vip_med_kb(user_id: int):
+def buy_vip_med_kb(users_id: int):
     # Admin username va URL ni shakllantirish
     admin_username = "Khudoyqulov_pg"
-    raw_msg = f"Assalomu alaykum, VIP sotib olmoqchiman. ID: {user_id}"
+    raw_msg = f"Assalomu alaykum, VIP sotib olmoqchiman. ID: {users_id}"
     admin_url = f"https://t.me/{admin_username}?text={quote(raw_msg)}"
     
     builder = InlineKeyboardBuilder()

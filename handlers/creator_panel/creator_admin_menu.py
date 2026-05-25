@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 
 from config import config
-from keyboards.inline import creator_panel_kb, creator_db_panel_kb
+from keyboards.inline import creator_admin_kb, creator_db_panel_kb
 router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
@@ -18,18 +18,19 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 #========================creator_manage_admins===========================#
 #========================================================================#
 @router.callback_query(F.data == "creator_admin_panel")
-async def creator_panel_handler(callback: types.CallbackQuery, state: FSMContext):
+async def creator_admin__panel_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     
     
 
     # 2. Klaviatura va Matn
-    kb = creator_panel_kb()
+    kb = creator_admin_kb()
     text = (
-        f"👑 <b>CREATOR PANEL</b>\n"
+        f"💫 <b>ADMIN BOSHQARISH BO'LIMI</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Xush kelibsiz, <b>{callback.from_user.full_name}</b>!\n"
-        f"Tizim to'liq nazorat ostida."
+        f"Bu yerda adminlarni boshqarish imkoniyatlari mavjud.\n"
+        f"Ehtiyotkorlik bilan foydalaning!"
     )
 
     # 3. Faqat CallbackQuery uchun handler (Router dekoratorida callback deb belgilaganingiz uchun)
