@@ -439,10 +439,24 @@ class CacheManager:
         Ham standart kalitlarni, ham maxsus kanallar keshini xavfsiz tozalaydi.
         """
         try:
-            # 1. Agar maxsus kanallar jadvali so'ralgan bo'lsa
-            if table == "channels" or key == f"{self.namespace}:channels:active":
-                await self.invalidate_channels()
-                logger.info("🧹 CacheManager: Channels active cache invalidated.")
+            # 1. 📢 KANALLAR KESHINI TOZALASH (Yangi kalitlar bilan kengaytirildi)
+            if (
+                table == "channels" or 
+                key == f"{self.namespace}:channels:active" or 
+                key in ["cache:all_channels", "cache:active_channels"]
+                (key and key.startswith("cache:channel:"))
+            ):
+                # Esda tuting: Agar invalidate_channels() metodi ichida faqat bitta kalit o'chirilayotgan bo'lsa,
+                # bu yerda ikkala yangi kalitni ham o'chirib yuboramiz:
+                if self.redis:
+                    await self.redis.delete("cache:all_channels")
+                    await self.redis.delete("cache:active_channels")
+                
+                # Agar sizda eski uslubdagi invalidate_channels ham bo'lsa, uni ham chaqirib qo'yamiz
+                if hasattr(self, 'invalidate_channels'):
+                    await self.invalidate_channels()
+                    
+                logger.info("🧹 CacheManager: All channel caches (active & all_channels) completely invalidated.")
                 return
 
             # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa
@@ -465,7 +479,6 @@ class CacheManager:
         except Exception as e:
             metrics.errors += 1
             logger.error(f"❌ INVALIDATE ERROR: {e}")
-
 
 
 

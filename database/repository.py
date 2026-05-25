@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -265,37 +266,175 @@ class UserRepository:
 class ChannelRepository:
     @staticmethod
     async def add_channel(session: AsyncSession, channel_id: int, title: str, url: str):
-        channel = Channel(channel_id=channel_id, title=title, url=url, is_active=True)
-        session.add(channel)
-        await session.commit()
-        await valkey.invalidate_channels() 
-        return channel
+        """
+        ➕ Yangi kanal qo'shish va barcha tegishli ro'yxat keshlarini 
+        universal tarzda tozalash (Invalidation)
+        """
+        try:
+            channel = Channel(channel_id=channel_id, title=title, url=url, is_active=True)
+            session.add(channel)
+            await session.commit()
+            
+            # 🔥 YANGILANDI: Eski metod o'rniga universal invalidate tizimi
+            if hasattr(valkey, 'invalidate'):
+                await valkey.invalidate(table="channels")
+            elif hasattr(valkey, 'invalidate_channels'):
+                # Zaxira varianti
+                await valkey.invalidate_channels() 
+            
+            return channel
+            
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"❌ Yangi kanal qo'shishda xatolik: {e}")
+            raise e
 
     @staticmethod
     async def get_all_active_channels(session: AsyncSession) -> List[Channel]:
-        # Faqat faol (is_active=True) kanallarni olish (foydalanuvchilar tekshiruvi uchun)
+        """
+        🚀 Keshlashtirilgan metod: Faol kanallarni Valkey'dan chaqmoq tezligida oladi
+        """
+        CACHE_KEY = "cache:active_channels"
+        
+        # 1. Avval Valkey keshidan tekshiramiz
+        try:
+            cached_data = await valkey.get(CACHE_KEY)
+            if cached_data:
+                # Keshda ma'lumot bo'lsa, uni tezda model obyektlariga o'girib qaytaramiz (~5-10 ms)
+                channels_data = json.loads(cached_data)
+                return [Channel(**ch) for ch in channels_data]
+        except Exception as cache_err:
+            logger.warning(f"Faol kanallar keshini o'qishda xatolik: {cache_err}")
+
+        # 2. Keshda yo'q bo'lsa, bazadan (PostgreSQL/MySQL) qidiramiz
         result = await session.execute(select(Channel).where(Channel.is_active == True))
-        return result.scalars().all()
+        active_channels = result.scalars().all()
+
+        # 3. Keyingi safar bazaga qayta tushmasligi uchun keshga yozib qo'yamiz
+        try:
+            channels_dict = [
+                {
+                    "id": ch.id, 
+                    "channel_id": ch.channel_id, 
+                    "title": ch.title, 
+                    "url": ch.url, 
+                    "is_active": ch.is_active
+                }
+                for ch in active_channels
+            ]
+            # 1 soat (3600 soniya) davomida keshda saqlaymiz
+            await valkey.set(CACHE_KEY, json.dumps(channels_dict), ex=3600)
+        except Exception as cache_err:
+            logger.error(f"Faol kanallarni keshga yozishda xatolik: {cache_err}")
+
+        return active_channels
+    
 
     @staticmethod
     async def get_channel_by_id(session: AsyncSession, channel_id: int):
+        """
+        🚀 Keshlashtirilgan metod: Kanal ma'lumotlarini ID bo'yicha keshdan yoki bazadan oladi
+        """
+        CACHE_KEY = f"cache:channel:{channel_id}"
+        
+        # 1. Avval Valkey keshidan qidiramiz
+        try:
+            cached_data = await valkey.get(CACHE_KEY)
+            if cached_data:
+                # Keshda bo'lsa, uni model obyektiga o'girib darhol qaytaramiz (~2-5 ms!)
+                channel_data = json.loads(cached_data)
+                return Channel(**channel_data)
+        except Exception as cache_err:
+            logger.warning(f"Kanal keshini ID bo'yicha o'qishda xatolik: {cache_err}")
+
+        # 2. Keshda yo'q bo'lsa, bazadan (PostgreSQL/MySQL) qidiramiz
         result = await session.execute(select(Channel).where(Channel.channel_id == channel_id))
-        return result.scalar_one_or_none()
+        channel = result.scalar_one_or_none()
+
+        # 3. Agar kanal topilsa, keyingi safar tez ishlashi uchun keshga yozib qo'yamiz
+        if channel:
+            try:
+                channel_dict = {
+                    "id": channel.id, 
+                    "channel_id": channel.channel_id, 
+                    "title": channel.title, 
+                    "url": channel.url, 
+                    "is_active": channel.is_active
+                }
+                # 1 soat davomida keshda saqlaymiz
+                await valkey.set(CACHE_KEY, json.dumps(channel_dict), ex=3600)
+            except Exception as cache_err:
+                logger.error(f"Kanalni keshga yozishda xatolik: {cache_err}")
+
+        return channel
     
-    @staticmethod
     async def toggle_channel_status(session: AsyncSession, channel_id: int, is_active: bool):
-        await session.execute(
-            update(Channel).where(Channel.channel_id == channel_id).values(is_active=is_active)
-        )
-        await session.commit()
-        await valkey.invalidate_channels()
+        """
+        🔄 Kanal statusini o'zgartirish va barcha tegishli keshlar (L1/L2)
+        hamda individual kanal keshini universal invalidate qilish
+        """
+        try:
+            # 1. Bazada statusni yangilaymiz
+            await session.execute(
+                update(Channel).where(Channel.channel_id == channel_id).values(is_active=is_active)
+            )
+            await session.commit()
+            
+            # 2. 🔥 ESKI METOD O'RNIGA: Universal invalidate tizimini chaqiramiz
+            # Bu bitta urinishda 'cache:all_channels', 'cache:active_channels' 
+            # va 'cache:channel:{channel_id}' keshlarining hammasini tozalaydi!
+            if hasattr(valkey, 'invalidate'):
+                await valkey.invalidate(table="channels", obj_id=channel_id)
+            elif hasattr(valkey, 'invalidate_channels'):
+                # Agar mabodo CacheManager hali to'liq ulanmagan bo'lsa, eski usul zaxira sifatida
+                await valkey.invalidate_channels()
+
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"❌ Kanal statusini o'zgartirishda xatolik: {e}")
+            raise e
 
     # 🔄 ESKI ALIAS O'ZGARTIRILDI: Endi u rostdan ham hamma kanallarni qaytaradi (Admin ko'rishi uchun)
     @staticmethod
     async def get_all_channels(session: AsyncSession) -> List[Channel]:
-        """Tizimdagi barcha faol va nofaol kanallar ro'yxatini olish"""
+        """
+        🚀 Keshlashtirilgan metod: Tizimdagi barcha faol va nofaol kanallarni
+        Valkey keshidan chaqmoq tezligida oladi (~5-10 ms!)
+        """
+        CACHE_KEY = "cache:all_channels"
+        
+        # 1. Avval Valkey keshidan tekshiramiz
+        try:
+            cached_data = await valkey.get(CACHE_KEY)
+            if cached_data:
+                # Keshda ma'lumot bo'lsa, stringni JSON qilib, model obyektlariga o'giramiz
+                channels_data = json.loads(cached_data)
+                return [Channel(**ch) for ch in channels_data]
+        except Exception as cache_err:
+            logger.warning(f"Barcha kanallar keshini o'qishda xatolik: {cache_err}")
+
+        # 2. Keshda yo'q bo'lsa (yoki xato bersa), bazadan (PostgreSQL/MySQL) qidiramiz
         result = await session.execute(select(Channel).order_by(Channel.id.desc()))
-        return result.scalars().all()
+        channels = result.scalars().all()
+
+        # 3. Keyingi safar bazaga qayta tushmasligi uchun keshga yozib qo'yamiz
+        try:
+            channels_dict = [
+                {
+                    "id": ch.id, 
+                    "channel_id": ch.channel_id, 
+                    "title": ch.title, 
+                    "url": ch.url, 
+                    "is_active": ch.is_active
+                }
+                for ch in channels
+            ]
+            # 1 soat (3600 soniya) davomida keshda saqlaymiz
+            await valkey.set(CACHE_KEY, json.dumps(channels_dict), ex=3600)
+        except Exception as cache_err:
+            logger.error(f"Barcha kanallarni keshga yozishda xatolik: {cache_err}")
+
+        return channels
 
     # 🗑 YANGI QO'SHILDI: Kanalni bazadan butunlay o'chirish metodi
     @staticmethod
@@ -304,22 +443,24 @@ class ChannelRepository:
         try:
             stmt = delete(Channel).where(Channel.channel_id == channel_id)
             result = await session.execute(stmt)
-            
+        
             # Agar birorta qator o'chgan bo'lsa, rowcount 1 (yoki undan ko'p) bo'ladi
             if result.rowcount > 0:
                 await session.commit()
-                
-                # 🔥 REPOSITORY ICHIDA KESHNI TOZALASH:
-                # Agar valkey obyekti shu faylda import qilingan bo'lsa
-                if hasattr(valkey, 'invalidate_channels'):
-                    await valkey.invalidate_channels()
-                    
-                return True
-                
-            return False
             
+                # 🔥 REPOSITORY ICHIDA KESHNI TOZALASH (TO'G'RILANDI):
+                # Yangi universal 'invalidate' metodi borligini tekshiramiz
+                if hasattr(valkey, 'invalidate'):
+                    await valkey.invalidate(table="channels", obj_id=channel_id)
+                elif hasattr(valkey, 'invalidate_channels'):
+                    # Zaxira variant (agar eski metod hali o'chirilmagan bo'lsa)
+                    await valkey.invalidate_channels()
+                
+                return True
+            
+            return False
+        
         except Exception as e:
             await session.rollback()
             raise e
-
     
