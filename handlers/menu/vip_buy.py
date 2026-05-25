@@ -148,7 +148,8 @@ async def vip_tariff_selection_handler(callback: types.CallbackQuery):
     
     builder = InlineKeyboardBuilder()
     builder.row(
-         types.InlineKeyboardButton(text="💬 Admin bilan bog'lanish", url=admin_url"
+         types.InlineKeyboardButton(text="💬 Admin bilan bog'lanish", url=admin_url)
+        )
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_med"))
     
     try:
