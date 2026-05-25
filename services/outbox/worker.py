@@ -193,15 +193,21 @@ class OutboxWorker:
                 return 0
 
     # ==========================================
-    # ⚙️ EVENT HANDLER (SAFE PARSING)
+    # ⚙️ EVENT HANDLER (SAFE PARSING - FIXED LOOP)
     # ==========================================
     async def handle_event(self, ev: OutboxEvent) -> bool:
         try:
-            payload = orjson.loads(ev.payload)
-        except orjson.JSONDecodeError as json_err:
-            logger.error(f"🚨 CRITICAL: OutboxEvent ID {ev.id} payload is not valid JSON: {json_err}")
-            # Buzilgan JSON bo'lsa, uni qayta ishlab bo'lmaydi, true qaytarib batchdan chiqarib yuboramiz (yoki DLQ ga otamiz)
-            return False 
+            # Agar ev.payload allaqachon dict bo'lsa (ba'zi ORM'lar avtomat o'giradi)
+            if isinstance(ev.payload, dict):
+                payload = ev.payload
+            else:
+                payload = orjson.loads(ev.payload)
+        except (orjson.JSONDecodeError, TypeError) as json_err:
+            logger.critical(f"🚨 CRITICAL: OutboxEvent ID {ev.id} payload is not valid JSON: {json_err}")
+            # 🔥 TUZATILDI: Buzuq JSON'ni to'g'ridan-to'g'ri shu yerda DLQ ga otamiz
+            # va True qaytaramizki, u qayta-qayta o'qilib worker'ni qulatavermasin!
+            await self.send_to_dlq_raw(ev, f"Invalid JSON format: {json_err}")
+            return True 
 
         user_id = payload.get("user_id")
         if user_id:
@@ -210,8 +216,13 @@ class OutboxWorker:
         ttl = self.dynamic_ttl(user_id or 0)
 
         # Routers
+        # Routers qismiga qo'shimcha:
         if ev.event_type == "cache_update":
             await self.cache_event(payload, ttl)
+        elif ev.event_type in ["channel_inserted", "channel_deleted", "channel_updated"]:
+            # Kanallar o'zgarganda keshni avtomat urish zanjiri
+            channel_id = payload.get("channel_id") or payload.get("obj_id")
+            await self.cache.invalidate(table="channels", obj_id=str(channel_id) if channel_id else None)
         elif ev.event_type == "user_created":
             await self.fake_telegram(payload)
         elif ev.event_type == "points_added":
@@ -219,6 +230,30 @@ class OutboxWorker:
 
         return True
 
+    
+    # ==========================================
+    # 💀 RAW DLQ FOR BROKEN JSON (NEW SAFE METHOD)
+    # ==========================================
+    async def send_to_dlq_raw(self, ev: OutboxEvent, err_msg: str):
+        """Buzuq payloadlarni ham xavfsiz Redis DLQ ga o'tkazish xizmati"""
+        if self.redis:
+            try:
+                dlq_sharded_key = self.shard_key(self.dlq_key)
+                # Buzuq payload ob'ektini string ko'rinishida xavfsiz saqlaymiz
+                safe_payload = str(ev.payload) if ev.payload else "EMPTY_PAYLOAD"
+                await self.redis.lpush(
+                    dlq_sharded_key,
+                    orjson.dumps({
+                        "id": ev.id,
+                        "event_type": ev.event_type,
+                        "error": err_msg,
+                        "raw_payload": safe_payload,
+                        "time": datetime.now(timezone.utc).isoformat()
+                    })
+                )
+            except Exception as redis_err:
+                logger.error(f"🚨 FAILED TO PUSH TO REDIS RAW DLQ: {redis_err}")
+        logger.critical(f"💀 BROKEN EVENT FORCED TO DLQ: {ev.id}")
     
     # ==========================================
     # 🧠 CACHE ACTION (FIXED)
