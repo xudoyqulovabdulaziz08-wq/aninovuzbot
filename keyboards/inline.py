@@ -223,12 +223,63 @@ def admin_add_kb():
     )
     builder.row(
         types.InlineKeyboardButton(text="📊 Reklama statistikasi", callback_data="ad_stats"),
+    )
+    builder.row(
         types.InlineKeyboardButton(text="⏳ Reklama tarixi", callback_data="ad_history")
     )
     
     # Navigatsiya (Har doim alohida qatorda)
     builder.row(
         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel")
+    )
+    
+    return builder.as_markup()
+
+
+
+
+
+
+#=============================admin_vip_kb===============================#
+#========================================================================#
+def admin_vip_kb():
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        types.InlineKeyboardButton(text="➕Vip qo'shish", callback_data="admin_add_vip")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="📃 Vip ro'yxati", callback_data="admin_list_vip")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="➖Vip o'chrish", callback_data="admin_del_vip")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel")
+    )
+
+
+
+
+#=============================admin_add_vip_kb===============================#
+#========================================================================#
+def admin_add_vip_kb():
+    builder = InlineKeyboardBuilder()
+    
+    # 1. Muddatlarni guruhlash (UX: o'sish tartibida)
+    # 1 va 3 oylikni bitta qatorga, 6 oy va 1 yillikni keyingisiga qo'yamiz
+    builder.row(
+        types.InlineKeyboardButton(text="🗓 1 oylik", callback_data="vip_1m"),
+        types.InlineKeyboardButton(text="🗓 3 oylik", callback_data="vip_3m")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🗓 6 oylik", callback_data="vip_6m"),
+        types.InlineKeyboardButton(text="🏆 1 yillik", callback_data="vip_12m")
+    )
+    
+    # 2. Navigatsiya
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_vip_panel")
     )
     
     return builder.as_markup()
