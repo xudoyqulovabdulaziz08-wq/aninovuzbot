@@ -433,7 +433,9 @@ class CacheManager:
 
 
 # ================= 🔥 SMART INVALIDATE METHOD =================
-async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None):
+# cache.py ichidagi CacheManager klassi ichiga (eng oxiriga) qo'shing:
+
+    async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None):
         """
         Workerlar tomonidan chaqiriladigan universal kesh tozalash metodi.
         Ham standart kalitlarni, ham maxsus kanallar keshini xavfsiz tozalaydi.
@@ -443,12 +445,11 @@ async def invalidate(self, table: str = None, obj_id: Any = None, key: str = Non
             if (
                 table == "channels" or 
                 key == f"{self.namespace}:channels:active" or 
-                key in ["cache:all_channels", "cache:active_channels"] or  # <-- TO'G'RILANDI: or qo'shildi
-                (key and key.startswith("cache:channel:")) or              # <-- TO'G'RILANDI: or qo'shildi
+                key in ["cache:all_channels", "cache:active_channels"] or
+                (key and key.startswith("cache:channel:")) or
                 (table == "channels" and obj_id)
             ):
                 if self.redis:
-                    # Bizning yangi keshlarimiz ShardRouter orqali o'chirilishi uchun:
                     # Agar aniq bitta kanal o'chgan/o'zgargan bo'lsa, o'shani o'chiramiz
                     if table == "channels" and obj_id:
                         target_key = self._key(table, obj_id)
@@ -467,7 +468,7 @@ async def invalidate(self, table: str = None, obj_id: Any = None, key: str = Non
                     await self.redis.delete(key_all)
                     await self.redis.delete(key_act)
                     
-                    # Eski hardcoded kalitni ham o'chirib yuboramiz xavfsizlik uchun
+                    # Eski hardcoded kalitni ham o'chiramiz
                     await self.redis.delete(f"{self.namespace}:channels:active")
                 
                 logger.info("🧹 CacheManager: All channel caches (L1 & L2 Clusters) completely invalidated.")
