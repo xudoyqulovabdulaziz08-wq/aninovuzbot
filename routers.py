@@ -8,7 +8,8 @@ from handlers.menu import (
     admin_menu,
     reyting,
     vip_buy,
-    cabinet
+    cabinet,
+    referel
     
     
 )
@@ -18,6 +19,7 @@ from handlers.admin_panel import (
     reklama_menu,
     vip_menu,
     user_control
+    
     
 )
 from handlers.creator_panel import (
@@ -41,6 +43,7 @@ main_router.include_routers(
     reyting.router, #menu/reyting routter
     vip_buy.router, #menu/vip bolimi router
     cabinet.router, #menu/cabinet router
+    referel.router, #menu/referel router
     search.router   #menu/ search router doimo pastda
     
 )
