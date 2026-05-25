@@ -257,7 +257,7 @@ def admin_vip_kb():
     builder.row(
         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel")
     )
-
+    return builder.as_markup()
 
 
 
