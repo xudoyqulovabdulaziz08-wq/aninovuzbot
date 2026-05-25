@@ -123,9 +123,9 @@ def vip_buy_kb(is_vip: bool) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
     if is_vip:
-        builder.row(types.InlineKeyboardButton(text="💫 VIP muddatini uzaytirish", callback_data="activate_vip"))
+        builder.row(types.InlineKeyboardButton(text="💫 VIP muddatini uzaytirish", callback_data="buy_vip_med"))
     else:
-        builder.row(types.InlineKeyboardButton(text="💎 100 ballga VIP sotib olish", callback_data="activate_vip"))
+        builder.row(types.InlineKeyboardButton(text="💎 100 ballga VIP sotib olish", callback_data="buy_vip_med"))
         
     builder.row(
         types.InlineKeyboardButton(text="🎁 Ball yig'ish", callback_data="get_ref_link"),
@@ -334,6 +334,8 @@ def creator_admin_kb():
 
 
 
+#==========================creator_db_panel_kb===========================#
+#========================================================================#
 def creator_db_panel_kb():
     builder = InlineKeyboardBuilder()
     
@@ -363,6 +365,42 @@ def creator_db_panel_kb():
     # 5. Navigatsiya
     builder.row(
         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="creator_panel")
+    )
+    
+    return builder.as_markup()
+
+
+
+
+
+#===========================buy_vip_med_kb===============================#
+#========================================================================#
+def buy_vip_med_kb(user_id: int):
+    # Admin username va URL ni shakllantirish
+    admin_username = "Khudoyqulov_pg"
+    raw_msg = f"Assalomu alaykum, VIP sotib olmoqchiman. ID: {user_id}"
+    admin_url = f"https://t.me/{admin_username}?text={quote(raw_msg)}"
+    
+    builder = InlineKeyboardBuilder()
+    
+    # 1. Tariflar
+    builder.row(
+        types.InlineKeyboardButton(text="🗓 1 oylik", callback_data="buy_vip_1m"),
+        types.InlineKeyboardButton(text="🗓 3 oylik", callback_data="buy_vip_3m")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🗓 6 oylik", callback_data="buy_vip_6m"),
+        types.InlineKeyboardButton(text="🏆 1 yillik", callback_data="buy_vip_12m")
+    )
+    
+    # 2. Admin bilan bog'lanish (Dinamik URL bilan)
+    builder.row(
+        types.InlineKeyboardButton(text="💬 Admin bilan bog'lanish", url=admin_url)
+    )
+    
+    # 3. Navigatsiya
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_menu")
     )
     
     return builder.as_markup()

@@ -12,14 +12,19 @@ from aiogram.exceptions import TelegramBadRequest
 
 from config import config
 from database.repository import UserRepository
-from keyboards.inline import vip_buy_kb
+from keyboards.inline import vip_buy_kb, buy_vip_med_kb
 
 router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 
 
-
+VIP_PRICES = {
+    "1m": "20,000",
+    "3m": "55,000",
+    "6m": "100,000",
+    "12m": "180,000"
+}
 
 
 #==========================💎 VIP sotib olish=============================#
@@ -68,3 +73,35 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
         # Callback holatida tugmani tahrirlash yoki yangi xabar yuborish
         await event.answer()
         await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+
+
+
+@router.callback_query(F.data == "buy_vip_med")
+async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear() # Har doim yaxshi amaliyot
+    kb = buy_vip_med_kb(user_id=callback.from_user.id)
+    text = (
+        f"💎 <b>VIP SOTIB OLISH</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"VIP imkoniyatlarini ko'rib chiqing va o'zingizga mos tarifni tanlang.\n\n"
+        f"💵 <b>VIP tarif narxlari:</b>\n"
+        f"🚀 <b>1 oylik:</b> {VIP_PRICES['1m']} so'm\n"
+        f"🚀 <b>3 oylik:</b> {VIP_PRICES['3m']} so'm\n"
+        f"🚀 <b>6 oylik:</b> {VIP_PRICES['6m']} so'm\n"
+        f"🚀 <b>1 yillik:</b> {VIP_PRICES['12m']} so'm\n\n"
+        f"🏷 <b>Bonus:</b> <code>100 ball = 30 kun</code>\n"
+        f"👇 VIP faollashtirish uchun admin bilan bog'laning:"
+    )
+    
+    kb = buy_vip_med_kb()
+    
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ VIP menyu xatosi: {e}")
+            
+    # Answer har doim chaqirilishi kerak
+    await callback.answer("💎 VIP sotib olish menyusi yuklandi")
