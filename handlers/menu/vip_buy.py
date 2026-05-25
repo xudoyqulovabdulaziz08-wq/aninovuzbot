@@ -117,6 +117,10 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
 
 
 
+
+
+#====================vip_tariff_selection_handler========================#
+#========================================================================#
 @router.callback_query(F.data.startswith("buyer_vip_") )
 async def vip_tariff_selection_handler(callback: types.CallbackQuery):
     tariff_code = callback.data.split("_")[2]
@@ -136,7 +140,7 @@ async def vip_tariff_selection_handler(callback: types.CallbackQuery):
     admin_username = "Khudoyqulov_pg"
     
     # Admin uchun tayyor xabar
-    raw_msg = f"Assalomu alaykum, {data['name']} VIP sotib olmoqchiman. ID: {user_id}"
+    raw_msg = f"Assalomu alaykum, {data['name']} narxi:{data['price']} VIP sotib olmoqchiman. ID: {user_id}"
     admin_url = f"https://t.me/{admin_username}?text={quote(raw_msg)}"
     
     text = (
@@ -165,6 +169,9 @@ async def vip_tariff_selection_handler(callback: types.CallbackQuery):
 
 
 
+
+#=======================buy_vip_bonus_handler============================#
+#========================================================================#
 @router.callback_query(F.data.startswith("buy_vip_bonus") )
 async def buy_vip_bonus_handler(callback: types.CallbackQuery):
     

@@ -150,7 +150,7 @@ def cabinet_kb():
     builder.row(types.InlineKeyboardButton(text="💎 VIP sotib olish", callback_data="buy_vip_menu"))
       
     builder.row(
-        types.InlineKeyboardButton(text="🔗 Taklif havola", callback_data="get_ref_link"),
+        types.InlineKeyboardButton(text="🎁 Ball yig'ish", callback_data="get_ref_link"),
         types.InlineKeyboardButton(text="🌐 Saytdagi profil", url="https://aninowuz.uz/profile")
     )
     return builder.as_markup()

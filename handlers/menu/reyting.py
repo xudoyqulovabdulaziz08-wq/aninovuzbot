@@ -45,4 +45,51 @@ async def ranked_menu(event: types.Message | types.CallbackQuery, state: FSMCont
     
 
     
-    
+
+
+#============================anime_ranked================================#
+#========================================================================#
+@router.callback_query(F.data == "Anime_ranked")
+async def anime_ranked(callback: types.CallbackQuery, state: FSMContext):
+    text = (
+        f"🎬 <b>ANIME RANKED</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Bu fuksiya tez orada qo'shiladi"
+        f"❗️ Hozircha bu bo'limda bonus ballarni Anime reyting ko'rish imkoniyati mavjud emas, lekin tez orada qo'shiladi. Iltimos, yangilanishlarni kuting!"
+
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="reyting_menu"))
+
+    try:
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ Anime ranked xatosi: {e}")
+    await callback.answer("🎬 Anime ranked bo'limi tez orada qo'shiladi")
+
+
+
+
+
+
+#============================anime_ranked================================#
+#========================================================================#
+@router.callback_query(F.data == "User_ranked")
+async def user_ranked(callback: types.CallbackQuery, state: FSMContext):
+    text = (
+        f"🏆 <b>USER RANKED</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Bu fuksiya tez orada qo'shiladi"
+        f"❗️ Hozircha bu bo'limda bonus ballarni User reyting ko'rish imkoniyati mavjud emas, lekin tez orada qo'shiladi. Iltimos, yangilanishlarni kuting!"
+
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="reyting_menu"))
+
+    try:
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ Anime ranked xatosi: {e}")
+    await callback.answer("🎬 Anime ranked bo'limi tez orada qo'shiladi")
