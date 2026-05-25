@@ -30,7 +30,7 @@ async def admin_vip_panel(callback: types.CallbackQuery, state: FSMContext):
         f"Bu yerda VIP foydalanuvchilarni tayinlash  imkoniyatlar mavjud.\n"
         f"Kerakli bo'limni tanlang."
     )
-    kb = admin_vip_kb
+    kb = admin_vip_kb()
 
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -54,7 +54,7 @@ async def admin_vip_panel(callback: types.CallbackQuery, state: FSMContext):
         f"VIP foydalanuvchi qo'shish bo'limiga xush kelibsiz, <b>{callback.from_user.full_name}</b>!\n"
         f"Bu yerda foydalanuvchini VIP qilish uchun kerakli ma'lumotlarni kiriting."
     )
-    kb = admin_add_vip_kb
+    kb = admin_add_vip_kb()
 
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
