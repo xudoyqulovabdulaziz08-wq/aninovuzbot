@@ -21,10 +21,7 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 async def creator_panel_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     
-    # 1. Xavfsizlik tekshiruvi
-    if callback.from_user.id != int(CREATOR_ID): # ID ni int ga o'girib solishtiring
-        await callback.answer("❌ Siz Creator emassiz!", show_alert=True)
-        return
+    
 
     # 2. Klaviatura va Matn
     kb = creator_panel_kb()
@@ -52,10 +49,7 @@ async def creator_panel_handler(callback: types.CallbackQuery, state: FSMContext
 async def creator_db_panel_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     
-    # 1. Xavfsizlik tekshiruvi
-    if callback.from_user.id != int(CREATOR_ID): # ID ni int ga o'girib solishtiring
-        await callback.answer("❌ Siz Creator emassiz!", show_alert=True)
-        return
+    
 
     # 2. Klaviatura va Matn
     kb = creator_db_panel_kb() # Albatta, creator_db_panel_kb() ni yaratishingiz kerak
