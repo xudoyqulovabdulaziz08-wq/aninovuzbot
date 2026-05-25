@@ -7,6 +7,7 @@ from config import config
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import config
 from middlewares.db_middleware import SafeSession
@@ -104,23 +105,36 @@ async def add_channel(callback: types.CallbackQuery, state: FSMContext):
 #========================================================================#
 @router.message(AdminChannelsState.adding_channel)
 async def process_channel_input(message: Message, state: FSMContext, **data):
-    # Middleware'dan kelgan 'session' ni data orqali xavfsiz olish
-    session = data.get("session")
+    safe_session = data.get("session")
+    session_pool = data.get("session_pool")
     
-    # Agar middleware'da xatolik bo'lsa yoki sessiya bo'sh bo'lsa, buni tekshirish
-    if session is None:
-        return await message.answer("❌ Tizim xatosi: Database sessiyasi topilmadi.")
+    # Ichki haqiqiy ulanish bor yoki yo'qligini tekshiramiz
+    # SafeSession klassingiz __dict__["_session"] ichida saqlaydi
+    actual_session = getattr(safe_session, "_session", None)
 
+    if actual_session is not None:
+        # Agar middleware tasodifan tirik sessiya bergan bo'lsa, shundan foydalanamiz
+        return await _execute_channel_adding(message, state, actual_session)
+    elif session_pool is not None:
+        # Kesh rejimi bo'lgani uchun sessiya yo'q, yangi sessiya ochamiz (Majburiy)
+        async with session_pool() as new_session:
+            return await _execute_channel_adding(message, state, new_session)
+    else:
+        # Agar na sessiya, na session_pool bo'lsa (Kritik xato)
+        return await message.answer("❌ Tizim xatosi: Ma'lumotlar bazasiga ulanib bo'lmadi.")
+
+
+# Asosiy logikani alohida funksiyaga ajratdik (Kodni takrorlamaslik uchun)
+async def _execute_channel_adding(message: Message, state: FSMContext, session: AsyncSession):
     input_text = message.text.strip()
     
     try:
-        # Telegramdan kanal ma'lumotlarini olish
         chat = await message.bot.get_chat(input_text)
         
         if chat.type not in ["channel", "supergroup"]:
             return await message.answer("❌ Bu kanal yoki superguruh emas.")
             
-        # Bazada mavjudligini tekshirish
+        # Endi 'session' aniq tirik SQLAlchemy sessiyasi, xatosiz ishlaydi!
         existing_channel = await ChannelRepository.get_channel_by_id(session, chat.id)
         if existing_channel:
             return await message.answer("❌ Bu kanal allaqachon tizimda mavjud.")
@@ -155,37 +169,45 @@ async def process_channel_input(message: Message, state: FSMContext, **data):
 
 
 
-
 #=============================confirm_add================================#
 #========================================================================#
 # Tasdiqlash tugmasi bosilganda
 @router.callback_query(F.data == "confirm_add_channel")
 async def confirm_add(callback: CallbackQuery, state: FSMContext, **kwargs):
-    # kwargs ichidan session ni olamiz
-    session = kwargs.get("session")
-    # FSM dan kelgan ma'lumotlarni alohida o'zgaruvchiga olamiz
+    safe_session = kwargs.get("session")
+    session_pool = kwargs.get("session_pool")
     channel_data = await state.get_data()
     
+    actual_session = getattr(safe_session, "_session", None)
+    
     try:
-        # Repository orqali bazaga saqlash
-        await ChannelRepository.add_channel(
-            session=session, 
-            channel_id=channel_data['channel_id'], 
-            title=channel_data['title'], 
-            url=channel_data['url']
-        )
+        if actual_session is not None:
+            # Tirik sessiya mavjud bo'lsa
+            await ChannelRepository.add_channel(
+                session=actual_session, 
+                channel_id=channel_data['channel_id'], 
+                title=channel_data['title'], 
+                url=channel_data['url']
+            )
+        elif session_pool is not None:
+            # Sessiya yo'q bo'lsa, yozish uchun yangisini ochamiz
+            async with session_pool() as new_session:
+                await ChannelRepository.add_channel(
+                    session=new_session, 
+                    channel_id=channel_data['channel_id'], 
+                    title=channel_data['title'], 
+                    url=channel_data['url']
+                )
+        else:
+            raise RuntimeError("Database session pool topilmadi.")
+
+        await callback.message.edit_text("✅ Kanal muvaffaqiyatli qo'shildi va kesh tozalandi!", reply_markup=None)
         
-        await callback.message.edit_text(
-            "✅ Kanal muvaffaqiyatli qo'shildi va kesh tozalandi!",
-            reply_markup=None # Oldingi tugmalarni olib tashlash
-        )
     except Exception as e:
         logger.error(f"Bazaga saqlash xatosi: {e}")
         await callback.message.edit_text("❌ Bazaga saqlashda xatolik yuz berdi.")
         
     await state.clear()
-
-
 
 
 
