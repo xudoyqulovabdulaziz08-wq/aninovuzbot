@@ -19,12 +19,7 @@ logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 
 
-VIP_PRICES = {
-    "1m": "20,000",
-    "3m": "55,000",
-    "6m": "100,000",
-    "12m": "180,000"
-}
+
 
 
 #==========================💎 VIP sotib olish=============================#
@@ -81,6 +76,12 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
 @router.callback_query(F.data == "buy_vip_med")
 async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear() # Har doim yaxshi amaliyot
+    VIP_PRICES = {
+        "1m": "20,000",
+        "3m": "55,000",
+        "6m": "100,000",
+        "12m": "180,000"
+    }
     kb = buy_vip_med_kb(user_id=callback.from_user.id)
     text = (
         f"💎 <b>VIP SOTIB OLISH</b>\n"
