@@ -313,6 +313,7 @@ async def _execute_channel_listing(
 ):
     try:
         await callback.answer()
+        activ_channels = await ChannelRepository.get_all_active_channels(session)
         channels = await ChannelRepository.get_all_channels(session)
         
         # 1-Holat: Kanallar mavjud bo'lmasa
@@ -391,6 +392,7 @@ async def _execute_channel_listing(
             f"📋 <b>TIZIMDAGI KANALLAR</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Jami kanallar: <b>{total_channels}</b> ta\n\n"
+            f"Faol kanallar: <b>{len(activ_channels)}</b> ta\n\n"
             f"Kanal haqida batafsil ma'lumot olish va uni o'chirish uchun ustiga bosing:"
         )
         

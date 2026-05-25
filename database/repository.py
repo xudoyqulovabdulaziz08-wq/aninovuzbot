@@ -295,4 +295,9 @@ class ChannelRepository:
         # 🔥 Kanal statusi o'zgarganda ham keshni tozalash shart
         await valkey.invalidate_channels()
 
+    @staticmethod
+    async def get_all_channels(session: AsyncSession) -> List[Channel]:
+        """get_all_active_channels metodiga alias"""
+        return await ChannelRepository.get_all_active_channels(session)
+
     
