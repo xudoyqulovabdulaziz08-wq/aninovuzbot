@@ -193,10 +193,15 @@ class OutboxWorker:
                 return 0
 
     # ==========================================
-    # ⚙️ EVENT HANDLER
+    # ⚙️ EVENT HANDLER (SAFE PARSING)
     # ==========================================
     async def handle_event(self, ev: OutboxEvent) -> bool:
-        payload = orjson.loads(ev.payload)
+        try:
+            payload = orjson.loads(ev.payload)
+        except orjson.JSONDecodeError as json_err:
+            logger.error(f"🚨 CRITICAL: OutboxEvent ID {ev.id} payload is not valid JSON: {json_err}")
+            # Buzilgan JSON bo'lsa, uni qayta ishlab bo'lmaydi, true qaytarib batchdan chiqarib yuboramiz (yoki DLQ ga otamiz)
+            return False 
 
         user_id = payload.get("user_id")
         if user_id:
@@ -214,27 +219,32 @@ class OutboxWorker:
 
         return True
 
+    
     # ==========================================
-    # 🧠 CACHE ACTION
+    # 🧠 CACHE ACTION (FIXED)
     # ==========================================
     async def cache_event(self, payload, ttl):
         try:
             user_id = payload.get("user_id")
             if user_id:
-                # Keshni tozalash va yangilash
-                await self.cache.invalidate("users", user_id)
+                # 1. Birinchi navbatda eski keshni tozalaymiz
+                await self.cache.invalidate(table="users", obj_id=user_id)
                 
-                # Sharded kalit bilan keshga yozish
-                sharded_user_key = self.shard_key(f"users:{user_id}")
+                # 2. To'g'ri formatda CacheManager.set metodiga argumentlarni uzatamiz
+                # CacheManager o'z ichida shardingni (namespace, shard, version) avtomatik hal qiladi
                 await self.cache.set(
-                    sharded_user_key,
-                    payload,
+                    table="users",
+                    obj_id=user_id,
+                    data=payload,
                     ttl=ttl
                 )
-            metrics.cache_hits += 1
+                metrics.cache_hits += 1
+            else:
+                logger.warning("⚠️ cache_event: Payload ichida user_id topilmadi.")
+                metrics.cache_misses += 1
         except Exception as e:
             metrics.cache_misses += 1
-            logger.error(f"Cache operation error: {e}")
+            logger.error(f"❌ Cache operation error in worker: {e}")
 
     # ==========================================
     # 📡 EXTERNAL FAKE SERVICES

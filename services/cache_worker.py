@@ -17,7 +17,7 @@ logger = logging.getLogger("CacheWorker")
 class CacheInvalidationWorker:
     """
     🚀 PRO MAX DISTRIBUTED ZERO-LOSS EVENT SYSTEM
-    🛠 FIXED: Model attributes, SQLAlchemy best practices, and Non-blocking Cleanup.
+    🛠 FIXED: CacheManager integration, Named Invalidation arguments, and Safe Backoff.
     """
 
     def __init__(self, session_factory, cache_manager, redis=None):
@@ -120,7 +120,6 @@ class CacheInvalidationWorker:
             try:
                 now = datetime.now(timezone.utc)
                 
-                # SQLAlchemy-da 'is_(False)' ishlatish eng xavfsiz usul hisoblanadi
                 stmt = (
                     select(OutboxEvent)
                     .where(
@@ -157,21 +156,21 @@ class CacheInvalidationWorker:
                 await session.rollback()
                 return 0
 
-    # ================= SINGLE EVENT PROCESS =================
+    # ================= SINGLE EVENT PROCESS (FIXED) =================
     async def _process_single(self, ev: OutboxEvent):
-        # Keshni tozalash (Invalidation)
-        await self.cache.invalidate(ev.aggregate, ev.aggregate_id)
+        # 🔥 FIX: Argumentlarni nomli (keyword) ko'rinishda uzatamiz. 
+        # Bu CacheManager.invalidate() metodiga to'g'ri tushishini ta'minlaydi.
+        await self.cache.invalidate(table=ev.aggregate, obj_id=ev.aggregate_id)
         
         ev.processed = True
-        # 💡 FIX: Modelda bo'lmagan 'processed_at' olib tashlandi,created_at kesh vaqti bilan yangilandi
         ev.created_at = datetime.now(timezone.utc)
 
-    # ================= FAILURE HANDLING =================
+    # ================= FAILURE HANDLING (FIXED) =================
     async def _handle_failure(self, session, ev: OutboxEvent, error: str):
         ev.retry_count += 1
 
         if ev.retry_count <= self.max_retries:
-            # Exponential Backoff
+            # Exponential Backoff mantiqini saqlaymiz, lekin created_at ni xavfsiz vaqt bilan belgilaymiz
             delay_seconds = 5 * ev.retry_count
             ev.created_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
             
@@ -207,7 +206,6 @@ class CacheInvalidationWorker:
 
     # ================= CLEANUP OLD PROCESSED EVENTS =================
     async def _maybe_cleanup(self):
-        """ Bazani bloklamaslik uchun faqat subquery orqali tozalash """
         now = time.time()
         if now - self._last_cleanup < self.cleanup_interval:
             return
@@ -215,7 +213,6 @@ class CacheInvalidationWorker:
         self._last_cleanup = now
         try:
             async with self.session_factory() as session:
-                # 💡 FIX: Katta yuklamada deadlock bermasligi uchun xavfsiz o'chirish subquery mantiqi
                 subq = select(OutboxEvent.id).where(OutboxEvent.processed.is_(True)).limit(500)
                 result = await session.execute(subq)
                 ids_to_delete = result.scalars().all()

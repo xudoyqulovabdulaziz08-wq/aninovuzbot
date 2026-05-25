@@ -322,13 +322,26 @@ class CacheManager:
 
 
     async def _process(self, msg_id, payload):
-        data = orjson.loads(payload[b"data"])
+        try:
+            raw_data = payload.get(b"data")
+            if not raw_data:
+                # Agar ma'lumot bo'sh bo'lsa, xabarni ACK qilib navbatdan o'chiramiz
+                await self.redis.xack(self._stream_name, self._group_name, msg_id)
+                return
 
-        if data["sender"] != self.node_id:
-            async with self._l1_lock:
-                self._l1_cache.pop(data["key"], None)
+            data = orjson.loads(raw_data)
 
-        await self.redis.xack(self._stream_name, self._group_name, msg_id)
+            if data.get("sender") != self.node_id and "key" in data:
+                async with self._l1_lock:
+                    self._l1_cache.pop(data["key"], None)
+
+        except orjson.JSONDecodeError as je:
+            logger.error(f"⚠️ JSON Parse Error in stream: {je}. Raw data: {raw_data}")
+        except Exception as e:
+            logger.error(f"❌ Process Stream Error: {e}")
+        finally:
+            # Xato bo'lsa ham xabarni ACK qilamiz, aks holda u DLQ ni to'ldirib tashlaydi va cheksiz aylanadi
+            await self.redis.xack(self._stream_name, self._group_name, msg_id)
 
     # ================= 🔥 FIXED PEL RECOVERY =================
     async def _pel_recovery(self):
@@ -348,19 +361,23 @@ class CacheManager:
                 if claimed and len(claimed) > 1:
                     for msg_id, payload in claimed[1]:
                         try:
-                            data = orjson.loads(payload[b"data"])
-
-                            async with self._l1_lock:
-                                self._l1_cache.pop(data["key"], None)
+                            raw_data = payload.get(b"data")
+                            if raw_data:
+                                data = orjson.loads(raw_data)
+                                if "key" in data:
+                                    async with self._l1_lock:
+                                        self._l1_cache.pop(data["key"], None)
 
                             await self.redis.xack(
                                 self._stream_name,
                                 self._group_name,
                                 msg_id
                             )
-
                             metrics.events_processed += 1
 
+                        except orjson.JSONDecodeError:
+                            # Buzilgan xabarni avtomatik o'chirish (DLQ ga tushmasligi uchun)
+                            await self.redis.xack(self._stream_name, self._group_name, msg_id)
                         except Exception as inner:
                             logger.error(f"PEL ITEM ERROR: {inner}")
 
@@ -412,6 +429,42 @@ class CacheManager:
             await self.redis.close()
     
         logger.info("✅ CACHE SHUTDOWN CLEAN (Group Preserved)")
+
+
+
+# ================= 🔥 SMART INVALIDATE METHOD =================
+    async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None):
+        """
+        Workerlar tomonidan chaqiriladigan universal kesh tozalash metodi.
+        Ham standart kalitlarni, ham maxsus kanallar keshini xavfsiz tozalaydi.
+        """
+        try:
+            # 1. Agar maxsus kanallar jadvali so'ralgan bo'lsa
+            if table == "channels" or key == f"{self.namespace}:channels:active":
+                await self.invalidate_channels()
+                logger.info("🧹 CacheManager: Channels active cache invalidated.")
+                return
+
+            # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa
+            if key:
+                async with self._l1_lock:
+                    self._l1_cache.pop(key, None)
+                if self.redis:
+                    await self.redis.delete(key)
+                return
+
+            # 3. Agar standart table va obj_id berilgan bo'lsa
+            if table and obj_id:
+                target_key = self._key(table, obj_id)
+                async with self._l1_lock:
+                    self._l1_cache.pop(target_key, None)
+                if self.redis:
+                    await self.redis.delete(target_key)
+                logger.info(f"🧹 CacheManager: Invalidated key {target_key}")
+
+        except Exception as e:
+            metrics.errors += 1
+            logger.error(f"❌ INVALIDATE ERROR: {e}")
 
 
 
