@@ -6,7 +6,7 @@ from sqlalchemy import select, update, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
-from database.models import DBUser
+from database.models import DBUser, Channel, List
 from database.cache import valkey
 
 logger = logging.getLogger("UserRepository")
@@ -259,3 +259,32 @@ class UserRepository:
         except Exception as e:
             logger.error(f"❌ process_referral_reward error: {e}")
             return False, None
+        
+
+
+class ChannelRepository:
+    @staticmethod
+    async def add_channel(session: AsyncSession, channel_id: int, title: str, url: str):
+        # Kanalni bazaga qo'shish
+        channel = Channel(channel_id=channel_id, title=title, url=url, is_active=True)
+        session.add(channel)
+        await session.commit()
+        # Kanal o'zgarganda keshni tozalash kerak (agar keshda kanallar saqlansa)
+        return channel
+
+    @staticmethod
+    async def get_all_active_channels(session: AsyncSession) -> List[Channel]:
+        # Faqat faol kanallarni olish
+        result = await session.execute(select(Channel).where(Channel.is_active == True))
+        return result.scalars().all()
+    
+    @staticmethod
+    async def toggle_channel_status(session: AsyncSession, channel_id: int, is_active: bool):
+        """Kanalni faollashtirish yoki o'chirish uchun (tavsiya etiladi)"""
+        await session.execute(
+            update(Channel).where(Channel.channel_id == channel_id).values(is_active=is_active)
+        )
+        await session.commit()
+        
+        # 🔥 Kanal statusi o'zgarganda ham keshni tozalash shart
+        await valkey.invalidate_channels()

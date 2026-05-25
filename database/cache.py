@@ -142,7 +142,22 @@ class CacheManager:
     def _key(self, table: str, obj_id: Any) -> str:
         shard = sharder.get_shard(f"{table}:{obj_id}")
         return f"{self.namespace}:{shard}:{table}:{obj_id}:{self.version}"
+    
 
+    # ================= CHANNELS CACHE =================
+    async def get_channels(self):
+        key = f"{self.namespace}:channels:active"
+        raw = await self.redis.get(key)
+        return orjson.loads(raw) if raw else None
+
+    async def set_channels(self, channels_list: list):
+        key = f"{self.namespace}:channels:active"
+        await self.redis.setex(key, 3600, orjson.dumps(channels_list))
+
+    async def invalidate_channels(self):
+        """Kanal keshini majburiy tozalash"""
+        key = f"{self.namespace}:channels:active"
+        await self.redis.delete(key)
     # ================= GET =================
     async def get(self, table: str, obj_id: Any) -> Optional[dict]:
         key = self._key(table, obj_id)

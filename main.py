@@ -16,6 +16,8 @@ from database.events import attach_cache_listeners
 from services.cache_worker import CacheInvalidationWorker
 from services.outbox.worker import OutboxWorker
 from database.cache import valkey
+from middlewares.db_middleware import DbSessionMiddleware
+from middlewares.subscription import CheckSubscriptionMiddleware
 
 from config import config
 
@@ -212,8 +214,11 @@ def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = Dispatcher()
+    # 2. MIDDLEWARE'LARNI ULAB QO'YISH (Ketma-ketlik muhim!)
+    dp.update.outer_middleware(DbSessionMiddleware(AsyncSessionLocal))
+    dp.update.outer_middleware(CheckSubscriptionMiddleware())
 
-    # 2. Routerlarni global dispatcherga ulash (Ketma-ketlik muhim!)
+    # 3. Routerlarni global dispatcherga ulash (Ketma-ketlik muhim!)
     dp.include_router(main_router)
     
 
