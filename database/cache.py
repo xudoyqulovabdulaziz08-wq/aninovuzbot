@@ -433,7 +433,7 @@ class CacheManager:
 
 
 # ================= 🔥 SMART INVALIDATE METHOD =================
-# cache.py ichidagi CacheManager klassi ichiga (eng oxiriga) qo'shing:
+# cache.py faylining eng oxiridagi eski 'invalidate' o'rniga to'liq almashtiring:
 
     async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None):
         """
@@ -441,23 +441,27 @@ class CacheManager:
         Ham standart kalitlarni, ham maxsus kanallar keshini xavfsiz tozalaydi.
         """
         try:
-            # 1. 📢 KANALLAR KESHINI TOZALASH
-            if (
+            # 1. 📢 KANALLAR KESHINI TOZALASH (Agar table "channels" bo'lsa yoki kalit kanallarga tegishli bo'lsa)
+            is_channel_event = (
                 table == "channels" or 
-                key == f"{self.namespace}:channels:active" or 
-                key in ["cache:all_channels", "cache:active_channels"] or
-                (key and key.startswith("cache:channel:")) or
-                (table == "channels" and obj_id)
-            ):
-                if self.redis:
-                    # Agar aniq bitta kanal o'chgan/o'zgargan bo'lsa, o'shani o'chiramiz
-                    if table == "channels" and obj_id:
-                        target_key = self._key(table, obj_id)
-                        async with self._l1_lock:
-                            self._l1_cache.pop(target_key, None)
-                        await self.redis.delete(target_key)
+                (key and (
+                    key == f"{self.namespace}:channels:active" or 
+                    "channels" in key or 
+                    key.startswith("cache:")
+                ))
+            )
 
-                    # Umumiy ro'yxat keshlarini o'chirish (all_list va active_list)
+            if is_channel_event:
+                if self.redis:
+                    # A. Agar aniq bitta kanal ID'si kelgan bo'lsa, o'shani L1 va L2 dan o'chiramiz
+                    if table == "channels" and obj_id and obj_id not in ["all_list", "active_list"]:
+                        specific_key = self._key(table, obj_id)
+                        async with self._l1_lock:
+                            self._l1_cache.pop(specific_key, None)
+                        await self.redis.delete(specific_key)
+                        logger.info(f"🧹 CacheManager: Specific channel [{obj_id}] cache deleted.")
+
+                    # B. Umumiy ro'yxat keshlarini majburiy o'chirish (all_list va active_list)
                     key_all = self._key("channels", "all_list")
                     key_act = self._key("channels", "active_list")
                     
@@ -468,13 +472,15 @@ class CacheManager:
                     await self.redis.delete(key_all)
                     await self.redis.delete(key_act)
                     
-                    # Eski hardcoded kalitni ham o'chiramiz
+                    # C. Eski hardcoded kalitlarni ham har ehtimolga qarshi tozalaymiz
                     await self.redis.delete(f"{self.namespace}:channels:active")
+                    await self.redis.delete("cache:all_channels")
+                    await self.redis.delete("cache:active_channels")
                 
-                logger.info("🧹 CacheManager: All channel caches (L1 & L2 Clusters) completely invalidated.")
+                logger.info("🧹 CacheManager: All channel lists and structures successfully wiped out from L1 & L2.")
                 return
 
-            # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa
+            # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa (Boshqa modullar uchun)
             if key:
                 async with self._l1_lock:
                     self._l1_cache.pop(key, None)
@@ -482,7 +488,7 @@ class CacheManager:
                     await self.redis.delete(key)
                 return
 
-            # 3. Agar standart table va obj_id berilgan bo'lsa
+            # 3. Agar standart boshqa table va obj_id berilgan bo'lsa (Boshqa modullar uchun)
             if table and obj_id:
                 target_key = self._key(table, obj_id)
                 async with self._l1_lock:

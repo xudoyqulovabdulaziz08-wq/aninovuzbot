@@ -271,27 +271,28 @@ class ChannelRepository:
         🚀 Tizimdagi BARCHA kanallarni CacheManager (L1 + L2) orqali olish.
         Tezlik: ~0-2 ms (L1) / ~5 ms (L2). Baza qotishini butunlay yo'qotadi.
         """
-        # CacheManager'ning standart get() metodidan foydalanamiz
-        # table="channels", obj_id="all_list" formatida L1 va L2 keshga tushadi
-        cached_data = await valkey.get(table="channels", obj_id="all_list")
-        
-        if cached_data and "list" in cached_data:
-            return [Channel(**ch) for ch in cached_data["list"]]
+        try:
+            cached_data = await valkey.get(table="channels", obj_id="all_list")
+            if cached_data and "list" in cached_data:
+                return [Channel(**ch) for ch in cached_data["list"]]
+        except Exception as cache_err:
+            logger.warning(f"⚠️ get_all_channels kesh o'qishda xatolik: {cache_err}")
 
-        # Keshda bo'lmasa, bazadan yuklaymiz
+        # Keshda bo'lmasa yoki xato bo'lsa, bazadan yuklaymiz
         result = await session.execute(select(Channel).order_by(Channel.id.desc()))
         channels = result.scalars().all()
 
-        # CacheManager.set() faqat dict qabul qilgani uchun ma'lumotni o'raymiz
-        channels_dict = {
-            "list": [
-                {"id": ch.id, "channel_id": ch.channel_id, "title": ch.title, "url": ch.url, "is_active": ch.is_active}
-                for ch in channels
-            ]
-        }
-        
-        # Sizning set() metodizda 'ex' yo'q, standart 'ttl' argumenti bor (default 3600)
-        await valkey.set(table="channels", obj_id="all_list", data=channels_dict, ttl=3600)
+        try:
+            channels_dict = {
+                "list": [
+                    {"id": ch.id, "channel_id": ch.channel_id, "title": ch.title, "url": ch.url, "is_active": ch.is_active}
+                    for ch in channels
+                ]
+            }
+            await valkey.set(table="channels", obj_id="all_list", data=channels_dict, ttl=3600)
+        except Exception as cache_err:
+            logger.error(f"⚠️ get_all_channels keshga yozishda xatolik: {cache_err}")
+
         return channels
 
     @staticmethod
@@ -300,23 +301,28 @@ class ChannelRepository:
         🚀 Faqat FAOL kanallarni CacheManager (L1 + L2) orqali olish.
         Foydalanuvchilar majburiy obunani tekshirganda ushbu metod soniyasiga minglab so'rovlarni ko'tara oladi.
         """
-        cached_data = await valkey.get(table="channels", obj_id="active_list")
-        
-        if cached_data and "list" in cached_data:
-            return [Channel(**ch) for ch in cached_data["list"]]
+        try:
+            cached_data = await valkey.get(table="channels", obj_id="active_list")
+            if cached_data and "list" in cached_data:
+                return [Channel(**ch) for ch in cached_data["list"]]
+        except Exception as cache_err:
+            logger.warning(f"⚠️ get_all_active_channels kesh o'qishda xatolik: {cache_err}")
 
         # Keshda bo'lmasa, bazadan olamiz
         result = await session.execute(select(Channel).where(Channel.is_active == True))
         active_channels = result.scalars().all()
 
-        channels_dict = {
-            "list": [
-                {"id": ch.id, "channel_id": ch.channel_id, "title": ch.title, "url": ch.url, "is_active": ch.is_active}
-                for ch in active_channels
-            ]
-        }
-        
-        await valkey.set(table="channels", obj_id="active_list", data=channels_dict, ttl=3600)
+        try:
+            channels_dict = {
+                "list": [
+                    {"id": ch.id, "channel_id": ch.channel_id, "title": ch.title, "url": ch.url, "is_active": ch.is_active}
+                    for ch in active_channels
+                ]
+            }
+            await valkey.set(table="channels", obj_id="active_list", data=channels_dict, ttl=3600)
+        except Exception as cache_err:
+            logger.error(f"⚠️ get_all_active_channels keshga yozishda xatolik: {cache_err}")
+
         return active_channels
 
     @staticmethod
@@ -325,24 +331,30 @@ class ChannelRepository:
         🚀 Bitta kanalni ID bo'yicha keshdan yoki bazadan qidirish.
         Admin panelda kanal ustiga bosilgandagi 1.5 soniyalik qotishni yo'qotadi.
         """
-        # obj_id sifatida dinamik ravishda haqiqiy kanal_id uzatiladi
-        cached_data = await valkey.get(table="channels", obj_id=str(channel_id))
-        
-        if cached_data:
-            return Channel(**cached_data)
+        # DIQQAT: Sharding to'g'ri ishlashi uchun obj_id turi 'str' holatida saqlanadi
+        obj_key = str(channel_id)
+        try:
+            cached_data = await valkey.get(table="channels", obj_id=obj_key)
+            if cached_data:
+                return Channel(**cached_data)
+        except Exception as cache_err:
+            logger.warning(f"⚠️ get_channel_by_id kesh o'qishda xatolik: {cache_err}")
 
         result = await session.execute(select(Channel).where(Channel.channel_id == channel_id))
         channel = result.scalar_one_or_none()
 
         if channel:
-            channel_dict = {
-                "id": channel.id, 
-                "channel_id": channel.channel_id, 
-                "title": channel.title, 
-                "url": channel.url, 
-                "is_active": channel.is_active
-            }
-            await valkey.set(table="channels", obj_id=str(channel_id), data=channel_dict, ttl=3600)
+            try:
+                channel_dict = {
+                    "id": channel.id, 
+                    "channel_id": channel.channel_id, 
+                    "title": channel.title, 
+                    "url": channel.url, 
+                    "is_active": channel.is_active
+                }
+                await valkey.set(table="channels", obj_id=obj_key, data=channel_dict, ttl=3600)
+            except Exception as cache_err:
+                logger.error(f"⚠️ get_channel_by_id keshga yozishda xatolik: {cache_err}")
             
         return channel
 
@@ -356,8 +368,9 @@ class ChannelRepository:
             session.add(channel)
             await session.commit()
             
-            # Yangi kanal qo'shilganda barcha ro'yxatlar eskiradi, keshni uramiz
-            await valkey.invalidate(table="channels")
+            # 🔥 TUZATILDI: Yangi kanal qo'shilganda obj_id="all_list" uzatiladi 
+            # Shunda yangilangan ro'yxat keshdan o'chib, bazadan qayta o'qiladi
+            await valkey.invalidate(table="channels", obj_id="all_list")
             return channel
         except Exception as e:
             await session.rollback()
@@ -375,8 +388,8 @@ class ChannelRepository:
             )
             await session.commit()
             
-            # Universal o'chirish: ham ro'yxatlarni, ham shu kanalning shaxsiy keshini L1 va L2 dan o'chiradi
-            await valkey.invalidate(table="channels", obj_id=channel_id)
+            # 🔥 TUZATILDI: str(channel_id) orqali kesh aniq topiladi va o'chiriladi
+            await valkey.invalidate(table="channels", obj_id=str(channel_id))
         except Exception as e:
             await session.rollback()
             logger.error(f"toggle_channel_status error: {e}")
@@ -393,10 +406,12 @@ class ChannelRepository:
             
             if result.rowcount > 0:
                 await session.commit()
-                # Keshni tozalash
-                await valkey.invalidate(table="channels", obj_id=channel_id)
+                # 🔥 TUZATILDI: str(channel_id) orqali kesh aniq topiladi va o'chiriladi
+                await valkey.invalidate(table="channels", obj_id=str(channel_id))
                 return True
                 
+            # Agar bazada topilmasa ham, har ehtimolga qarshi kesh qoldiqlarini urib tashlaymiz
+            await valkey.invalidate(table="channels", obj_id=str(channel_id))
             return False
         except Exception as e:
             await session.rollback()
