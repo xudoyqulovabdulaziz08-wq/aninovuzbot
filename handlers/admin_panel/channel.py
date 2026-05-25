@@ -470,30 +470,38 @@ async def view_channel_detail(callback: CallbackQuery, callback_data: ChannelDet
     
     async def _show_detail(session: AsyncSession):
         await callback.answer("Kanal ma'lumotlari yuklanmoqda...")
+        # Endi 'channel' bu dict (yoki None)
         channel = await ChannelRepository.get_channel_by_id(session, callback_data.channel_id)
         
         if not channel:
             return await callback.message.edit_text(
                 "❌ Kanal topilmadi yoki u allaqachon o'chirilgan.",
                 reply_markup=InlineKeyboardBuilder().row(
-                    types.InlineKeyboardButton(text="🔙 Ro'yxatga qaytish", callback_data=ChannelsPageCallback(page=callback_data.page).pack())
+                    types.InlineKeyboardButton(
+                        text="🔙 Ro'yxatga qaytish", 
+                        callback_data=ChannelsPageCallback(page=callback_data.page).pack()
+                    )
                 ).as_markup()
             )
-            
+        
+        # 🟢 TUZATILDI: Endi atributlar emas, lug'at kalitlari ishlatiladi
         text = (
             f"📢 <b>KANAL MA'LUMOTLARI</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"<b>📌 Nomi:</b> {channel.title}\n"
-            f"<b>🆔 ID:</b> <code>{channel.channel_id}</code>\n"
-            f"<b>🔗 Havola:</b> <a href='{channel.url}'>Ochish</a>\n\n"
+            f"<b>📌 Nomi:</b> {channel['title']}\n"
+            f"<b>🆔 ID:</b> <code>{channel['channel_id']}</code>\n"
+            f"<b>🔗 Havola:</b> <a href='{channel['url']}'>Ochish</a>\n\n"
             f"<i>Ushbu kanal boshqaruv panelidasiz.</i>"
         )
         
         builder = InlineKeyboardBuilder()
-        # Kelajakda kanalni o'chirish tugmasini mana shu yerga qo'shishingiz mumkin
-        builder.row(types.InlineKeyboardButton(text="🗑 Kanalni o'chirish", callback_data=f"ask_delete_{channel.channel_id}"))
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🗑 Kanalni o'chirish", 
+                callback_data=f"ask_delete_{channel['channel_id']}"
+            )
+        )
         
-        # 💡 PRO UX: Ortga bosganda foydalanuvchi adashib ketmasligi uchun aynan o'zi turgan sahifaga qaytaramiz!
         builder.row(
             types.InlineKeyboardButton(
                 text="🔙 Ro'yxatga qaytish", 
@@ -508,13 +516,11 @@ async def view_channel_detail(callback: CallbackQuery, callback_data: ChannelDet
             disable_web_page_preview=True
         )
 
-    # Tizimli sessiya boshqaruvi integration
     if actual_session is not None:
         await _show_detail(actual_session)
     elif session_pool is not None:
         async with session_pool() as new_session:
             await _show_detail(new_session)
-
 
 
 
