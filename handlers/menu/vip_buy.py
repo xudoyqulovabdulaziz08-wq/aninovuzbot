@@ -90,6 +90,8 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     text = (
         f"💎 <b>VIP SOTIB OLISH</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Salom, <b>{callback.from_user.full_name}</b>!\n"
+        f"Sizning idingiz: <code>{user_id}</code>\n\n"
         f"VIP imkoniyatlarini ko'rib chiqing va o'zingizga mos tarifni tanlang.\n\n"
         f"💵 <b>VIP tarif narxlari:</b>\n"
         f"🚀 <b>1 oylik:</b> {VIP_PRICES['1m']} so'm\n"
@@ -100,7 +102,7 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
         f"👇 VIP faollashtirish uchun admin bilan bog'laning:"
     )
     
-    kb = buy_vip_med_kb(users_id=user_id)
+    kb = buy_vip_med_kb(user_id=callback.from_user.id)
     
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
