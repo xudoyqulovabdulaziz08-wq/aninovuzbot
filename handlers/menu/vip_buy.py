@@ -7,6 +7,7 @@ from config import config
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
+from urllib.parse import quote
 
 
 
