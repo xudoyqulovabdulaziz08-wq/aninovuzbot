@@ -17,7 +17,7 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 
 #========================creator_manage_admins===========================#
 #========================================================================#
-@router.callback_query(F.data == "")
+@router.callback_query(F.data == "get_ref_link")
 async def buy_vip_bonus_handler(callback: types.CallbackQuery):
     
     text = (
