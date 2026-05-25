@@ -305,8 +305,6 @@ async def list_channels(callback: CallbackQuery, state: FSMContext, **kwargs):
 
 #========================_execute_channel_listing========================#
 #========================================================================#
-from aiogram.exceptions import TelegramBadRequest  # Eng tepaga import qiling qolganlar qatoriga
-
 async def _execute_channel_listing(
     callback: CallbackQuery, 
     state: FSMContext, 
@@ -315,6 +313,8 @@ async def _execute_channel_listing(
 ):
     try:
         await callback.answer("📋 Kanallar ro'yxati yuklanmoqda...")
+        
+        # Repozitoriy endi toza dict qaytaradi
         activ_channels = await ChannelRepository.get_all_active_channels(session)
         channels = await ChannelRepository.get_all_channels(session)
         
@@ -338,21 +338,23 @@ async def _execute_channel_listing(
         # Joriy sahifaga tegishli kanallarni kesib olish (Slice)
         start_idx = (page - 1) * PER_PAGE
         end_idx = start_idx + PER_PAGE
-        page_channels = channels[start_idx:end_idx]
+        page_channels = channels[start_idx:end_idx]  # <-- Faqat shu sahifadagi kanallar
         
         # Tugmalarni yig'ish
         builder = InlineKeyboardBuilder()
         
-        channels = await ChannelRepository.get_all_channels(session)
-        for ch in channels:
-            # 🟢 TO'G'RI: Lug'at (dict) kalitlari orqali o'qish
+        # 🟢 TUZATILDI: Endi page_channels aylanadi va dict sifatida o'qiladi
+        for ch in page_channels:
             status = "🟢" if ch["is_active"] else "🔴" 
             text = f"{status} {ch['title']}"
-            callback_data = f"view_channel:{ch['channel_id']}" # yoki ch['id']
+            
             builder.row(
                 types.InlineKeyboardButton(
-                    text=f"{status} {channels.title}",
-                    callback_data=ChannelDetailCallback(channel_id=channels.channel_id, page=page).pack()
+                    text=text,
+                    callback_data=ChannelDetailCallback(
+                        channel_id=int(ch["channel_id"]), 
+                        page=page
+                    ).pack()
                 )
             )
         
@@ -402,7 +404,7 @@ async def _execute_channel_listing(
             f"Kanal haqida batafsil ma'lumot olish va uni boshqarish uchun ustiga bosing:"
         )
         
-        # 🛡 MANA SHU YERDA TELEGRAM SERVERNXATOLIGIGA QARSHI TIZIM ISHLAYDI:
+        # 🛡 Telegram server xatoligiga qarshi xavfsiz yuborish
         try:
             await callback.message.edit_text(
                 text=text,
@@ -411,10 +413,8 @@ async def _execute_channel_listing(
             )
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
-                # Agar o'zgarish bo'lmasa, logni to'ldirmasdan tinchgina o'tkazib yuboramiz
                 pass
             else:
-                # Boshqa turdagi BadRequest bo'lsa (masalan, matn xato formatlansa) logga yozamiz
                 raise e
         
     except Exception as e:
@@ -422,7 +422,6 @@ async def _execute_channel_listing(
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_channels"))
         
-        # Xatolik xabarini chiqarishda ham edit_text xavfsiz bo'lishi kerak
         try:
             await callback.message.edit_text(
                 "❌ Tizim xatosi: Ma'lumotlarni yuklashda xatolik yuz berdi.",
@@ -430,6 +429,11 @@ async def _execute_channel_listing(
             )
         except Exception:
             pass
+        
+
+        
+
+
 
 
 
