@@ -343,15 +343,16 @@ async def _execute_channel_listing(
         # Tugmalarni yig'ish
         builder = InlineKeyboardBuilder()
         
-        # 1. Kanallar tugmalari (Har biri alohida qatorda)
-        for channel in page_channels:
-            # 💡 Kichik bonus: Agar kanal o'chirilgan (is_active=False) bo'lsa, 
-            # tugma matnida buni vizual ko'rsatish mumkin 🔴/🟢
-            status_emoji = "🟢" if channel.is_active else "🔴"
+        channels = await ChannelRepository.get_all_channels(session)
+        for ch in channels:
+            # 🟢 TO'G'RI: Lug'at (dict) kalitlari orqali o'qish
+            status = "🟢" if ch["is_active"] else "🔴" 
+            text = f"{status} {ch['title']}"
+            callback_data = f"view_channel:{ch['channel_id']}" # yoki ch['id']
             builder.row(
                 types.InlineKeyboardButton(
-                    text=f"{status_emoji} {channel.title}",
-                    callback_data=ChannelDetailCallback(channel_id=channel.channel_id, page=page).pack()
+                    text=f"{status} {channels.title}",
+                    callback_data=ChannelDetailCallback(channel_id=channels.channel_id, page=page).pack()
                 )
             )
         
