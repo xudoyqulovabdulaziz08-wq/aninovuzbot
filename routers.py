@@ -15,7 +15,8 @@ from handlers.menu import (
 from handlers.admin_panel import (
     channel,
     anime_menu,
-    reklama_menu
+    reklama_menu,
+    vip_menu
 )
 
 # Asosiy router
@@ -27,6 +28,7 @@ main_router.include_routers(
     admin_menu.router, #menu/admin va creator menu router
     anime_menu.router, #admin_panel/anime_menu router
     reklama_menu.router, #admin_panel/reklama_menu router
+    vip_menu.router, #admin_panel/vip_menu router
     channel.router, #admin_panel/channel router
     qolnlanma.router, #menu/qollanma router (fayl yozilisida xatolik)
     reklama.router, #menu/reklama router
