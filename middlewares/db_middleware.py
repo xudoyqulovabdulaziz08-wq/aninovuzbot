@@ -66,26 +66,48 @@ if not hasattr(state, 'cb_recovery_time'): state.cb_recovery_time = 30.0
 # ======================================================
 class SafeSession:
     """
-    Kesh rejimida bazaga ulanish taqiqlanganini nazorat qiluvchi,
-    baza rejimida esa barcha metodlarni (jumladan context managerlarni) transparent o'tkazuvchi proxy.
+    🧠 Aqlli Lazy Proxy: Kesh ishlaganda bazani yuklamaydi (None turadi).
+    Agar handler ichida kutilmaganda sessiya metodlari chaqirilsa,
+    o'sha zahoti hovuzdan (session_pool) haqiqiy sessiya olib, ishni davom ettiradi.
     """
-    def __init__(self, session):
+    def __init__(self, session=None, session_pool=None):
         self.__dict__["_session"] = session
+        self.__dict__["_session_pool"] = session_pool
+
+    async def _ensure_session(self):
+        """Metodlar chaqirilganda sessiya yoq bo'lsa, uni dinamik yaratish"""
+        if self._session is None:
+            if self._session_pool is None:
+                raise RuntimeError("❌ DB session is None va session_pool berilmagan (Cache-only mode restriction).")
+            logger.info("⚡ Lazy Loading: Handler bazaga murojaat qildi, kesh rejimidan dinamik sessiya ochildi.")
+            self.__dict__["_session"] = self._session_pool()
+        return self._session
 
     async def __aenter__(self):
-        if self._session is None:
-            raise RuntimeError("❌ DB session is None (cache-only mode). Can't use context manager!")
-        return await self._session.__aenter__()
+        session = await self._ensure_session()
+        return await session.__aenter__()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._session is None:
-            return
-        return await self._session.__aexit__(exc_type, exc_val, exc_tb)
+        if self._session is not None:
+            return await self._session.__aexit__(exc_type, exc_val, exc_tb)
 
     def __getattr__(self, item):
+        # Bu qism sinxron atributlar va metodlar uchun proxy vazifasini bajaradi
         if self._session is None:
-            raise RuntimeError(f"❌ DB session is None (cache-only mode). Can't access .{item}")
+            # Agar sessiya hali ochilmagan bo'lsa va asinxron metod chaqirilayotgan bo'lsa
+            # Dinamik ravishda asinxron chaqiruvni o'rab (wrap) qaytaramiz
+            async def lazy_wrapper(*args, **kwargs):
+                session = await self._ensure_session()
+                func = getattr(session, item)
+                return await func(*args, **kwargs)
+            return lazy_wrapper
+            
         return getattr(self._session, item)
+
+    async def close(self):
+        """Middleware finally qismida xavfsiz yopilishi uchun"""
+        if self._session is not None:
+            await self._session.close()
 
 
 # ======================================================
@@ -110,7 +132,7 @@ class DbSessionMiddleware(BaseMiddleware):
                 "points": 0, "referral_count": 0, "is_vip": False,
                 "vip_expire_date": None, "is_system": True
             }
-            data["session"] = SafeSession(None)
+            data["session"] = SafeSession(session=None, session_pool=self.session_pool)
             # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
         if "user" not in data or data["user"] is None:
             data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
@@ -128,7 +150,7 @@ class DbSessionMiddleware(BaseMiddleware):
                 self._fire_and_forget_cache_update(cached_l1)
 
             data["user"] = cached_l1
-            data["session"] = SafeSession(None)  # Kesh ishladi -> sessiya ochilmaydi
+            data["session"] = SafeSession(session=None, session_pool=self.session_pool) # Kesh ishladi -> sessiya ochilmaydi
             # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
         if "user" not in data or data["user"] is None:
             data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
@@ -151,7 +173,7 @@ class DbSessionMiddleware(BaseMiddleware):
 
                     await state.l1_cache.set(user_id, cached_l2)
                     data["user"] = cached_l2
-                    data["session"] = SafeSession(None)
+                    data["session"] = SafeSession(session=None, session_pool=self.session_pool)
                     # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
                     if "user" not in data or data["user"] is None:
                         data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
@@ -168,7 +190,7 @@ class DbSessionMiddleware(BaseMiddleware):
                 if time.time() - state.db_last_retry < state.cb_recovery_time:
                     logger.warning(f"🚫 DB blocked (circuit open). Emergency mode for user_id={user_id}")
                     data["user"] = self._emergency_user(user_obj)
-                    data["session"] = SafeSession(None)
+                    data["session"] = SafeSession(session=None, session_pool=self.session_pool)
                     return await handler(event, data)
 
         # ======================================================
@@ -198,7 +220,7 @@ class DbSessionMiddleware(BaseMiddleware):
             
             # Xatolik yuz berganda xavfsiz user va bo'sh sessiya
             data["user"] = self._emergency_user(user_obj)
-            data["session"] = SafeSession(None)
+            data["session"] = SafeSession(session=None, session_pool=self.session_pool)
             return await handler(event, data)
             
         finally:
