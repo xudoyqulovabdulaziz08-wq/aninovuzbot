@@ -6,10 +6,10 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
-from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.types import Message, CallbackQuery
 
 from config import config
+from middlewares.db_middleware import SafeSession
 from database.repository import ChannelRepository
 from keyboards.inline import admin_channels_kb  
 
@@ -98,8 +98,12 @@ async def add_channel(callback: types.CallbackQuery, state: FSMContext):
 
 
 
+
+
+#==========================process_channel_input=========================#
+#========================================================================#
 @router.message(AdminChannelsState.adding_channel)
-async def process_channel_input(message: Message, state: FSMContext, session: AsyncSession):
+async def process_channel_input(message: Message, state: FSMContext, session: SafeSession):
     input_text = message.text.strip()
     
     try:
@@ -144,9 +148,13 @@ async def process_channel_input(message: Message, state: FSMContext, session: As
 
 
 
+
+
+#=============================confirm_add================================#
+#========================================================================#
 # Tasdiqlash tugmasi bosilganda
 @router.callback_query(F.data == "confirm_add_channel")
-async def confirm_add(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+async def confirm_add(callback: CallbackQuery, state: FSMContext, session: SafeSession):
     data = await state.get_data()
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_admin_channels"))
@@ -165,4 +173,13 @@ async def confirm_add(callback: CallbackQuery, state: FSMContext, session: Async
         
     await state.clear()
 
+
+
+
+
+
+
+#============================= ================================#
+#========================================================================#
+#@router.callback_query(F.data == "list_channels")
 
