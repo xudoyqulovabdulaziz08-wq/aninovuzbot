@@ -18,13 +18,16 @@ from handlers.admin_panel import (
     reklama_menu,
     vip_menu
 )
-
+from handlers.creator_panel import (
+    creator_admin_menu
+)
 # Asosiy router
 main_router = Router()
 
 # Routerlarni birlashtirish
 main_router.include_routers(
     start.router, # start router
+    creator_admin_menu.router, #creator panel router
     admin_menu.router, #menu/admin va creator menu router
     anime_menu.router, #admin_panel/anime_menu router
     reklama_menu.router, #admin_panel/reklama_menu router
