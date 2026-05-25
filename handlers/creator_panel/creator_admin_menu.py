@@ -17,7 +17,7 @@ CREATOR_ID = getattr(config, 'CREATOR_ID')
 
 #========================creator_manage_admins===========================#
 #========================================================================#
-@router.callback_query(F.data == "creator_panel")
+@router.callback_query(F.data == "creator_admin_panel")
 async def creator_panel_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     

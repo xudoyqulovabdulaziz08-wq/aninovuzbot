@@ -87,7 +87,7 @@ def creator_panel_kb(creator_id: int) -> types.InlineKeyboardMarkup:
     # config.CREATOR_ID ham int bo'lishi kerak
     if creator_id == config.CREATOR_ID:
         builder.row(
-            types.InlineKeyboardButton(text="👑 Barcha adminlarni boshqarish", callback_data="creator_manage_admins")
+            types.InlineKeyboardButton(text="👑 Barcha adminlarni boshqarish", callback_data="creator_admin_panel")
         )
         builder.row(
             types.InlineKeyboardButton(text="📊 To'liq statistika", callback_data="creator_statistics"),
@@ -328,7 +328,7 @@ def creator_admin_kb():
     builder.row(
         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="creator_panel")
     )
-
+    return builder.as_markup()
 
 
 
