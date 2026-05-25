@@ -103,16 +103,24 @@ async def add_channel(callback: types.CallbackQuery, state: FSMContext):
 #==========================process_channel_input=========================#
 #========================================================================#
 @router.message(AdminChannelsState.adding_channel)
-async def process_channel_input(message: Message, state: FSMContext, session: SafeSession):
+async def process_channel_input(message: Message, state: FSMContext, **data):
+    # Middleware'dan kelgan 'session' ni data orqali xavfsiz olish
+    session = data.get("session")
+    
+    # Agar middleware'da xatolik bo'lsa yoki sessiya bo'sh bo'lsa, buni tekshirish
+    if session is None:
+        return await message.answer("❌ Tizim xatosi: Database sessiyasi topilmadi.")
+
     input_text = message.text.strip()
     
     try:
+        # Telegramdan kanal ma'lumotlarini olish
         chat = await message.bot.get_chat(input_text)
         
         if chat.type not in ["channel", "supergroup"]:
             return await message.answer("❌ Bu kanal yoki superguruh emas.")
             
-        # Repositorydagi metodingiz nomi to'g'ri ekanligini tekshiring
+        # Bazada mavjudligini tekshirish
         existing_channel = await ChannelRepository.get_channel_by_id(session, chat.id)
         if existing_channel:
             return await message.answer("❌ Bu kanal allaqachon tizimda mavjud.")
@@ -125,7 +133,6 @@ async def process_channel_input(message: Message, state: FSMContext, session: Sa
             url=invite_link
         )
         
-        # 'kb' emas, 'builder' ishlatilishi kerak
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="confirm_add_channel"))
         builder.row(types.InlineKeyboardButton(text="❌ Bekor qilish", callback_data="back_admin_channels"))
@@ -135,7 +142,7 @@ async def process_channel_input(message: Message, state: FSMContext, session: Sa
             f"<b>Nomi:</b> {chat.title}\n"
             f"<b>ID:</b> {chat.id}\n\n"
             "Ushbu kanalni tizimga qo'shishni tasdiqlaysizmi?", 
-            reply_markup=builder.as_markup(), # builder ishlatildi
+            reply_markup=builder.as_markup(),
             parse_mode="HTML"
         )
         
@@ -149,24 +156,29 @@ async def process_channel_input(message: Message, state: FSMContext, session: Sa
 
 
 
-
 #=============================confirm_add================================#
 #========================================================================#
 # Tasdiqlash tugmasi bosilganda
 @router.callback_query(F.data == "confirm_add_channel")
-async def confirm_add(callback: CallbackQuery, state: FSMContext, session: SafeSession):
-    data = await state.get_data()
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_admin_channels"))
+async def confirm_add(callback: CallbackQuery, state: FSMContext, **kwargs):
+    # kwargs ichidan session ni olamiz
+    session = kwargs.get("session")
+    # FSM dan kelgan ma'lumotlarni alohida o'zgaruvchiga olamiz
+    channel_data = await state.get_data()
+    
     try:
         # Repository orqali bazaga saqlash
         await ChannelRepository.add_channel(
-            session, 
-            channel_id=data['channel_id'], 
-            title=data['title'], 
-            url=data['url']
+            session=session, 
+            channel_id=channel_data['channel_id'], 
+            title=channel_data['title'], 
+            url=channel_data['url']
         )
-        await callback.message.edit_text("✅ Kanal muvaffaqiyatli qo'shildi va kesh tozalandi!")
+        
+        await callback.message.edit_text(
+            "✅ Kanal muvaffaqiyatli qo'shildi va kesh tozalandi!",
+            reply_markup=None # Oldingi tugmalarni olib tashlash
+        )
     except Exception as e:
         logger.error(f"Bazaga saqlash xatosi: {e}")
         await callback.message.edit_text("❌ Bazaga saqlashda xatolik yuz berdi.")
