@@ -265,11 +265,13 @@ class UserRepository:
 class ChannelRepository:
     @staticmethod
     async def add_channel(session: AsyncSession, channel_id: int, title: str, url: str):
-        # Kanalni bazaga qo'shish
         channel = Channel(channel_id=channel_id, title=title, url=url, is_active=True)
         session.add(channel)
         await session.commit()
-        # Kanal o'zgarganda keshni tozalash kerak (agar keshda kanallar saqlansa)
+        
+        # 🔥 Keshni tozalashni qo'shib qo'ying:
+        await valkey.invalidate_channels() 
+        
         return channel
 
     @staticmethod
@@ -277,6 +279,10 @@ class ChannelRepository:
         # Faqat faol kanallarni olish
         result = await session.execute(select(Channel).where(Channel.is_active == True))
         return result.scalars().all()
+    @staticmethod
+    async def get_channel_by_id(session: AsyncSession, channel_id: int):
+        result = await session.execute(select(Channel).where(Channel.channel_id == channel_id))
+        return result.scalar_one_or_none()
     
     @staticmethod
     async def toggle_channel_status(session: AsyncSession, channel_id: int, is_active: bool):
@@ -288,3 +294,5 @@ class ChannelRepository:
         
         # 🔥 Kanal statusi o'zgarganda ham keshni tozalash shart
         await valkey.invalidate_channels()
+
+    
