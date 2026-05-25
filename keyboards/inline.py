@@ -389,20 +389,23 @@ def buy_vip_med_kb(user_id: int):
     
     # 1. Tariflar
     builder.row(
-        types.InlineKeyboardButton(text="🗓 1 oylik", callback_data="buy_vip_1m"),
-        types.InlineKeyboardButton(text="🗓 3 oylik", callback_data="buy_vip_3m")
+        types.InlineKeyboardButton(text="🗓 1 oylik", callback_data="buyer_vip_1m"),
+        types.InlineKeyboardButton(text="🗓 3 oylik", callback_data="buyer_vip_3m")
     )
     builder.row(
-        types.InlineKeyboardButton(text="🗓 6 oylik", callback_data="buy_vip_6m"),
-        types.InlineKeyboardButton(text="🏆 1 yillik", callback_data="buy_vip_12m")
+        types.InlineKeyboardButton(text="🗓 6 oylik", callback_data="buyer_vip_6m"),
+        types.InlineKeyboardButton(text="🏆 1 yillik", callback_data="buyer_vip_12m")
     )
-    
-    # 2. Admin bilan bog'lanish (Dinamik URL bilan)
+    # 2. 
+    builder.row(
+        types.InlineKeyboardButton(text="💎 Ballarga almashitirish", callback_data="buy_vip_bonus")
+    )
+    # 3. Admin bilan bog'lanish (Dinamik URL bilan)
     builder.row(
         types.InlineKeyboardButton(text="💬 Admin bilan bog'lanish", url=admin_url)
     )
     
-    # 3. Navigatsiya
+    # 4. Navigatsiya
     builder.row(
         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_menu")
     )
