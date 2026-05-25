@@ -69,7 +69,7 @@ def admin_panel_kb(user_id: int, user_status: str) -> types.InlineKeyboardMarkup
         
         # To'rtinchi qator
         builder.row(
-            types.InlineKeyboardButton(text="📃 Murojaatlar", callback_data="admin_reports"),
+           
             types.InlineKeyboardButton(text="👥 Users control", callback_data="admin_users_panel")
         )
         
@@ -261,7 +261,7 @@ def admin_vip_kb():
 
 
 
-#=============================admin_add_vip_kb===============================#
+#===========================admin_add_vip_kb=============================#
 #========================================================================#
 def admin_add_vip_kb():
     builder = InlineKeyboardBuilder()
@@ -280,6 +280,89 @@ def admin_add_vip_kb():
     # 2. Navigatsiya
     builder.row(
         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_vip_panel")
+    )
+    
+    return builder.as_markup()
+
+
+
+
+
+
+
+#===========================admin_add_vip_kb=============================#
+#========================================================================#
+def admin_users_panel_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="🔍 Foydalanuvchini qidirish", callback_data="search_user")
+        
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="👑 VIP berish/olish", callback_data="admin_add_vip")
+        
+    )
+    builder.now(
+        types.InlineKeyboardButton(text="🚫 Bloklanganlar ro'yxati", callback_data="blocked_users")
+    )
+    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel"))
+    return builder.as_markup()
+
+
+
+
+
+#===========================creator_admin_kb=============================#
+#========================================================================#
+def creator_admin_kb():
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="➕ Admin qo'shish", callback_data="creator_add_admin")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="📋 Admin ro'yxati", callback_data="creator_list_admin")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="➖ Admin o'chirish", callback_data="creator_remove_admin")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="creator_panel")
+    )
+
+
+
+
+
+
+def creator_db_panel_kb():
+    builder = InlineKeyboardBuilder()
+    
+    # 1. Asosiy monitoring
+    builder.row(
+        types.InlineKeyboardButton(text="📊 Statistika db", callback_data="db_stats"),
+        types.InlineKeyboardButton(text="⚙️ Adminlar", callback_data="db_admins")
+    )
+    
+    # 2. Boshqaruv (Backup va Reklama)
+    builder.row(
+        types.InlineKeyboardButton(text="🔄 Backup", callback_data="db_backup"),
+        types.InlineKeyboardButton(text="📈 Reklamalar", callback_data="db_ads_active")
+    )
+    
+    # 3. Tozalash (Xavfli amallar)
+    builder.row(
+        types.InlineKeyboardButton(text="🧹 Loglar", callback_data="db_clean_logs"),
+        types.InlineKeyboardButton(text="🗑 Outbox", callback_data="db_clean_outbox")
+    )
+    # 4. Import/Export (Ma'lumotlarni saqlash va tiklash)
+    builder.row(
+        types.InlineKeyboardButton(text=" import qilish", callback_data="db_import"),
+        types.InlineKeyboardButton(text="export qilish", callback_data="db_export")
+    )
+    
+    # 5. Navigatsiya
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="creator_panel")
     )
     
     return builder.as_markup()
