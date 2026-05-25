@@ -433,39 +433,70 @@ class CacheManager:
 
 
 # ================= 🔥 SMART INVALIDATE METHOD =================
-    # cache.py ichidagi invalidate metodining to'g'ri ko'rinishi:
-    async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None):
-            try:
-                # 1. 📢 KANALLAR KESHINI TOZALASH
-                if (
-                    table == "channels" or 
-                    key == f"{self.namespace}:channels:active" or 
-                    key in ["cache:all_channels", "cache:active_channels"] or  # <-- OR qo'shildi
-                    (key and key.startswith("cache:channel:")) or              # <-- OR qo'shildi
-                    (table == "channels" and obj_id)                           # <-- YANNA BITTA XAVFSIZLIK CHORASI
-                ):
-                    if self.redis:
-                        # Bizning yangi keshlarimiz ShardRouter orqali o'chirilishi uchun:
-                        # Agar aniq bitta kanal o'chgan bo'lsa, o'shani o'chiramiz
-                        if table == "channels" and obj_id:
-                            target_key = self._key(table, obj_id)
-                            async with self._l1_lock:
-                                self._l1_cache.pop(target_key, None)
-                            await self.redis.delete(target_key)
-
-                        # Umumiy ro'yxat keshlarini o'chirish (all_list va active_list)
-                        key_all = self._key("channels", "all_list")
-                        key_act = self._key("channels", "active_list")
-                    
+async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None):
+        """
+        Workerlar tomonidan chaqiriladigan universal kesh tozalash metodi.
+        Ham standart kalitlarni, ham maxsus kanallar keshini xavfsiz tozalaydi.
+        """
+        try:
+            # 1. 📢 KANALLAR KESHINI TOZALASH
+            if (
+                table == "channels" or 
+                key == f"{self.namespace}:channels:active" or 
+                key in ["cache:all_channels", "cache:active_channels"] or  # <-- TO'G'RILANDI: or qo'shildi
+                (key and key.startswith("cache:channel:")) or              # <-- TO'G'RILANDI: or qo'shildi
+                (table == "channels" and obj_id)
+            ):
+                if self.redis:
+                    # Bizning yangi keshlarimiz ShardRouter orqali o'chirilishi uchun:
+                    # Agar aniq bitta kanal o'chgan/o'zgargan bo'lsa, o'shani o'chiramiz
+                    if table == "channels" and obj_id:
+                        target_key = self._key(table, obj_id)
                         async with self._l1_lock:
-                            self._l1_cache.pop(key_all, None)
-                            self._l1_cache.pop(key_act, None)
-                        
-                        await self.redis.delete(key_all)
-                        await self.redis.delete(key_act)
+                            self._l1_cache.pop(target_key, None)
+                        await self.redis.delete(target_key)
+
+                    # Umumiy ro'yxat keshlarini o'chirish (all_list va active_list)
+                    key_all = self._key("channels", "all_list")
+                    key_act = self._key("channels", "active_list")
                     
-                        # Eski hardcoded kalitni ham o'chirib yuboramiz xavfsizlik uchun
-                        await self.redis.delete(f"{self.namespace}:channels:active")
+                    async with self._l1_lock:
+                        self._l1_cache.pop(key_all, None)
+                        self._l1_cache.pop(key_act, None)
+                        
+                    await self.redis.delete(key_all)
+                    await self.redis.delete(key_act)
+                    
+                    # Eski hardcoded kalitni ham o'chirib yuboramiz xavfsizlik uchun
+                    await self.redis.delete(f"{self.namespace}:channels:active")
                 
-                    logger.info("🧹 CacheManager: All channel caches (L1 & L2 Clusters) completely invalidated.")
-                    return
+                logger.info("🧹 CacheManager: All channel caches (L1 & L2 Clusters) completely invalidated.")
+                return
+
+            # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa
+            if key:
+                async with self._l1_lock:
+                    self._l1_cache.pop(key, None)
+                if self.redis:
+                    await self.redis.delete(key)
+                return
+
+            # 3. Agar standart table va obj_id berilgan bo'lsa
+            if table and obj_id:
+                target_key = self._key(table, obj_id)
+                async with self._l1_lock:
+                    self._l1_cache.pop(target_key, None)
+                if self.redis:
+                    await self.redis.delete(target_key)
+                logger.info(f"🧹 CacheManager: Invalidated key {target_key}")
+
+        except Exception as e:
+            metrics.errors += 1
+            logger.error(f"❌ INVALIDATE ERROR: {e}")
+
+
+
+cache_manager = CacheManager(config.VALKEY_URL)
+
+
+valkey = cache_manager
