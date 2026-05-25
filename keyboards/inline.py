@@ -179,3 +179,56 @@ def anime_menu_kb():
     builder.row(types.InlineKeyboardButton(text="➖ Anime  o'chirish", callback_data="remove_anime"))
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel"))
     return builder.as_markup()
+
+
+
+
+
+#=============================admin_advert_kb============================#
+#========================================================================#
+def admin_addert_kb():
+    builder = InlineKeyboardBuilder()
+    
+    # 1. Asosiy amal (Kanal bilan ishlash)
+    builder.row(
+        types.InlineKeyboardButton(text="📢 Kanaldan reklama", callback_data="channel_add")
+    )
+    
+    # 2. Vaqt bo'yicha guruhlash (UX uchun qulay)
+    builder.row(
+        types.InlineKeyboardButton(text="📅 Kunlik", callback_data="day_add"),
+        types.InlineKeyboardButton(text="🗓 Haftalik", callback_data="week_add"),
+        types.InlineKeyboardButton(text="🗓 Oylik", callback_data="moth_add")
+    )
+    
+    # 3. Navigatsiya
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_advertisement")
+    )
+    
+    return builder.as_markup()
+
+
+
+
+
+#=============================admin_add_kb============================#
+#========================================================================#
+def admin_add_kb():
+    builder = InlineKeyboardBuilder()
+    
+    # Reklama funksiyalari (Guruhlangan)
+    builder.row(
+        types.InlineKeyboardButton(text="📢Reklama yuborish", callback_data="admin_advert")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="📊 Reklama statistikasi", callback_data="ad_stats"),
+        types.InlineKeyboardButton(text="⏳ Reklama tarixi", callback_data="ad_history")
+    )
+    
+    # Navigatsiya (Har doim alohida qatorda)
+    builder.row(
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel")
+    )
+    
+    return builder.as_markup()

@@ -29,9 +29,11 @@ async def admin_panel_handler(event: types.Message | types.CallbackQuery, state:
     
     kb = admin_panel_kb(user_id=user_id, user_status=user_status)
     text = (
-        "🎛️ <b>ADMIN BOSHQARUV PANELI</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Kerakli bo'limni tanlang."
+        f"🎛️ <b>ADMIN BOSHQARUV PANELI</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Xush kelibsiz <b>{event.from_user.full_name}</b>\n"
+        f"Kerakli bo'limni tanlang."
+        
     )
 
     if isinstance(event, types.Message):
