@@ -73,6 +73,9 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
 
 
 
+
+#============================buy_vip_med=================================#
+#========================================================================#
 @router.callback_query(F.data == "buy_vip_med")
 async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear() # Har doim yaxshi amaliyot
@@ -107,3 +110,4 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
             
     # Answer har doim chaqirilishi kerak
     await callback.answer("💎 VIP sotib olish menyusi yuklandi")
+
