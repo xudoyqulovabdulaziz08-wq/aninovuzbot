@@ -2,7 +2,7 @@ import logging
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update, and_
+from sqlalchemy import select, update, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
@@ -268,17 +268,15 @@ class ChannelRepository:
         channel = Channel(channel_id=channel_id, title=title, url=url, is_active=True)
         session.add(channel)
         await session.commit()
-        
-        # 🔥 Keshni tozalashni qo'shib qo'ying:
         await valkey.invalidate_channels() 
-        
         return channel
 
     @staticmethod
     async def get_all_active_channels(session: AsyncSession) -> List[Channel]:
-        # Faqat faol kanallarni olish
+        # Faqat faol (is_active=True) kanallarni olish (foydalanuvchilar tekshiruvi uchun)
         result = await session.execute(select(Channel).where(Channel.is_active == True))
         return result.scalars().all()
+
     @staticmethod
     async def get_channel_by_id(session: AsyncSession, channel_id: int):
         result = await session.execute(select(Channel).where(Channel.channel_id == channel_id))
@@ -286,18 +284,42 @@ class ChannelRepository:
     
     @staticmethod
     async def toggle_channel_status(session: AsyncSession, channel_id: int, is_active: bool):
-        """Kanalni faollashtirish yoki o'chirish uchun (tavsiya etiladi)"""
         await session.execute(
             update(Channel).where(Channel.channel_id == channel_id).values(is_active=is_active)
         )
         await session.commit()
-        
-        # 🔥 Kanal statusi o'zgarganda ham keshni tozalash shart
         await valkey.invalidate_channels()
 
+    # 🔄 ESKI ALIAS O'ZGARTIRILDI: Endi u rostdan ham hamma kanallarni qaytaradi (Admin ko'rishi uchun)
     @staticmethod
     async def get_all_channels(session: AsyncSession) -> List[Channel]:
-        """get_all_active_channels metodiga alias"""
-        return await ChannelRepository.get_all_active_channels(session)
+        """Tizimdagi barcha faol va nofaol kanallar ro'yxatini olish"""
+        result = await session.execute(select(Channel).order_by(Channel.id.desc()))
+        return result.scalars().all()
+
+    # 🗑 YANGI QO'SHILDI: Kanalni bazadan butunlay o'chirish metodi
+    @staticmethod
+    async def delete_channel_by_id(session: AsyncSession, channel_id: int) -> bool:
+        """Kanalni bazadan butunlay o'chirish va keshni avtomatik tozalash"""
+        try:
+            stmt = delete(Channel).where(Channel.channel_id == channel_id)
+            result = await session.execute(stmt)
+            
+            # Agar birorta qator o'chgan bo'lsa, rowcount 1 (yoki undan ko'p) bo'ladi
+            if result.rowcount > 0:
+                await session.commit()
+                
+                # 🔥 REPOSITORY ICHIDA KESHNI TOZALASH:
+                # Agar valkey obyekti shu faylda import qilingan bo'lsa
+                if hasattr(valkey, 'invalidate_channels'):
+                    await valkey.invalidate_channels()
+                    
+                return True
+                
+            return False
+            
+        except Exception as e:
+            await session.rollback()
+            raise e
 
     

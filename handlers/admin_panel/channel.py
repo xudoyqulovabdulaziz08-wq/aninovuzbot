@@ -305,6 +305,8 @@ async def list_channels(callback: CallbackQuery, state: FSMContext, **kwargs):
 
 #========================_execute_channel_listing========================#
 #========================================================================#
+from aiogram.exceptions import TelegramBadRequest  # Eng tepaga import qiling qolganlar qatoriga
+
 async def _execute_channel_listing(
     callback: CallbackQuery, 
     state: FSMContext, 
@@ -312,7 +314,7 @@ async def _execute_channel_listing(
     page: int = 1
 ):
     try:
-        await callback.answer()
+        await callback.answer("📋 Kanallar ro'yxati yuklanmoqda...")
         activ_channels = await ChannelRepository.get_all_active_channels(session)
         channels = await ChannelRepository.get_all_channels(session)
         
@@ -343,14 +345,17 @@ async def _execute_channel_listing(
         
         # 1. Kanallar tugmalari (Har biri alohida qatorda)
         for channel in page_channels:
+            # 💡 Kichik bonus: Agar kanal o'chirilgan (is_active=False) bo'lsa, 
+            # tugma matnida buni vizual ko'rsatish mumkin 🔴/🟢
+            status_emoji = "🟢" if channel.is_active else "🔴"
             builder.row(
                 types.InlineKeyboardButton(
-                    text=f"📢 {channel.title}",
+                    text=f"{status_emoji} {channel.title}",
                     callback_data=ChannelDetailCallback(channel_id=channel.channel_id, page=page).pack()
                 )
             )
         
-        # 2. Navigatsiya tugmalari (Siz yuborgan rasmdagidek bitta qatorda 3 ta tugma)
+        # 2. Navigatsiya tugmalari
         nav_buttons = []
         
         # Oldingi sahifa tugmasi
@@ -391,25 +396,39 @@ async def _execute_channel_listing(
         text = (
             f"📋 <b>TIZIMDAGI KANALLAR</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Jami kanallar: <b>{total_channels}</b> ta\n\n"
+            f"Jami kanallar: <b>{total_channels}</b> ta\n"
             f"Faol kanallar: <b>{len(activ_channels)}</b> ta\n\n"
-            f"Kanal haqida batafsil ma'lumot olish va uni o'chirish uchun ustiga bosing:"
+            f"Kanal haqida batafsil ma'lumot olish va uni boshqarish uchun ustiga bosing:"
         )
         
-        await callback.message.edit_text(
-            text=text,
-            parse_mode="HTML",
-            reply_markup=builder.as_markup()
-        )
+        # 🛡 MANA SHU YERDA TELEGRAM SERVERNXATOLIGIGA QARSHI TIZIM ISHLAYDI:
+        try:
+            await callback.message.edit_text(
+                text=text,
+                parse_mode="HTML",
+                reply_markup=builder.as_markup()
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e):
+                # Agar o'zgarish bo'lmasa, logni to'ldirmasdan tinchgina o'tkazib yuboramiz
+                pass
+            else:
+                # Boshqa turdagi BadRequest bo'lsa (masalan, matn xato formatlansa) logga yozamiz
+                raise e
         
     except Exception as e:
         logger.error(f"Kanal ro'yxatini olishda xatolik: {e}")
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_channels"))
-        await callback.message.edit_text(
-            "❌ Tizim xatosi: Ma'lumotlarni yuklashda xatolik yuz berdi.",
-            reply_markup=builder.as_markup()
-        )
+        
+        # Xatolik xabarini chiqarishda ham edit_text xavfsiz bo'lishi kerak
+        try:
+            await callback.message.edit_text(
+                "❌ Tizim xatosi: Ma'lumotlarni yuklashda xatolik yuz berdi.",
+                reply_markup=builder.as_markup()
+            )
+        except Exception:
+            pass
 
 
 
@@ -445,7 +464,7 @@ async def view_channel_detail(callback: CallbackQuery, callback_data: ChannelDet
     actual_session = getattr(safe_session, "_session", None)
     
     async def _show_detail(session: AsyncSession):
-        await callback.answer()
+        await callback.answer("Kanal ma'lumotlari yuklanmoqda...")
         channel = await ChannelRepository.get_channel_by_id(session, callback_data.channel_id)
         
         if not channel:
@@ -467,7 +486,7 @@ async def view_channel_detail(callback: CallbackQuery, callback_data: ChannelDet
         
         builder = InlineKeyboardBuilder()
         # Kelajakda kanalni o'chirish tugmasini mana shu yerga qo'shishingiz mumkin
-        builder.row(types.InlineKeyboardButton(text="🗑 Kanalni o'chirish", callback_data=f"delete_channel_{channel.channel_id}"))
+        builder.row(types.InlineKeyboardButton(text="🗑 Kanalni o'chirish", callback_data=f"ask_delete_{channel.channel_id}"))
         
         # 💡 PRO UX: Ortga bosganda foydalanuvchi adashib ketmasligi uchun aynan o'zi turgan sahifaga qaytaramiz!
         builder.row(
@@ -499,3 +518,81 @@ async def view_channel_detail(callback: CallbackQuery, callback_data: ChannelDet
 @router.callback_query(F.data == "noop")
 async def noop_callback(callback: CallbackQuery):
     await callback.answer()
+
+
+
+
+
+
+
+
+#=========================ask_delete_channel=============================#
+#========================================================================#
+# 1-BOSQICH: Admin "Kanalni o'chirish" tugmasini bosganda tasdiqlashni so'rash oynasi
+@router.callback_query(F.data.startswith("ask_delete_"))
+async def ask_delete_channel(callback: CallbackQuery, state: FSMContext, **kwargs):
+    await callback.answer("⚠️ Kanalni o'chirish tasdiqlanishi kerak.")
+    channel_id = int(callback.data.replace("ask_delete_", ""))
+    
+    # "Ha" va "Yo'q" tugmalari
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="🔴 Ha, o'chirilsin", callback_data=f"confirm_delete_{channel_id}"),
+        types.InlineKeyboardButton(text="🟢 Yo'q, bekor qilish", callback_data=ChannelDetailCallback(channel_id=channel_id, page=1).pack())
+    )
+    
+    await callback.message.edit_text(
+        text="⚠️ <b>DIQQAT: KANALNI O'CHIRISH</b>\n\n"
+             "Ushbu kanalni tizimdan butunlay o'chirib tashlamoqchimisiz?\n"
+             "Bu amalni ortga qaytarib bo'lmaydi!",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+
+
+
+
+
+
+
+#=======================execute_delete_channel===========================#
+#========================================================================#
+# 2-BOSQICH: Admin qizil tugmani bosgandagina haqiqiy o'chirish jarayoni bajariladi
+@router.callback_query(F.data.startswith("confirm_delete_"))
+async def execute_delete_channel(callback: CallbackQuery, state: FSMContext, **kwargs):
+    safe_session = kwargs.get("session")
+    session_pool = kwargs.get("session_pool")
+    actual_session = getattr(safe_session, "_session", None)
+    
+    channel_id = int(callback.data.replace("confirm_delete_", ""))
+    
+    builder_back = InlineKeyboardBuilder()
+    builder_back.row(types.InlineKeyboardButton(text="🔙 Kanallar ro'yxatiga qaytish", callback_data=ChannelsPageCallback(page=1).pack()))
+    back_markup = builder_back.as_markup()
+
+    async def _delete_logic(session: AsyncSession):
+        await callback.answer("⏳ O'chirilmoqda...")
+        success = await ChannelRepository.delete_channel_by_id(session, channel_id)
+        
+        if success:
+            await callback.message.edit_text(
+                "🗑 <b>Kanal muvaffaqiyatli o'chirildi!</b>\n\n"
+                "Tizim ma'lumotlar bazasi va keshlaridan barcha yozuvlar tozalandi. ✅",
+                parse_mode="HTML",
+                reply_markup=back_markup
+            )
+        else:
+            await callback.message.edit_text(
+                "❌ Xatolik: Kanal topilmadi yoki u allaqachon o'chirib yuborilgan.",
+                reply_markup=back_markup
+            )
+
+    # 🚀 Sessiyani xavfsiz yopish va return qilish tartibi:
+    if actual_session is not None:
+        await _delete_logic(actual_session)
+        return  # Funksiyani shu yerda to'xtatamiz
+        
+    elif session_pool is not None:
+        async with session_pool() as new_session:
+            await _delete_logic(new_session)
+        return  # Kontekst menejeridan tashqarida toza return
