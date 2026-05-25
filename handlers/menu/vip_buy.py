@@ -150,7 +150,7 @@ async def vip_tariff_selection_handler(callback: types.CallbackQuery):
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_med"))
     
     try:
-        await callback.message.edit_text(text, reply_markup=builder.as_markup, parse_mode="HTML")
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
             logger.error(f"❌ VIP menyu xatosi: {e}")
@@ -176,7 +176,7 @@ async def buy_vip_bonus_handler(callback: types.CallbackQuery):
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_med"))
 
     try:
-        await callback.message.edit_text(text, reply_markup=builder.as_markup, parse_mode="HTML")
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
             logger.error(f"❌ VIP bonus xatosi: {e}")
