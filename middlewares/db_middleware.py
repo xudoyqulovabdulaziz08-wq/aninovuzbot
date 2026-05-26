@@ -66,20 +66,20 @@ if not hasattr(state, 'cb_recovery_time'): state.cb_recovery_time = 30.0
 # ======================================================
 class SafeSession:
     """
-    🧠 Ultra aqlli Lazy Proxy:
-    Sinxron va asinxron metodlarni to'g'ri ajratadi. Kesh rejimidan
-    dinamik ravishda haqiqiy sessiyani uyg'otadi.
+    🧠 Aqlli Lazy Proxy: Kesh ishlaganda bazani yuklamaydi (None turadi).
+    Agar handler ichida kutilmaganda sessiya metodlari chaqirilsa,
+    o'sha zahoti hovuzdan (session_pool) haqiqiy sessiya olib, ishni davom ettiradi.
     """
     def __init__(self, session=None, session_pool=None):
         self.__dict__["_session"] = session
         self.__dict__["_session_pool"] = session_pool
 
     async def _ensure_session(self):
-        """Metodlar chaqirilganda sessiya yo'q bo'lsa, uni dinamik yaratish"""
+        """Metodlar chaqirilganda sessiya yoq bo'lsa, uni dinamik yaratish"""
         if self._session is None:
             if self._session_pool is None:
-                raise RuntimeError("❌ DB session is None va session_pool berilmagan.")
-            logger.info("⚡ Lazy Loading: Kesh rejimidan dinamik sessiya ochildi.")
+                raise RuntimeError("❌ DB session is None va session_pool berilmagan (Cache-only mode restriction).")
+            logger.info("⚡ Lazy Loading: Handler bazaga murojaat qildi, kesh rejimidan dinamik sessiya ochildi.")
             self.__dict__["_session"] = self._session_pool()
         return self._session
 
@@ -92,35 +92,23 @@ class SafeSession:
             return await self._session.__aexit__(exc_type, exc_val, exc_tb)
 
     def __getattr__(self, item):
-        # 💡 SQLAlchemy sinxron metodlari ro'yxati (add, expunge, va h.k.)
-        # Agar sessiya hali ochilmagan bo'lsa, ularni bajarishdan oldin sessiyani ochishga majburlaymiz
+        # Bu qism sinxron atributlar va metodlar uchun proxy vazifasini bajaradi
         if self._session is None:
-            # Agar chaqirilayotgan metod ma'lum asinxron metod bo'lsa:
-            if item in ("execute", "commit", "rollback", "flush", "refresh", "close"):
-                async def lazy_async_wrapper(*args, **kwargs):
-                    session = await self._ensure_session()
-                    func = getattr(session, item)
-                    return await func(*args, **kwargs)
-                return lazy_async_wrapper
-            else:
-                # SINXRON METODLAR (add, append, va h.k.) UCHUN:
-                # Bu yerda event loop orqali sessiyani srazu blocking bo'lmagan tarzda ochamiz
-                try:
-                    loop = asyncio.get_running_loop()
-                    # Sessiyani sinxron chaqiruv ichida majburiy tayyorlaymiz
-                    if loop.is_running():
-                        # Agar asinxron muhit ichida bo'lsak, sessiyani tayyorlash vazifasini ishga tushiramiz
-                        future = asyncio.run_coroutine_threadsafe(self._ensure_session(), loop)
-                        # Kutib turamiz (bu juda tez bajariladi)
-                        future.result(timeout=2.0)
-                except RuntimeError:
-                    pass
-                
+            # Agar sessiya hali ochilmagan bo'lsa va asinxron metod chaqirilayotgan bo'lsa
+            # Dinamik ravishda asinxron chaqiruvni o'rab (wrap) qaytaramiz
+            async def lazy_wrapper(*args, **kwargs):
+                session = await self._ensure_session()
+                func = getattr(session, item)
+                return await func(*args, **kwargs)
+            return lazy_wrapper
+            
         return getattr(self._session, item)
 
     async def close(self):
+        """Middleware finally qismida xavfsiz yopilishi uchun"""
         if self._session is not None:
             await self._session.close()
+
 
 # ======================================================
 # 🔥 MIDDLEWARE CORE
@@ -146,7 +134,7 @@ class DbSessionMiddleware(BaseMiddleware):
             }
             data["session"] = SafeSession(session=None, session_pool=self.session_pool)
             return await handler(event, data)
-
+        
         user_id = user_obj.id
 
         # ======================================================
@@ -160,14 +148,15 @@ class DbSessionMiddleware(BaseMiddleware):
                 self._fire_and_forget_cache_update(cached_l1)
 
             data["user"] = cached_l1
-            data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-            return await handler(event, data) # 👈 To'g'ridan-to'g'ri qaytarish qo'shildi!
+            data["session"] = SafeSession(session=None, session_pool=self.session_pool) # Kesh ishladi -> sessiya ochilmaydi
+            return await handler(event, data)
 
         # ======================================================
         # 🔥 LEVEL 2: VALKEY/REDIS DISTRIBUTED CACHE
         # ======================================================
         if valkey.is_alive:
             try:
+                # Key pattern loyiha standartiga moslashtirildi `{db_users}`
                 cached_l2 = await valkey.get("{db_users}", user_id)
                 if cached_l2:
                     cached_l2 = dict(cached_l2)
@@ -180,7 +169,7 @@ class DbSessionMiddleware(BaseMiddleware):
                     await state.l1_cache.set(user_id, cached_l2)
                     data["user"] = cached_l2
                     data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-                    return await handler(event, data) # 👈 To'g'ridan-to'g'ri qaytarish!
+                    return await handler(event, data)
 
             except Exception as e:
                 logger.exception(f"❌ L2 CACHE FAILURE user_id={user_id}: {e}")
@@ -199,9 +188,12 @@ class DbSessionMiddleware(BaseMiddleware):
         # ======================================================
         # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
         # ======================================================
+        # Tranzaksiya hayotiy tsikli (Lifecycle) handler to'liq tugaguncha ochiq qolishi shart!
         session = self.session_pool()
         try:
-            async with asyncio.timeout(10.0):
+            start_time = time.time()
+            # Timeout va baza operatsiyasi
+            async with asyncio.timeout(3.0):
                 db_user = await UserRepository.get_or_create(session, user_obj)
 
             user_data = self._model_to_dict(db_user)
@@ -211,17 +203,20 @@ class DbSessionMiddleware(BaseMiddleware):
             data["user"] = copy.deepcopy(user_data)
             data["session"] = SafeSession(session)
             
+            # Handler chaqiruvini o'zgaruvchiga olamiz
             return await handler(event, data)
 
         except Exception as e:
             await self._handle_db_failure(e)
             logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
             
+            # Xatolik yuz berganda xavfsiz user va bo'sh sessiya
             data["user"] = self._emergency_user(user_obj)
             data["session"] = SafeSession(session=None, session_pool=self.session_pool)
             return await handler(event, data)
             
         finally:
+            # 'session' borligini tekshirish xavfsizroq
             if 'session' in locals() and session:
                 await session.close()
 
