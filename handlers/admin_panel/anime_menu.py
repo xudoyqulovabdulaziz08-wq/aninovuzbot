@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
-
+from typing import Any
 
 
 from config import config
@@ -237,27 +237,27 @@ async def process_anime_description(message: Message, state: FSMContext):
 # QADAM 7: Tillarni olish -> BAZAGA VA KESHGA YOZISH (YAKUN)
 # =====================================================================
 @router.message(AnimeMenuState.adding_laguages)
-async def process_anime_languages_and_save(message: Message, state: FSMContext, **data): # 👈 session o'rniga **data oldik
+async def process_anime_languages_and_save(message: Message, state: FSMContext, session: Any): 
+    # 1. `session`ni to'g'ridan-to'g'ri argument sifatida qabul qiling 
+    # (Middleware uni data["session"] dan avtomatik yuklaydi)
+
     if not message.text:
         await message.reply("❌ Iltimos, faqat matnli xabar yuboring. Anime tillarini kiriting:")
         return
 
-    # 1. Tillarni xotiraga yozamiz
     await state.update_data(languages=message.text.strip())
-    
-    # 2. FSM xotirasidagi barcha ma'lumotlarni olamiz
     fsm_data = await state.get_data()
     
-    # Yuklanish xabari
     loading_msg = await message.answer("🚀 Ma'lumotlar bazaga saqlanmoqda, iltimos kuting...")
-    
-    # Middleware'dan kelgan aqlli proxy sessiyani olamiz
-    session = data.get("session") 
 
     try:
-        # 3. Bazaga saqlaymiz (SafeSession bu yerda avtomatik real sessiyani ishga tushiradi)
+        # 2. Xavfsiz sessiyani uyg'otish (Agar SafeSession bo'lsa)
+        if hasattr(session, "_ensure_session"):
+            await session._ensure_session()
+
+        # 3. Bazaga saqlash
         new_anime = await AnimeRepository.add_anime(
-            session=session, # Proxy sessiya yuborildi
+            session=session,
             title=fsm_data["title"],
             poster_id=fsm_data["poster_id"],
             year=fsm_data["year"],
@@ -268,34 +268,33 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             episodes=[]
         )
         
-        # 4. Tugmalarni yasaymiz
+        # 4. Muvaffaqiyatli xabar
         builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(
-            text="➕ Qism qo'shishni boshlash", 
-            callback_data=f"add_ep_{new_anime.anime_id}" 
-        ))
-        builder.row(types.InlineKeyboardButton(
-            text="🔙 Admin Panelga qaytish", 
-            callback_data="admin_anime_panel"
-        ))
+        builder.row(types.InlineKeyboardButton(text="➕ Qism qo'shish", callback_data=f"add_ep_{new_anime.anime_id}"))
+        builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
         
-        # 5. Muvaffaqiyatli xabar va tugmalarni yuborish
         await loading_msg.edit_text(
-            f"🎉 **Yangi anime muvaffaqiyatli qo'shildi!**\n\n"
+            f"🎉 **Yangi anime qo'shildi!**\n\n"
             f"🎬 **Nomi:** {new_anime.title}\n"
-            f"📅 **Yili:** {new_anime.year}\n"
-            f"🎭 **Janrlari:** {', '.join(fsm_data['genres'])}\n"
-            f"🆔 **ID:** `{new_anime.anime_id}`\n\n"
-            f"🔥 Valkey/Redis kesh tizimi avtomatik tarzda yangilandi!",
+            f"🆔 **ID:** `{new_anime.anime_id}`",
             reply_markup=builder.as_markup()
         )
         
     except Exception as e:
         logger.error(f"❌ Animeni bazaga saqlashda xatolik: {e}")
-        await loading_msg.edit_text("❌ Tizimda xatolik yuz berdi. Ma'lumotlar bazaga saqlanmadi.")
+        
+        # 🔥 XAVFSIZ ROLLBACK: session None emasligini tekshiramiz
+        if session:
+            # Agar SafeSession bo'lsa, ichki sessiyani topamiz
+            target_session = getattr(session, "_session", session)
+            try:
+                await target_session.rollback()
+            except Exception as rb_err:
+                logger.error(f"Rollback qilishda xatolik: {rb_err}")
+        
+        await loading_msg.edit_text("❌ Bazada xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
         
     finally:
-        # 6. Jarayon tugadi, FSM tozalanadi
         await state.clear()
 
 
