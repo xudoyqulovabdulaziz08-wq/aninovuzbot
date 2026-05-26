@@ -144,6 +144,129 @@ class CacheManager:
         return f"{self.namespace}:{shard}:{table}:{obj_id}:{self.version}"
     
 
+# ================= ANIME SEARCH & DETAILS CACHE =================
+
+    async def set_anime_search_map(self, search_data: dict):
+        """
+        🚀 Barcha anime nomlari va IDlarini qidiruv uchun Valkeyda saqlash.
+        Bu ma'lumot L1 keshda ham, Valkeyda ham 30 daqiqa turadi.
+        """
+        key = f"{self.namespace}:anime_search:all_titles"
+        try:
+            raw_data = orjson.dumps(search_data)
+            if self.redis:
+                await self.redis.set(key, raw_data)
+
+            # L1 keshga ham yuklab qo'yamiz (Baza qidiruvini umuman o'ldirish uchun)
+            await self._set_l1(key, search_data, 1800) # 30 daqiqa L1 kesh
+            logger.info(f"🔥 CacheManager: {len(search_data)} ta anime sarlavhasi qidiruv keshiga yozildi.")
+        except Exception as e:
+            metrics.errors += 1
+            logger.error(f"❌ SET ANIME SEARCH MAP ERROR: {e}")
+
+    async def get_anime_search_map(self) -> Optional[dict]:
+        """
+        🔎 Qidiruv uchun barcha animelar xaritasini L1 yoki L2 keshdan tezkor olish (0-1ms)
+        """
+        key = f"{self.namespace}:anime_search:all_titles"
+        
+        # 1. L1 keshdan tekshiramiz
+        async with self._l1_lock:
+            if key in self._l1_cache:
+                data, exp = self._l1_cache[key]
+                if datetime.now(timezone.utc) < exp:
+                    self._l1_cache.move_to_end(key)
+                    metrics.l1_hits += 1
+                    return data.copy() # 💡 L1 dagi original ma'lumotni himoya qilish uchun nusxa qaytaramiz
+                self._l1_cache.pop(key, None)
+
+        # 2. Singleflight lock orqali L2 (Valkey) dan olamiz
+        async with self._inflight_lock:
+            if key in self._inflight:
+                metrics.inflight_hits += 1
+                return await self._inflight[key]
+            fut = asyncio.get_event_loop().create_future()
+            self._inflight[key] = fut
+
+        try:
+            raw = await self.redis.get(key) if self.redis else None
+            data = orjson.loads(raw) if raw else None
+            if data:
+                metrics.l2_hits += 1
+                await self._set_l1(key, data, 1800) # 30 daqiqa L1 kesh
+            else:
+                metrics.misses += 1
+            
+            if not fut.done():
+                fut.set_result(data)
+            return data.copy() if data else None # 💡 Nusxa qaytaramiz
+        except Exception as e:
+            metrics.errors += 1
+            if not fut.done():
+                fut.set_result(None)
+            logger.error(f"GET ANIME SEARCH MAP ERROR: {e}")
+            return None
+        finally:
+            async with self._inflight_lock:
+                self._inflight.pop(key, None)
+
+    
+    async def update_single_anime_in_search_map(self, anime_id: int, title: str, year: int):
+        """
+        🔄 Admin yangi anime qo'shganda, qidiruv xaritasini buzib yubormasdan,
+        uning ichiga yangi animeni asinxron xavfsiz qo'shib qo'yish.
+        """
+        key = f"{self.namespace}:anime_search:all_titles"
+        try:
+            # Mavjud xaritani olamiz (Nusxasiz to'g'ridan-to'g'ri yangilash uchun get_anime_search_map ishlatildi)
+            current_map = await self.get_anime_search_map() or {}
+            current_map[str(anime_id)] = f"{title} ({year})"
+            
+            # Qayta keshlaymiz
+            raw_data = orjson.dumps(current_map)
+            if self.redis:
+                await self.redis.set(key, raw_data)
+            await self._set_l1(key, current_map, 1800)
+            
+            # Boshqa klaster node'lariga L1 ni tozalash haqida signal yuboramiz
+            await event_bus.publish({
+                "type": "SET",
+                "key": key,
+                "node": self.node_id
+            })
+            logger.info(f"🔄 CacheManager: Yangi anime [{anime_id}] qidiruv xaritasiga qo'shildi.")
+        except Exception as e:
+            metrics.errors += 1
+            logger.error(f"❌ UPDATE SINGLE ANIME IN SEARCH MAP ERROR: {e}")
+
+    async def set_episode_file_id(self, anime_id: int, episode: int, file_id: str, ttl: int = 86400):
+        """
+        🎬 Epizod video faylini (file_id) L1 va L2 keshga yozish (24 soat kesh)
+        """
+        table = "anime_episodes"
+        obj_id = f"{anime_id}_{episode}"
+        key = self._key(table, obj_id)
+        
+        data = {"file_id": file_id}
+        try:
+            if self.redis:
+                await self.redis.setex(key, ttl, orjson.dumps(data))
+            await self._set_l1(key, data, min(ttl // 10, 900)) # L1 keshda max 15 daqiqa
+            logger.info(f"🔥 CacheManager: Episode [{anime_id} - {episode}] file ID keshga yozildi.")
+        except Exception as e:
+            metrics.errors += 1 # 💡 Xatolik metrikasi qo'shildi
+            logger.error(f"❌ SET EPISODE FILE ID ERROR: {e}")
+
+    async def get_episode_file_id(self, anime_id: int, episode: int) -> Optional[str]:
+        """
+        🍿 Epizod file_id sini Dual-Layer kesh tizimidan super tezkor olish
+        """
+        table = "anime_episodes"
+        obj_id = f"{anime_id}_{episode}"
+        
+        res = await self.get(table, obj_id)
+        return res.get("file_id") if res else None
+    
     # ================= CHANNELS CACHE =================
     async def get_channels(self):
         key = f"{self.namespace}:channels:active"
@@ -435,13 +558,23 @@ class CacheManager:
 # ================= 🔥 SMART INVALIDATE METHOD =================
 # cache.py faylining eng oxiridagi eski 'invalidate' o'rniga to'liq almashtiring:
 
-    async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None):
+    async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None, broadcast: bool = True):
         """
-        Workerlar tomonidan chaqiriladigan universal kesh tozalash metodi.
-        Ham standart kalitlarni, ham maxsus kanallar keshini xavfsiz tozalaydi.
+        Workerlar va repozitoriy tomonidan chaqiriladigan universal kesh tozalash metodi.
+        Ham standart kalitlarni, ham maxsus kanallar va anime keshlarini xavfsiz tozalaydi.
         """
         try:
-            # 1. 📢 KANALLAR KESHINI TOZALASH (Agar table "channels" bo'lsa yoki kalit kanallarga tegishli bo'lsa)
+            # -----------------------------------------------------------------
+            # 🔥 SPECIAL FIX: ANIME QIDIRUV XARITASI PREVENTIVE TOZALASH
+            # Agar tasodifan eski kodlar yoki boshqa modullardan "search_map" ni o'chirish kelsa,
+            # uni bizning yangi maxsus qidiruv kalitimizga yo'naltiramiz.
+            # -----------------------------------------------------------------
+            if (table == "anime_list" and obj_id == "search_map") or (key and "anime_search" in key):
+                key = f"{self.namespace}:anime_search:all_titles"
+                table = None
+                obj_id = None
+
+            # 1. 📢 KANALLAR KESHINI TOZALASH
             is_channel_event = (
                 table == "channels" or 
                 (key and (
@@ -450,10 +583,10 @@ class CacheManager:
                     key.startswith("cache:")
                 ))
             )
-
+            
             if is_channel_event:
                 if self.redis:
-                    # A. Agar aniq bitta kanal ID'si kelgan bo'lsa, o'shani L1 va L2 dan o'chiramiz
+                    # A. Aniq bitta kanal ID'si kelsa
                     if table == "channels" and obj_id and obj_id not in ["all_list", "active_list"]:
                         specific_key = self._key(table, obj_id)
                         async with self._l1_lock:
@@ -461,7 +594,7 @@ class CacheManager:
                         await self.redis.delete(specific_key)
                         logger.info(f"🧹 CacheManager: Specific channel [{obj_id}] cache deleted.")
 
-                    # B. Umumiy ro'yxat keshlarini majburiy o'chirish (all_list va active_list)
+                    # B. Umumiy ro'yxat keshlarini majburiy o'chirish
                     key_all = self._key("channels", "all_list")
                     key_act = self._key("channels", "active_list")
                     
@@ -472,30 +605,45 @@ class CacheManager:
                     await self.redis.delete(key_all)
                     await self.redis.delete(key_act)
                     
-                    # C. Eski hardcoded kalitlarni ham har ehtimolga qarshi tozalaymiz
+                    # C. Eski hardcoded kalitlarni ham tozalaymiz
                     await self.redis.delete(f"{self.namespace}:channels:active")
                     await self.redis.delete("cache:all_channels")
                     await self.redis.delete("cache:active_channels")
                 
-                logger.info("🧹 CacheManager: All channel lists and structures successfully wiped out from L1 & L2.")
+                logger.info("🧹 CacheManager: All channel lists successfully wiped out from L1 & L2.")
+                
+                # 💡 Cluster Node-larni ogohlantirish (Boshqa serverlar ham L1 ni tozalashi uchun)
+                if broadcast and hasattr(self, 'event_bus') and self.event_bus:
+                    await self.event_bus.publish({"type": "INVALIDATE_CHANNELS", "node": self.node_id})
                 return
 
-            # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa (Boshqa modullar uchun)
+            # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa
             if key:
                 async with self._l1_lock:
                     self._l1_cache.pop(key, None)
                 if self.redis:
                     await self.redis.delete(key)
+                
+                # 💡 Klaster tarmoq xabari
+                if broadcast and hasattr(self, 'event_bus') and self.event_bus:
+                    await self.event_bus.publish({"type": "DEL", "key": key, "node": self.node_id})
+                
+                logger.info(f"🧹 CacheManager: Invalidated full key -> {key}")
                 return
 
-            # 3. Agar standart boshqa table va obj_id berilgan bo'lsa (Boshqa modullar uchun)
+            # 3. Agar standart boshqa table va obj_id berilgan bo'lsa
             if table and obj_id:
                 target_key = self._key(table, obj_id)
                 async with self._l1_lock:
                     self._l1_cache.pop(target_key, None)
                 if self.redis:
                     await self.redis.delete(target_key)
-                logger.info(f"🧹 CacheManager: Invalidated key {target_key}")
+                
+                # 💡 Klaster tarmoq xabari
+                if broadcast and hasattr(self, 'event_bus') and self.event_bus:
+                    await self.event_bus.publish({"type": "DEL", "key": target_key, "node": self.node_id})
+                
+                logger.info(f"🧹 CacheManager: Invalidated standard key -> {target_key}")
 
         except Exception as e:
             metrics.errors += 1

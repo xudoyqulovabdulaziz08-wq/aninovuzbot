@@ -18,6 +18,8 @@ from services.outbox.worker import OutboxWorker
 from database.cache import valkey
 from middlewares.db_middleware import DbSessionMiddleware
 from middlewares.subscription import CheckSubscriptionMiddleware
+from database.repository import AnimeRepository
+from database.models import async_session_pool
 
 from config import config
 
@@ -143,10 +145,7 @@ async def on_startup(bot: Bot):
         logger.critical(f"💥 Core Infrastructure Failure: {e}")
         raise e
 
-    # 3. Workerlarni ishga tushirish
-    await start_workers()
-
-    # 4. DB sxemalarni sinxronizatsiya qilish
+    # 3. DB sxemalarni sinxronizatsiya qilish (🔴 KESH_WARM UP'DAN TEPAGA OLINDI!)
     try:
         async with engine.begin() as conn:
             from database.models import Base
@@ -155,10 +154,21 @@ async def on_startup(bot: Bot):
     except Exception as e:
         logger.error(f"⚠️ Database sync warning: {e}")
 
-    # 5. Kesh tinglovchilarini ulash
+    # 4. Workerlarni ishga tushirish
+    await start_workers()
+
+    # 5. Anime qidiruv keshini yuklash (🔴 ENDI JADVALLAR ANIQ BOR, XAVFSIZ!)
+    try:
+        async with async_session_pool() as session:
+            await AnimeRepository.warm_up_anime_search_cache(session)
+        logger.info("🔥 Anime search cache pre-warmed successfully.")
+    except Exception as e:
+        logger.warning(f"⚠️ Anime cache warm-up issue: {e}")
+
+    # 6. Kesh tinglovchilarini ulash
     attach_cache_listeners()
 
-    # 6. Telegram Webhook o'rnatish
+    # 7. Telegram Webhook o'rnatish
     if not config.WEBHOOK_URL:
         logger.critical("❌ WEBHOOK_URL is missing in configuration!")
         raise RuntimeError("WEBHOOK_URL environment variable is required!")
@@ -173,7 +183,7 @@ async def on_startup(bot: Bot):
         logger.critical(f"💥 Failed to set webhook: {e}")
         raise e
 
-    # 7. Monitoringni fonda yoqish
+    # 8. Monitoringni fonda yoqish
     monitor_task = asyncio.create_task(system_monitor())
     background_tasks.add(monitor_task)
     monitor_task.add_done_callback(background_tasks.discard)
