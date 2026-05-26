@@ -193,7 +193,7 @@ class DbSessionMiddleware(BaseMiddleware):
         try:
             start_time = time.time()
             # Timeout va baza operatsiyasi
-            async with asyncio.timeout(3.0):
+            async with asyncio.timeout(10.0):
                 db_user = await UserRepository.get_or_create(session, user_obj)
 
             user_data = self._model_to_dict(db_user)
@@ -216,9 +216,11 @@ class DbSessionMiddleware(BaseMiddleware):
             return await handler(event, data)
             
         finally:
-            # 'session' borligini tekshirish xavfsizroq
             if 'session' in locals() and session:
-                await session.close()
+                try:
+                    await session.close()
+                except Exception as e:
+                    logger.debug(f"Session close error (ignored): {e}")
 
     # ======================================================
     # 🔥 SAFE FIRE-AND-FORGET GARBAGE COLLECTOR PROOF
