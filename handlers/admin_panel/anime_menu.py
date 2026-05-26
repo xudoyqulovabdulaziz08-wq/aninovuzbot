@@ -26,7 +26,7 @@ class AnimeMenuState(StatesGroup):
     adding_year = State() # 5 yangi anime qo'shish uchun chiqarilgan yilni kiritish
     adding_description = State() # 6 yangi anime qo'shish uchun tavsifni kiritish
     adding_laguages = State() # 7 yangi anime qo'shish uchun tillarni kiritish
-    add_episode = State()
+    adding_episode_video = State()
     deleting_anime = State()
     updating_anime = State()
 
