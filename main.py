@@ -19,7 +19,7 @@ from database.cache import valkey
 from middlewares.db_middleware import DbSessionMiddleware
 from middlewares.subscription import CheckSubscriptionMiddleware
 from database.repository import AnimeRepository
-from database.models import async_session_pool
+
 
 from config import config
 
@@ -159,7 +159,7 @@ async def on_startup(bot: Bot):
 
     # 5. Anime qidiruv keshini yuklash (🔴 ENDI JADVALLAR ANIQ BOR, XAVFSIZ!)
     try:
-        async with async_session_pool() as session:
+        async with AsyncSessionLocal() as session:
             await AnimeRepository.warm_up_anime_search_cache(session)
         logger.info("🔥 Anime search cache pre-warmed successfully.")
     except Exception as e:

@@ -16,6 +16,15 @@ router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 
+
+class AdminAnimeState(StatesGroup):
+    adding_anime = State()
+    adding_anime_photo = State()
+    add_episode = State()
+    deleting_anime = State()
+    updating_anime = State()
+
+
 #==============================anime_menu================================#
 #========================================================================#
 @router.callback_query(F.data == "admin_anime_panel")
@@ -39,6 +48,16 @@ async def admin_anime_panel(callback: types.CallbackQuery, state: FSMContext): #
             logger.error(f"❌ Anime panel xatosi: {e}")
     finally:
         await callback.answer("🎛️ Anime boshqaruv menyusi")
+
+
+
+#@router.callback_query(F.data == "add_anime")
+#async def add_anime():
+
+
+
+
+
 
 
 
