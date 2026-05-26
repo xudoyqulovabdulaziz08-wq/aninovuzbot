@@ -3,27 +3,35 @@ import asyncio
 import logging
 from aiogram import BaseMiddleware
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 from database.repository import ChannelRepository
 
 logger = logging.getLogger("SubMiddleware")
+
+
+
+
+
+logger = logging.getLogger("CheckSubscriptionMiddleware")
 
 class CheckSubscriptionMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if not isinstance(event, (Message, CallbackQuery)):
             return await handler(event, data)
 
-        if isinstance(event, CallbackQuery) and event.data == "check_sub":
-            return await handler(event, data)
+        # 🛑 TUZATILDI: 'check_sub' bosilganda shunchaki o'tkazib yuborish sharti OLIY TASHLANDI!
+        # Chunki u bosilganda pastdagi hamma tekshiruvlar qaytadan ishlashi shart.
 
         user_id = data["event_from_user"].id
         bot = data["bot"]
         
-        # 🟢 REPOZITORIY O'ZI KESH BILAN REAl-VAQTDA ISHLAYDI
-        # Keshda bo'lsa keshdan (0-2ms), bo'lmasa bazadan oladi
         session_pool = data.get("session_pool")
         if not session_pool:
             return await handler(event, data)
 
+        # O'zgaruvchini oldindan bo'sh ro'yxat qilib e'lon qilamiz
+        channels = []
+        
         async with session_pool() as session:
             try:
                 channels = await ChannelRepository.get_all_active_channels(session)
@@ -32,13 +40,11 @@ class CheckSubscriptionMiddleware(BaseMiddleware):
                 return await handler(event, data)
 
         if not channels:
-            # Agar kanallar ro'yxati rostdan ham bo'sh bo'lsa o'tkazib yuboradi
             return await handler(event, data)
 
         # 🚀 Parallel Telegram API tekshiruvi
         async def check_single(ch):
             try:
-                # Modeldagi channel_id nomi bu yerda qat'iy int qilinadi
                 chat_id = int(ch["channel_id"])
                 member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
                 
@@ -53,20 +59,38 @@ class CheckSubscriptionMiddleware(BaseMiddleware):
         not_subscribed = [r for r in results if r is not None]
 
         if not_subscribed:
+            # Tugmalarni chiroyli tarzda yig'amiz
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=f"📢 {ch['title']}", url=ch['url'])] for ch in not_subscribed
             ] + [[InlineKeyboardButton(text="🔄 Obunani Tekshirish", callback_data="check_sub")]])
             
-            text = "⚠️ **Botdan foydalanish uchun quyidagi homiy kanallarga obuna bo'ling:**"
+            text = "⚠️ <b>Botdan foydalanish uchun quyidagi homiy kanallarga obuna bo'ling:</b>"
             
             if isinstance(event, Message):
-                await event.answer(text=text, reply_markup=kb, parse_mode="Markdown")
+                await event.answer(text=text, reply_markup=kb, parse_mode="HTML")
             elif isinstance(event, CallbackQuery):
                 try:
-                    await event.message.edit_text(text=text, reply_markup=kb, parse_mode="Markdown")
-                except Exception:
-                    await event.message.answer(text=text, reply_markup=kb, parse_mode="Markdown")
-                await event.answer()
+                    # Silliq ko'rinishi uchun faqat markup va matnni o'zgartiramiz
+                    await event.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+                except TelegramBadRequest as e:
+                    if "message is not modified" not in str(e):
+                        await event.message.answer(text=text, reply_markup=kb, parse_mode="HTML")
+                
+                # 🟢 TUZATILDI: callback.answer o'rniga event.answer yozildi
+                await event.answer("⚠️ Hali hamma kanallarga obuna bo'lmagansiz!", show_alert=True)
+            
+            return # 🔴 Bot shu yerda to'xtaydi 
+
+        # 🟢 Agar foydalanuvchi hamma kanalga obuna bo'lgan bo'lsa va 'check_sub'ni bosgan bo'lsa:
+        if isinstance(event, CallbackQuery) and event.data == "check_sub":
+            await event.answer("🎉 Rahmat, obuna tasdiqlandi!", show_alert=True)
+            try:
+                await event.message.delete() # Homiy kanallar xabarini o'chirib tashlaymiz
+            except Exception:
+                pass
+            
+            # Bu yerda foydalanuvchiga muvaffaqiyatli o'tganidan keyin asosiy xabarni chiqarish kerak:
+            await event.message.answer("🤖 Botimizga xush kelibsiz! Botdan foydalanishingiz mumkin.")
             return
 
         return await handler(event, data)
