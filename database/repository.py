@@ -21,53 +21,26 @@ class UserRepository:
     # ================= GET OR CREATE (UPSERT) =================
     @staticmethod
     async def get_or_create(session: AsyncSession, tg_user) -> DBUser:
-        """
-        🔥 1 QUERY UPSERT | RACE SAFE | HIGH LOAD READY
-        """
-        try:
-            stmt = (
-                insert(DBUser)
-                .values(
-                    user_id=tg_user.id,
-                    username=tg_user.username,
-                    status="user",
-                    points=0,
-                    referral_count=0
-                    # ✅ is_vip olib tashlandi, chunki u modelda hybrid_property
-                )
-                .on_conflict_do_update(
-                    index_elements=[DBUser.user_id],
-                    set_={
-                        "username": tg_user.username
-                    }
-                )
-                .returning(DBUser)
+        stmt = (
+            insert(DBUser)
+            .values(
+                user_id=tg_user.id,
+                username=tg_user.username,
+                status="user",
+                points=0,
+                referral_count=0
             )
-
-            result = await session.execute(stmt)
-            user = result.scalar_one()
-
-            # 🔥 To'liq yuklangan obyektni kafolatlash
-            try:
-                await session.refresh(user)
-            except Exception:
-                pass
-
-            return user
-
-        except Exception as e:
-            logger.error(f"❌ get_or_create error: {e}")
-
-            # Fallback (Zaxira qidiruv)
-            result = await session.execute(
-                select(DBUser).where(DBUser.user_id == tg_user.id)
+            .on_conflict_do_update(
+                index_elements=[DBUser.user_id],
+                set_={"username": tg_user.username}
             )
-            user = result.scalar_one_or_none()
-
-            if not user:
-                raise RuntimeError("CRITICAL: user not found after UPSERT fail")
-
-            return user
+            .returning(DBUser)
+        )
+        
+        # 🔥 refresh() o'rniga returning(DBUser) natijasidan foydalanamiz
+        result = await session.execute(stmt)
+        return result.scalar_one()
+    
 
     # ================= GET BY ID =================
     @staticmethod
@@ -220,22 +193,16 @@ class UserRepository:
     # ================= PROCESS REFERRAL REWARD =================
     @staticmethod
     async def process_referral_reward(session: AsyncSession, user_id: int, amount: int = 10) -> tuple[bool, Optional[int]]:
-        """
-        🔥 ATOMIC REWARD PROCESS
-        """
         try:
-            # 1. Foydalanuvchini olish
-            result = await session.execute(
-                select(DBUser).where(DBUser.user_id == user_id)
-            )
-            user = result.scalar_one_or_none()
+            # 1. Taklif qilingan foydalanuvchini va ref_id ni bitta so'rovda olish
+            stmt = select(DBUser.referred_by).where(DBUser.user_id == user_id)
+            result = await session.execute(stmt)
+            ref_id = result.scalar_one_or_none()
 
-            if not user or not user.referred_by:
+            if not ref_id:
                 return False, None
 
-            ref_id = user.referred_by
-
-            # 2. Taklif qilganga ball qo'shish va takliflar sonini oshirish
+            # 2. Ref-ga ball qo'shish (Atomik)
             ref_update = await session.execute(
                 update(DBUser)
                 .where(DBUser.user_id == ref_id)
@@ -248,16 +215,13 @@ class UserRepository:
             if ref_update.rowcount == 0:
                 return False, None
 
-            # 3. Qayta ball bermaslik uchun referred_by ni tozalash
-            user.referred_by = None
+            # 3. Foydalanuvchini referalsiz holatga o'tkazish
+            await session.execute(
+                update(DBUser).where(DBUser.user_id == user_id).values(referred_by=None)
+            )
             
-            # 4. Tranzaksiyani flush qilish (ID larni sinxronlash va kesh tozalashga tayyorlash)
-            await session.flush() 
-
-            # 5. Keshlarni L1 va L2 darajasida tozalash
-            await UserRepository._invalidate_cache(user_id)
-            await UserRepository._invalidate_cache(ref_id)
-
+            # Flush qilamiz lekin commit kutamiz
+            await session.flush()
             return True, ref_id
 
         except Exception as e:

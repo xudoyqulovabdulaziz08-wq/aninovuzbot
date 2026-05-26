@@ -61,7 +61,7 @@ engine = create_async_engine(
     echo=False,
 
     # 🔥 Render / Aiven kichik paketlari (Hobby/Startup) uchun mukammal ulanishlar puli
-    pool_size=5,
+    pool_size=20,
     max_overflow=10,
 
     # Zombie ulanishlarni o'ldirish va qayta tiklash (Aiven drop connection fix)

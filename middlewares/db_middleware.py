@@ -201,7 +201,7 @@ class DbSessionMiddleware(BaseMiddleware):
         # ======================================================
         session = self.session_pool()
         try:
-            async with asyncio.timeout(3.0):
+            async with asyncio.timeout(10.0):
                 db_user = await UserRepository.get_or_create(session, user_obj)
 
             user_data = self._model_to_dict(db_user)
