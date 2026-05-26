@@ -237,7 +237,7 @@ async def process_anime_description(message: Message, state: FSMContext):
 # QADAM 7: Tillarni olish -> BAZAGA VA KESHGA YOZISH (YAKUN)
 # =====================================================================
 @router.message(AnimeMenuState.adding_laguages)
-async def process_anime_languages_and_save(message: Message, state: FSMContext, session: AsyncSession):
+async def process_anime_languages_and_save(message: Message, state: FSMContext, **data): # 👈 session o'rniga **data oldik
     if not message.text:
         await message.reply("❌ Iltimos, faqat matnli xabar yuboring. Anime tillarini kiriting:")
         return
@@ -246,33 +246,33 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     await state.update_data(languages=message.text.strip())
     
     # 2. FSM xotirasidagi barcha ma'lumotlarni olamiz
-    data = await state.get_data()
+    fsm_data = await state.get_data()
     
     # Yuklanish xabari
     loading_msg = await message.answer("🚀 Ma'lumotlar bazaga saqlanmoqda, iltimos kuting...")
     
+    # Middleware'dan kelgan aqlli proxy sessiyani olamiz
+    session = data.get("session") 
+
     try:
-        # 3. Bazaga saqlaymiz
+        # 3. Bazaga saqlaymiz (SafeSession bu yerda avtomatik real sessiyani ishga tushiradi)
         new_anime = await AnimeRepository.add_anime(
-            session=session,
-            title=data["title"],
-            poster_id=data["poster_id"],
-            year=data["year"],
+            session=session, # Proxy sessiya yuborildi
+            title=fsm_data["title"],
+            poster_id=fsm_data["poster_id"],
+            year=fsm_data["year"],
             is_completed=False,
-            genres=data["genres"],
-            description=data["description"],
-            languages=data["languages"],
+            genres=fsm_data["genres"],
+            description=fsm_data["description"],
+            languages=fsm_data["languages"],
             episodes=[]
         )
         
         # 4. Tugmalarni yasaymiz
         builder = InlineKeyboardBuilder()
-        
-        # 🔥 Dynamic Callback Data: Keyingi handlerda qaysi animega qism 
-        # qo'shilayotganini bilish uchun ID'ni yuboramiz (masalan: add_episode:45)
         builder.row(types.InlineKeyboardButton(
             text="➕ Qism qo'shishni boshlash", 
-            callback_data=f"add_ep_{new_anime.anime_id}" # Dynamic ID yuborildi
+            callback_data=f"add_ep_{new_anime.anime_id}" 
         ))
         builder.row(types.InlineKeyboardButton(
             text="🔙 Admin Panelga qaytish", 
@@ -284,10 +284,10 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             f"🎉 **Yangi anime muvaffaqiyatli qo'shildi!**\n\n"
             f"🎬 **Nomi:** {new_anime.title}\n"
             f"📅 **Yili:** {new_anime.year}\n"
-            f"🎭 **Janrlari:** {', '.join(data['genres'])}\n"
+            f"🎭 **Janrlari:** {', '.join(fsm_data['genres'])}\n"
             f"🆔 **ID:** `{new_anime.anime_id}`\n\n"
             f"🔥 Valkey/Redis kesh tizimi avtomatik tarzda yangilandi!",
-            reply_markup=builder.as_markup() # ✨ Mana shu yerda tugmalar ulandi!
+            reply_markup=builder.as_markup()
         )
         
     except Exception as e:
@@ -297,9 +297,6 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     finally:
         # 6. Jarayon tugadi, FSM tozalanadi
         await state.clear()
-
-
-
 
 
 # =====================================================================

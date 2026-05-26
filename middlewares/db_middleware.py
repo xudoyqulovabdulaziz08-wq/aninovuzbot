@@ -133,10 +133,8 @@ class DbSessionMiddleware(BaseMiddleware):
                 "vip_expire_date": None, "is_system": True
             }
             data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-            # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
-        if "user" not in data or data["user"] is None:
-            data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
             return await handler(event, data)
+
         user_id = user_obj.id
 
         # ======================================================
@@ -150,18 +148,14 @@ class DbSessionMiddleware(BaseMiddleware):
                 self._fire_and_forget_cache_update(cached_l1)
 
             data["user"] = cached_l1
-            data["session"] = SafeSession(session=None, session_pool=self.session_pool) # Kesh ishladi -> sessiya ochilmaydi
-            # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
-        if "user" not in data or data["user"] is None:
-            data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
-            return await handler(event, data)
+            data["session"] = SafeSession(session=None, session_pool=self.session_pool)
+            return await handler(event, data) # 👈 To'g'ridan-to'g'ri qaytarish qo'shildi!
 
         # ======================================================
         # 🔥 LEVEL 2: VALKEY/REDIS DISTRIBUTED CACHE
         # ======================================================
         if valkey.is_alive:
             try:
-                # Key pattern loyiha standartiga moslashtirildi `{db_users}`
                 cached_l2 = await valkey.get("{db_users}", user_id)
                 if cached_l2:
                     cached_l2 = dict(cached_l2)
@@ -174,10 +168,7 @@ class DbSessionMiddleware(BaseMiddleware):
                     await state.l1_cache.set(user_id, cached_l2)
                     data["user"] = cached_l2
                     data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-                    # Middleware'ning o'zida handler'ga o'tishdan oldin har doim:
-                    if "user" not in data or data["user"] is None:
-                        data["user"] = self._emergency_user(user_obj) if user_obj else {"user_id": 0, "is_system": True}
-                    return await handler(event, data)
+                    return await handler(event, data) # 👈 To'g'ridan-to'g'ri qaytarish!
 
             except Exception as e:
                 logger.exception(f"❌ L2 CACHE FAILURE user_id={user_id}: {e}")
@@ -196,11 +187,8 @@ class DbSessionMiddleware(BaseMiddleware):
         # ======================================================
         # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
         # ======================================================
-        # Tranzaksiya hayotiy tsikli (Lifecycle) handler to'liq tugaguncha ochiq qolishi shart!
         session = self.session_pool()
         try:
-            start_time = time.time()
-            # Timeout va baza operatsiyasi
             async with asyncio.timeout(3.0):
                 db_user = await UserRepository.get_or_create(session, user_obj)
 
@@ -211,20 +199,17 @@ class DbSessionMiddleware(BaseMiddleware):
             data["user"] = copy.deepcopy(user_data)
             data["session"] = SafeSession(session)
             
-            # Handler chaqiruvini o'zgaruvchiga olamiz
             return await handler(event, data)
 
         except Exception as e:
             await self._handle_db_failure(e)
             logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
             
-            # Xatolik yuz berganda xavfsiz user va bo'sh sessiya
             data["user"] = self._emergency_user(user_obj)
             data["session"] = SafeSession(session=None, session_pool=self.session_pool)
             return await handler(event, data)
             
         finally:
-            # 'session' borligini tekshirish xavfsizroq
             if 'session' in locals() and session:
                 await session.close()
 
