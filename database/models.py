@@ -148,6 +148,7 @@ class Genre(Base):
 
 
 # ================= ANIME =================
+# ================= ANIME =================
 class Anime(Base):
     __tablename__ = "anime_list"
 
@@ -162,6 +163,10 @@ class Anime(Base):
     poster_id: Mapped[Optional[str]] = mapped_column(String(255))
 
     year: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+
+    # ➕ YANGI QO'SHILGAN USTUNLAR (FSMingizga moslandi)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    languages: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     rating_sum: Mapped[Decimal] = mapped_column(Numeric(10, 2), server_default="0")
     rating_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -204,8 +209,6 @@ class Anime(Base):
         if self.rating_count:
             return self.rating_sum / self.rating_count
         return 0
-    
-
 
 # ================= EPISODE =================
 class Episode(Base):

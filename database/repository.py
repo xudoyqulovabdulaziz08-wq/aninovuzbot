@@ -448,16 +448,24 @@ logger = logging.getLogger("AnimeRepository")
 class AnimeRepository:
 
     @staticmethod
-    async def add_anime(session: AsyncSession, title: str, poster_id: str, year: int, is_completed: bool, genres: List[str], episodes: List[Dict[str, Any]]) -> Anime:
+    async def add_anime(session: AsyncSession, title: str, poster_id: str, year: int, is_completed: bool, genres: List[str], description: str, languages: str, episodes: List[Dict[str, Any]]) -> Anime:
         """
-        ➕ Yangi anime qo'shish va keshni onlayn yangilash
+        ➕ Yangi anime qo'shish (Tavsif va tillar bilan)
         """
         try:
-            anime = Anime(title=title, poster_id=poster_id, year=year, is_completed=is_completed)
+            # 💡 description va languages parametrlari qo'shildi
+            anime = Anime(
+                title=title, 
+                poster_id=poster_id, 
+                year=year, 
+                is_completed=is_completed,
+                description=description,
+                languages=languages
+            )
             session.add(anime)
-            await session.flush()  # ID olish uchun flush qilamiz
+            await session.flush()
 
-            # 💡 Optimizatsiya: Janrlarni bazadan bitta so'rovda tekshirib olamiz (Tsikldan qutulish)
+            # Janrlarni bog'lash qismi... (eski kod o'zgarishsiz qoladi)
             existing_genres_res = await session.execute(select(Genre).where(Genre.name.in_(genres)))
             existing_genres = {g.name: g for g in existing_genres_res.scalars().all()}
 
@@ -470,27 +478,18 @@ class AnimeRepository:
                     await session.flush()
                 anime.genres.append(genre_obj)
 
-            # Epizodlarni qo'shish
-            for ep in episodes:
-                episode = Episode(anime_id=anime.anime_id, episode=ep["episode"], file_id=ep["file_id"])
-                session.add(episode)
-
             await session.commit()
-            
-            # 🔥 FIX: Yangi anime qo'shilganda qidiruv keshini buzmaymiz! 
-            # Aksincha, mavjud 30 daqiqalik kesh ichiga yangi animeni silliqqina asinxron qo'shib qo'yamiz.
+            await session.refresh(anime)
+            # Keshni yangilash
             await valkey.update_single_anime_in_search_map(
                 anime_id=anime.anime_id,
                 title=anime.title,
                 year=anime.year
             )
             
-            logger.info(f"✅ Yangi anime bazaga qo'shildi va qidiruv xaritasi yangilandi: ID {anime.anime_id}")
             return anime
-            
         except Exception as e:
             await session.rollback()
-            logger.error(f"add_anime error: {e}")
             raise e
         
     @staticmethod
@@ -668,12 +667,14 @@ class AnimeRepository:
 
     @staticmethod
     def _serialize_anime(anime: Anime) -> Dict[str, Any]:
-        """ 🔄 SQLAlchemy modelini JSON/Keshbop dict formatiga o'tkazish yordamchisi """
+        """ 🔄 SQLAlchemy modelini JSON/Keshbop dict formatiga o'tkazish """
         return {
             "anime_id": anime.anime_id,
             "title": anime.title,
             "poster_id": anime.poster_id,
             "year": anime.year,
+            "description": anime.description, # ➕ Keshga qo'shildi
+            "languages": anime.languages,     # ➕ Keshga qo'shildi
             "is_completed": anime.is_completed,
             "views_week": anime.views_week,
             "genres": [g.name for g in anime.genres] if anime.genres else [],

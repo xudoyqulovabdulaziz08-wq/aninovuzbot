@@ -178,7 +178,7 @@ def admin_channels_kb():
 #========================================================================#
 def anime_menu_kb():
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="➕ Anime  qo'shish", callback_data="add_anime"))
+    builder.row(types.InlineKeyboardButton(text="➕ Anime  qo'shish", callback_data="callback_data=AnimeMenuCallbacks.ADD_ANIME"))
     builder.row(types.InlineKeyboardButton(text="📋 Anime ro'yxati", callback_data="list_anime"))
     builder.row(types.InlineKeyboardButton(text="➖ Anime  o'chirish", callback_data="remove_anime"))
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel"))
