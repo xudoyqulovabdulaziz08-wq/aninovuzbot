@@ -1,8 +1,8 @@
 import json
 import logging
-from typing import Optional
-from datetime import datetime, timedelta, timezone
 
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any, Optional
 from sqlalchemy import select, update, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
@@ -263,12 +263,9 @@ class UserRepository:
         
 
 
-import logging
-from typing import List, Dict, Any, Optional
-from sqlalchemy import select, update, delete
-from sqlalchemy.ext.asyncio import AsyncSession
-from database.models import Channel  # Loyihangizdagi model yo'li
-from database.cache import valkey    # Loyihangizdagi valkey yo'li
+
+
+
 
 logger = logging.getLogger("ChannelRepository")
 
@@ -330,6 +327,41 @@ class ChannelRepository:
             logger.error(f"⚠️ get_all_active_channels keshga yozishda xatolik: {cache_err}")
 
         return active_list
+
+    @staticmethod
+    async def get_channel_by_id(session: AsyncSession, channel_id: int) -> Optional[Dict[str, Any]]:
+        """
+        🚀 Bitta kanalni ID bo'yicha keshdan yoki bazadan qidirish.
+        Qaytariladigan qiymat: toza lug'at (dict) yoki None
+        """
+        obj_key = str(channel_id)
+        try:
+            cached_data = await valkey.get(table="channels", obj_id=obj_key)
+            if cached_data:
+                return cached_data
+        except Exception as cache_err:
+            logger.warning(f"⚠️ get_channel_by_id kesh o'qishda xatolik: {cache_err}")
+
+        # Keshda bo'lmasa bazadan qidiramiz
+        result = await session.execute(select(Channel).where(Channel.channel_id == channel_id))
+        channel = result.scalar_one_or_none()
+
+        if channel:
+            channel_dict = {
+                "id": channel.id, 
+                "channel_id": channel.channel_id, 
+                "title": channel.title, 
+                "url": channel.url, 
+                "is_active": channel.is_active
+            }
+            try:
+                await valkey.set(table="channels", obj_id=obj_key, data=channel_dict, ttl=3600)
+            except Exception as cache_err:
+                logger.error(f"⚠️ get_channel_by_id keshga yozishda xatolik: {cache_err}")
+                
+            return channel_dict
+            
+        return None
 
     @staticmethod
     async def add_channel(session: AsyncSession, channel_id: int, title: str, url: str) -> Channel:

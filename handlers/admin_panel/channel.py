@@ -575,10 +575,18 @@ async def execute_delete_channel(callback: CallbackQuery, state: FSMContext, **k
     session_pool = kwargs.get("session_pool")
     actual_session = getattr(safe_session, "_session", None)
     
-    channel_id = int(callback.data.replace("confirm_delete_", ""))
+    # split-dan foydalanish xavfsizroq va ishonchli
+    try:
+        channel_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Callback ma'lumotlarida xatolik!", show_alert=True)
+        return
     
     builder_back = InlineKeyboardBuilder()
-    builder_back.row(types.InlineKeyboardButton(text="🔙 Kanallar ro'yxatiga qaytish", callback_data=ChannelsPageCallback(page=1).pack()))
+    builder_back.row(types.InlineKeyboardButton(
+        text="🔙 Kanallar ro'yxatiga qaytish", 
+        callback_data=ChannelsPageCallback(page=1).pack()
+    ))
     back_markup = builder_back.as_markup()
 
     async def _delete_logic(session: AsyncSession):
@@ -586,24 +594,33 @@ async def execute_delete_channel(callback: CallbackQuery, state: FSMContext, **k
         success = await ChannelRepository.delete_channel_by_id(session, channel_id)
         
         if success:
-            await callback.message.edit_text(
+            text = (
                 "🗑 <b>Kanal muvaffaqiyatli o'chirildi!</b>\n\n"
-                "Tizim ma'lumotlar bazasi va keshlaridan barcha yozuvlar tozalandi. ✅",
+                "Tizim ma'lumotlar bazasi va keshlaridan barcha yozuvlar tozalandi. ✅"
+            )
+        else:
+            text = "❌ Xatolik: Kanal topilmadi yoki u allaqachon o'chirib yuborilgan."
+
+        try:
+            await callback.message.edit_text(
+                text=text,
                 parse_mode="HTML",
                 reply_markup=back_markup
             )
-        else:
-            await callback.message.edit_text(
-                "❌ Xatolik: Kanal topilmadi yoki u allaqachon o'chirib yuborilgan.",
-                reply_markup=back_markup
-            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                # Agar boshqa jiddiy muammo bo'lsa, yangi xabar sifatida yuboramiz
+                await callback.message.answer(
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=back_markup
+                )
 
-    # 🚀 Sessiyani xavfsiz yopish va return qilish tartibi:
+    # 🚀 Sessiyani xavfsiz boshqarish
     if actual_session is not None:
         await _delete_logic(actual_session)
-        return  # Funksiyani shu yerda to'xtatamiz
-        
+        return
     elif session_pool is not None:
         async with session_pool() as new_session:
             await _delete_logic(new_session)
-        return  # Kontekst menejeridan tashqarida toza return
+        return
