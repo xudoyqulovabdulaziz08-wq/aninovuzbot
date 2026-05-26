@@ -1,10 +1,18 @@
+# start.py
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
 from keyboards.reply import get_main_menu
 from config import config
 
+# Middleware'ni import qilamiz
+from middlewares.subscription import CheckSubscriptionMiddleware
+
 router = Router()
+
+# 🔴 MUHIM: Middleware'ni router xabarlari va callback'lari uchun ulash (Outer middleware bo'lishi shart)
+router.message.outer_middleware(CheckSubscriptionMiddleware())
+router.callback_query.outer_middleware(CheckSubscriptionMiddleware())
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -21,16 +29,10 @@ async def cmd_start(message: Message):
 
 @router.callback_query(F.data == "check_sub")
 async def cb_check_sub(callback: CallbackQuery):
-    """ 
-    Foydalanuvchi kanallarga a'zo bo'lib '🔄 Obunani Tekshirish' tugmasini bossa, 
-    agar obuna bo'lgan bo'lsa Middleware uni to'g'ridan-to'g'ri shu handlerga o'tkazadi.
-    """
+    """ Foydalanuvchi obuna bo'lib qaytsa, shu handler ishlaydi """
     user_id = callback.from_user.id
+    await callback.answer("Xush kelibsiz! 🎉")
     
-    # 🟢 A'lo darajadagi UX: Avval foydalanuvchiga yuklanish soatni to'xtatib javob beramiz
-    await callback.answer("Xush kelibsiz! 🎉" )
-    
-    # 🟢 Yangi xabarni yuboramiz
     await callback.message.answer(
         text="✅ Rahmat! Obunangiz muvaffaqiyatli tasdiqlandi.\n🤖 Marhamat, botdan foydalanishingiz mumkin:",
         reply_markup=get_main_menu(
@@ -39,8 +41,6 @@ async def cb_check_sub(callback: CallbackQuery):
             is_creator=(user_id == config.CREATOR_ID)
         )
     )
-    
-    # 🟢 Oldingi majburiy obuna xabarini try-except ichida xavfsiz o'chiramiz
     try:
         await callback.message.delete()
     except Exception:
