@@ -2,7 +2,8 @@ import logging
 import hashlib
 import json
 import zlib
-from uuid import uuid4
+from uuid import uuid4, UUID  # ➕ UUID import qilindi
+from decimal import Decimal    # ➕ Decimal import qilindi
 from datetime import datetime, timezone
 
 from sqlalchemy import event, inspect
@@ -14,7 +15,7 @@ logger = logging.getLogger("OutboxEmitter")
 
 
 # ================= CONFIG =================
-ENABLE_COMPRESSION = True
+ENABLE_COMPRESSION = True  # 💡 Yoqilgan holatda ham endi xavfsiz ishlaydi
 ENABLE_DEDUP = True
 SLOW_EVENT_THRESHOLD_MS = 20
 
@@ -49,13 +50,14 @@ def has_real_changes(target) -> bool:
 
 
 # ================= DEDUP HASH =================
-def make_event_hash(table: str, pk: str, event_type: str, payload: str) -> str:
-    raw = f"{table}:{pk}:{event_type}:{payload}"
+def make_event_hash(table: str, pk: str, event_type: str, payload: dict) -> str:
+    # 💡 Payload endi dict bo'lgani uchun uni string qilib hashlaymiz
+    raw = f"{table}:{pk}:{event_type}:{json.dumps(payload)}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
 # ================= PAYLOAD BUILDER =================
-def build_payload(target) -> str:
+def build_payload(target) -> dict:  # 🚨 FIX: String emas, DOIM dict (lug'at) qaytaradi
     try:
         data = {}
 
@@ -63,23 +65,30 @@ def build_payload(target) -> str:
             key = col.key
             val = getattr(target, key)
 
+            # 🔥 FIX: Barcha maxsus ma'lumot turlarini JSON bop holatga keltiramiz
             if isinstance(val, datetime):
                 val = val.isoformat()
+            elif isinstance(val, Decimal):
+                val = float(val)  # Decimal ni float ga o'giramiz
+            elif isinstance(val, UUID):
+                val = str(val)    # UUID ni string ga o'giramiz
 
             data[key] = val
 
-        raw = json.dumps(data, ensure_ascii=False)
-
-        # optional compression
+        # 🔥 FIX: Agar siqish (compression) yoqilgan bo'lsa, uni lug'at ichiga joylaymiz!
         if ENABLE_COMPRESSION:
-            compressed = zlib.compress(raw.encode(), level=6)
-            return compressed.hex()
+            raw_str = json.dumps(data, ensure_ascii=False)
+            compressed_hex = zlib.compress(raw_str.encode(), level=6).hex()
+            return {
+                "is_compressed": True,
+                "data": compressed_hex  # Worker buni ochganda srazu zlib.decompress qiladi
+            }
 
-        return raw
+        return data  # Toza Python lug'ati (dict)
 
     except Exception as e:
         logger.warning(f"Payload build failed: {e}")
-        return "{}"
+        return {"error": "serialization_failed"}  # Doim valid dict qaytishi shart
 
 
 # ================= CORE HANDLER =================
@@ -99,18 +108,20 @@ def on_model_change(event_type: str):
             if event_type == "update" and not has_real_changes(target):
                 return
 
-            payload = build_payload(target)
+            payload_dict = build_payload(target)  # Obyekt lug'at shaklida keladi
 
             event_hash = None
             if ENABLE_DEDUP:
-                event_hash = make_event_hash(table, pk_val, event_type, payload)
+                event_hash = make_event_hash(table, pk_val, event_type, payload_dict)
 
+            # 🚨 ENG MUHIM FIX: values() ichida payloadga toza dict beryapmiz. 
+            # SQLAlchemy buni o'zi bazaga to'g'ri JSON/JSONB formatida yozadi.
             stmt = OutboxEvent.__table__.insert().values(
                 id=str(uuid4()),
                 aggregate=table,
                 aggregate_id=pk_val,
                 event_type=event_type,
-                payload=payload,
+                payload=payload_dict,  # 👈 TO'G'RILANDI (Dict)
                 processed=False,
                 retry_count=0,
                 created_at=datetime.now(timezone.utc)
@@ -123,7 +134,7 @@ def on_model_change(event_type: str):
 
             if duration > SLOW_EVENT_THRESHOLD_MS:
                 logger.warning(
-                    f"🐢 Slow event write: {table} "
+                    f"Core Outbox System: {table} "
                     f"{event_type} {duration:.2f}ms"
                 )
 

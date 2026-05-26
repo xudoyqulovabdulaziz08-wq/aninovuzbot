@@ -1,4 +1,4 @@
-python -m alembic upgrade head"""add description and languages
+"""Add description and languages columns to anime_list table
 
 Revision ID: b835f022993f
 Revises: da2caf756e7e

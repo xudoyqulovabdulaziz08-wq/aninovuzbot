@@ -16,6 +16,7 @@ from sqlalchemy.orm import (
     relationship
 )
 from sqlalchemy.sql import func
+from sqlalchemy.dialects.postgresql import JSONB
 
 # ================= BASE =================
 class Base(DeclarativeBase):
@@ -598,7 +599,8 @@ class OutboxEvent(Base):
 
     event_type: Mapped[str] = mapped_column(String, index=True)
 
-    payload: Mapped[dict] = mapped_column(JSON)
+    # 🚨 FIX: JSON o'rniga JSONB ishlatamiz va default qiymat beramiz
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict, server_default='{}')
 
     processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 

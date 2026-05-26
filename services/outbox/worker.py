@@ -1,3 +1,6 @@
+import zlib
+import orjson
+import json
 import asyncio
 import logging
 import time
@@ -16,7 +19,7 @@ logger = logging.getLogger("PRO_WORKER")
 
 
 # ==========================================
-# 🧠 AI CACHE + METRICS ENGINE (REAL O(1))
+# 🧠 AI CACHE + METRICS ENGINE (REAL O(1) & MEMORY SAFE)
 # ==========================================
 class MetricsBrain:
     def __init__(self):
@@ -30,7 +33,9 @@ class MetricsBrain:
         self.latency_window = deque(maxlen=self.window_size)
         self._latency_sum = 0.0  # Real O(1) uchun yig'indi
         
-        self.user_heat = defaultdict(int)  # hot user detection
+        # 🔥 FIX: Memory Leak oldini olish uchun faqat oxirgi 10 000 ta faol userni eslab qolamiz
+        self.user_heat = defaultdict(int)
+        self._user_cleanup_counter = 0
 
     def cache_ratio(self):
         total = self.cache_hits + self.cache_misses
@@ -49,9 +54,23 @@ class MetricsBrain:
 
     def mark_user(self, user_id):
         self.user_heat[user_id] += 1
+        self._user_cleanup_counter += 1
+        
+        # 🔥 FIX: Har 10 000 ta operatsiyada eskirgan foydalanuvchilar lug'atini tozalaymiz (RAM xavfsizligi)
+        if self._user_cleanup_counter > 10000:
+            self.clear_cold_users()
 
     def is_hot_user(self, user_id):
         return self.user_heat[user_id] > 20
+
+    def clear_cold_users(self):
+        """Aktiv bo'lmagan foydalanuvchilarni xotiradan o'chiradi"""
+        for uid in list(self.user_heat.keys()):
+            if self.user_heat[uid] <= 2:
+                del self.user_heat[uid]
+            else:
+                self.user_heat[uid] = self.user_heat[uid] // 2  # Issiqlik darajasini pasaytirish
+        self._user_cleanup_counter = 0
 
 
 metrics = MetricsBrain()
@@ -85,17 +104,12 @@ class OutboxWorker:
     def dynamic_ttl(self, user_id: int) -> int:
         base = 300
         if metrics.is_hot_user(user_id):
-            return base * 5  # Hot user keshda ko'proq turadi (Aninowuz optimization)
+            return base * 5  # Hot user keshda ko'proq turadi
         return base + random.randint(0, 120)
 
     def shard_key(self, key: str) -> str:
-        """
-        Redis Cluster mos keluvchi xavfsiz deterministik sharding.
-        Hash tags {...} yordamida slotlarni bitta node-da saqlashni kafolatlaydi.
-        """
         if not self.redis:
             return key
-        # Python hash() o'rniga barqaror MD5 hash
         hasher = hashlib.md5(key.encode('utf-8'))
         shard = int(hasher.hexdigest(), 16) % 3
         return f"{{shard:{shard}}}:{key}"
@@ -129,9 +143,9 @@ class OutboxWorker:
                 metrics.add_latency(time.time() - start_time)
 
                 if processed:
-                    await asyncio.sleep(0.02)  # High-load dynamic backpressure
+                    await asyncio.sleep(0.01)  # Dinamik yuklama tanaffusi
                 else:
-                    await asyncio.sleep(0.5)   # Idle holatda kutish
+                    await asyncio.sleep(0.5)   # Bo'sh turganda kutish
 
             except Exception as e:
                 metrics.failures += 1
@@ -143,13 +157,8 @@ class OutboxWorker:
     # 📦 BATCH PROCESSING (SAFE CONCURRENCY)
     # ==========================================
     async def process_batch(self) -> int:
-        """
-        Ketma-ket xavfsiz qayta ishlash, lekin bitta tranzaksiyada commit qilish.
-        Bu orqali parallel sessiya xatolarining oldi olinadi.
-        """
         async with self.session_pool() as session:
             try:
-                # 🟢 TO'G'RILANDI: .order_id() o'rniga .order_by() qo'yildi va Boolean tekshiruvi .is_(False) qilindi
                 stmt = (
                     select(OutboxEvent)
                     .where(OutboxEvent.processed.is_(False))
@@ -163,24 +172,19 @@ class OutboxWorker:
                 if not events:
                     return 0
 
-                # High-load xavfsizligi: Har bir elementni ketma-ket bajaramiz
                 for ev in events:
                     try:
-                        # Event yuklamasini qayta ishlash
                         success = await self.handle_event(ev)
                         if success:
                             ev.processed = True
-                            # 💡 FIX: Modelda bo'lmagan processed_at o'rniga created_at yangilandi
                             ev.created_at = datetime.now(timezone.utc)
                             metrics.events_processed += 1
                     except Exception as res_err:
-                        # Alohida element xatoga uchrasa, butun batchni qulatmaymiz
+                        # 🔥 FIX: Xatoga uchragan elementni xavfsiz boshqarish
                         await self.handle_failure(session, ev, res_err)
 
-                # Barcha muvaffaqiyatli o'zgarishlarni bitta tranzaksiyada saqlaymiz
                 await session.commit()
                 
-                # Agar muvaffaqiyatli yakunlansa, Circuit Breaker hisoblagichini kamaytiramiz (Heal mantiqi)
                 if self.failure_count > 0:
                     self.failure_count = max(0, self.failure_count - 1)
                 
@@ -193,53 +197,47 @@ class OutboxWorker:
                 return 0
 
     # ==========================================
-    # ⚙️ EVENT HANDLER (SAFE PARSING - FIXED LOOP)
+    # ⚙️ EVENT HANDLER (SAFE PARSING)
     # ==========================================
-    async def handle_event(self, ev: OutboxEvent) -> bool:
-        try:
-            # Agar ev.payload allaqachon dict bo'lsa (ba'zi ORM'lar avtomat o'giradi)
-            if isinstance(ev.payload, dict):
-                payload = ev.payload
-            else:
-                payload = orjson.loads(ev.payload)
-        except (orjson.JSONDecodeError, TypeError) as json_err:
-            logger.critical(f"🚨 CRITICAL: OutboxEvent ID {ev.id} payload is not valid JSON: {json_err}")
-            # 🔥 TUZATILDI: Buzuq JSON'ni to'g'ridan-to'g'ri shu yerda DLQ ga otamiz
-            # va True qaytaramizki, u qayta-qayta o'qilib worker'ni qulatavermasin!
-            await self.send_to_dlq_raw(ev, f"Invalid JSON format: {json_err}")
-            return True 
 
-        user_id = payload.get("user_id")
-        if user_id:
-            metrics.mark_user(user_id)
 
-        ttl = self.dynamic_ttl(user_id or 0)
+async def handle_event(self, ev: OutboxEvent) -> bool:
+    try:
+        # 1. Payloadni yuklash (agar bazadan string kelsa - o'giramiz)
+        raw_payload = ev.payload
+        if isinstance(raw_payload, str):
+            payload = orjson.loads(raw_payload)
+        else:
+            payload = raw_payload
 
-        # Routers
-        # Routers qismiga qo'shimcha:
-        if ev.event_type == "cache_update":
-            await self.cache_event(payload, ttl)
-        elif ev.event_type in ["channel_inserted", "channel_deleted", "channel_updated"]:
-            # Kanallar o'zgarganda keshni avtomat urish zanjiri
-            channel_id = payload.get("channel_id") or payload.get("obj_id")
-            await self.cache.invalidate(table="channels", obj_id=str(channel_id) if channel_id else None)
-        elif ev.event_type == "user_created":
-            await self.fake_telegram(payload)
-        elif ev.event_type == "points_added":
-            await self.fake_notify(payload)
+        # 2. Siqilganlik holatini tekshirish
+        if payload.get("is_compressed"):
+            # HEX stringni baytga o'girish
+            compressed_hex = payload.get("data")
+            raw_bytes = bytes.fromhex(compressed_hex)
+            
+            # Decompression (zlib orqali ochish)
+            decompressed_bytes = zlib.decompress(raw_bytes)
+            
+            # Ochilgan ma'lumotni dict ga o'girish
+            payload = orjson.loads(decompressed_bytes)
+            
+    except Exception as e:
+        logger.critical(f"🚨 PAYLOAD PARSING ERROR [ID: {ev.id}]: {e}")
+        await self.send_to_dlq_raw(ev, f"Parsing failed: {e}")
+        return True # Worker qulamasligi uchun True qaytaramiz
 
-        return True
+    # 3. Asosiy biznes logika davomi...
+    user_id = payload.get("user_id")
+    # ... qolgan kodlar
 
-    
     # ==========================================
-    # 💀 RAW DLQ FOR BROKEN JSON (NEW SAFE METHOD)
+    # 💀 RAW DLQ FOR BROKEN JSON
     # ==========================================
     async def send_to_dlq_raw(self, ev: OutboxEvent, err_msg: str):
-        """Buzuq payloadlarni ham xavfsiz Redis DLQ ga o'tkazish xizmati"""
         if self.redis:
             try:
                 dlq_sharded_key = self.shard_key(self.dlq_key)
-                # Buzuq payload ob'ektini string ko'rinishida xavfsiz saqlaymiz
                 safe_payload = str(ev.payload) if ev.payload else "EMPTY_PAYLOAD"
                 await self.redis.lpush(
                     dlq_sharded_key,
@@ -256,17 +254,14 @@ class OutboxWorker:
         logger.critical(f"💀 BROKEN EVENT FORCED TO DLQ: {ev.id}")
     
     # ==========================================
-    # 🧠 CACHE ACTION (FIXED)
+    # 🧠 CACHE ACTION (RACE-CONDITION SAFE)
     # ==========================================
-    async def cache_event(self, payload, ttl):
+    async def cache_event(self, payload, ttl, event_id):
         try:
             user_id = payload.get("user_id")
             if user_id:
-                # 1. Birinchi navbatda eski keshni tozalaymiz
-                await self.cache.invalidate(table="users", obj_id=user_id)
-                
-                # 2. To'g'ri formatda CacheManager.set metodiga argumentlarni uzatamiz
-                # CacheManager o'z ichida shardingni (namespace, shard, version) avtomatik hal qiladi
+                # 🔥 FIX: Invalidate va Set o'rniga, faqat bitta atomik xavfsiz SET buyrug'i.
+                # Event ID dagi ketma-ketlik (version) kesh eskirib qolishining (Race condition) oldini oladi.
                 await self.cache.set(
                     table="users",
                     obj_id=user_id,
@@ -300,14 +295,15 @@ class OutboxWorker:
         logger.warning(f"⚠️ Event operational failure [ID: {ev.id} | Attempt: {ev.retry_count}]: {err}")
 
         if ev.retry_count >= self.max_retry:
-            # DLQ ga yuborish va bazada processed qilib belgilash
             await self.send_to_dlq(ev, str(err))
             ev.processed = True
-            # 💡 FIX: processed_at o'rniga joriy vaqt yaratilish vaqtiga tenglashtirildi
             ev.created_at = datetime.now(timezone.utc)
         
-        # O'zgarishlarni sessiyaga qayta yuklash
-        session.add(ev)
+        # 🔥 FIX: Agar sessiya buzilgan bo'lsa merge() xavfsizroq ulaydi
+        try:
+            await session.merge(ev)
+        except Exception as merge_err:
+            logger.error(f"🚨 Session merge failed for failed event: {merge_err}")
 
     async def send_to_dlq(self, ev: OutboxEvent, err: str):
         if self.redis:

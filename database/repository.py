@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy import select, update, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import selectinload
 
 from database.models import DBUser, Channel, List, Anime, Episode, Genre, anime_genres  # Modellar yo'li
 
@@ -448,12 +449,17 @@ logger = logging.getLogger("AnimeRepository")
 class AnimeRepository:
 
     @staticmethod
-    async def add_anime(session: AsyncSession, title: str, poster_id: str, year: int, is_completed: bool, genres: List[str], description: str, languages: str, episodes: List[Dict[str, Any]]) -> Anime:
+    async def add_anime(session: Any, title: str, poster_id: str, year: int, is_completed: bool, 
+                        genres: List[str], description: str, languages: str, episodes: List[Dict[str, Any]]) -> Anime:
         """
-        ➕ Yangi anime qo'shish (Tavsif va tillar bilan)
+        ➕ Yangi anime qo'shish (Xavfsiz sessiya va Outbox/Kesh moslashuvi bilan)
         """
         try:
-            # 💡 description va languages parametrlari qo'shildi
+            # SafeSession obyektini tayyorlashga majburlash (Proxy bo'lsa)
+            if hasattr(session, "_ensure_session"):
+                await session._ensure_session()
+
+            # 1. Obyektni yaratish
             anime = Anime(
                 title=title, 
                 poster_id=poster_id, 
@@ -462,25 +468,34 @@ class AnimeRepository:
                 description=description,
                 languages=languages
             )
+            
             session.add(anime)
-            await session.flush()
+            await session.flush() # Anime ID sini olish uchun
 
-            # Janrlarni bog'lash qismi... (eski kod o'zgarishsiz qoladi)
+            # 2. Janrlarni tekshirish va optimallashgan holatda bog'lash
             existing_genres_res = await session.execute(select(Genre).where(Genre.name.in_(genres)))
             existing_genres = {g.name: g for g in existing_genres_res.scalars().all()}
 
+            new_genres_to_add = []
             for genre_name in genres:
                 if genre_name in existing_genres:
-                    genre_obj = existing_genres[genre_name]
+                    anime.genres.append(existing_genres[genre_name])
                 else:
-                    genre_obj = Genre(name=genre_name)
-                    session.add(genre_obj)
-                    await session.flush()
-                anime.genres.append(genre_obj)
+                    new_genre = Genre(name=genre_name)
+                    new_genres_to_add.append(new_genre)
+                    anime.genres.append(new_genre)
 
+            if new_genres_to_add:
+                session.add_all(new_genres_to_add)
+                await session.flush() # Barcha yangi janrlarni bitta so'rovda flush qilamiz
+
+            # 3. Tranzaksiyani yakunlash
             await session.commit()
-            await session.refresh(anime)
-            # Keshni yangilash
+            
+            # 🔥 N+1 muammosini oldini olish uchun munosabatlarni srazu refresh qilamiz
+            await session.refresh(anime, attribute_names=["genres", "episodes"])
+
+            # 4. Qidiruv xaritasini yangilash
             await valkey.update_single_anime_in_search_map(
                 anime_id=anime.anime_id,
                 title=anime.title,
@@ -488,107 +503,111 @@ class AnimeRepository:
             )
             
             return anime
+            
         except Exception as e:
             await session.rollback()
+            logger.error(f"❌ add_anime ichida xatolik: {e}")
             raise e
         
     @staticmethod
-    async def add_anime_episode(session: AsyncSession, anime_id: int, episode_num: int, file_id: str) -> Optional[Episode]:
+    async def add_anime_episode(session: Any, anime_id: int, episode_num: int, file_id: str) -> Optional[Episode]:
         """
-        ➕ Yangi epizod qo'shish va kesh zanjirini tozalash/yangilash
+        ➕ Yangi epizod qo'shish va kesh zanjirini xavfsiz yangilash
         """
         try:
+            # SafeSession obyektini tayyorlashga majburlash (Proxy bo'lsa)
+            if hasattr(session, "_ensure_session"):
+                await session._ensure_session()
+
             episode = Episode(anime_id=anime_id, episode=episode_num, file_id=file_id)
             session.add(episode)
             await session.commit()
             
-            # 🔥 FIX 1: Animening asosiy keshini tozalaymiz, chunki uning ichidagi seriyalar ro'yxati o'zgardi!
+            # 🔥 Kesh zanjirlarini tozalash va yangilash
             await valkey.invalidate(table="anime_list", obj_id=f"id_{anime_id}")
-            
-            # 🔥 FIX 2: Yangi qo'shilgan epizodni srazu kesh zanjiriga yozib qo'yamiz (User bosganda 0ms da ochilishi uchun)
             await valkey.set_episode_file_id(
                 anime_id=anime_id,
                 episode=episode_num,
                 file_id=file_id,
-                ttl=86400 * 3 # 3 kunlik video kesh zanjiri
+                ttl=86400 * 3  # 3 kunlik tezkor kesh
             )
             
             logger.info(f"✅ Anime [{anime_id}] ga {episode_num}-qism qo'shildi va keshlar yangilandi.")
             return episode
         except Exception as e:
             await session.rollback()
-            logger.error(f"add_anime_episode error: {e}")
+            logger.error(f"❌ add_anime_episode ichida xatolik: {e}")
             raise e
         
     @staticmethod
-    async def update_anime(session: AsyncSession, anime_id: int, **kwargs) -> Optional[Anime]:
+    async def update_anime(session: Any, anime_id: int, **kwargs) -> Optional[Anime]:
         """
         🔄 Anime ma'lumotlarini yangilash va keshni xavfsiz tozalash
         """
         try:
+            if hasattr(session, "_ensure_session"):
+                await session._ensure_session()
+
             stmt = update(Anime).where(Anime.anime_id == anime_id).values(**kwargs).returning(Anime)
             result = await session.execute(stmt)
             updated_anime = result.scalar_one_or_none()
             await session.commit()
             
             if updated_anime:
-                # 🔥 FIX 1: Yangilangan animening shaxsiy keshini tozalaymiz (Keyingi safar bazadan yangisi keshlanadi)
                 await valkey.invalidate(table="anime_list", obj_id=f"id_{anime_id}")
                 
-                # 🔥 FIX 2: Agar admin anime nomini yoki yilini o'zgartirgan bo'lsa, qidiruv xaritasini ham yangilaymiz
                 if "title" in kwargs or "year" in kwargs:
                     await valkey.update_single_anime_in_search_map(
                         anime_id=updated_anime.anime_id,
                         title=updated_anime.title,
                         year=updated_anime.year
                     )
-                logger.info(f"🧹 Anime [{anime_id}] ma'lumotlari yangilandi va tegishli keshlar o'chirildi/yangilandi.")
+                logger.info(f"🧹 Anime [{anime_id}] keshlari muvaffaqiyatli tozalandi.")
                 
             return updated_anime
         except Exception as e:
             await session.rollback()
-            logger.error(f"update_anime error: {e}")
+            logger.error(f"❌ update_anime ichida xatolik: {e}")
             raise e
-        
-    
 
     @staticmethod
     async def warm_up_anime_search_cache(session: AsyncSession):
         """ 🚀 Bot ishga tushganda barcha anime nomlarini qidiruv keshiga yuklash """
-        logger.info("🔄 Anime qidiruv keshini tayyorlash boshlandi...")
-        
         try:
-            # Faqat kerakli ustunlarni juda tez yuklab olamiz
             stmt = select(Anime.anime_id, Anime.title, Anime.year)
             result = await session.execute(stmt)
             animes = result.all()
 
             if not animes:
-                logger.warning("⚠️ Bazada birorta ham anime topilmadi.")
                 return
 
-            # Valkey ichiga Hash map ko'rinishida saqlaymiz: {anime_id: "Title (Year)"}
             cache_data = {str(a.anime_id): f"{a.title} ({a.year})" for a in animes}
-            
-            # Yangi CacheManager metodidan foydalanamiz (30 daqiqalik mantiq)
             await valkey.set_anime_search_map(cache_data)
-            
+            logger.info("🚀 Anime qidiruv keshi (Warm-up) muvaffaqiyatli yakunlandi.")
         except Exception as e:
-            logger.error(f"❌ Keshni warm-up qilishda kutilmagan xato: {e}")
+            logger.error(f"❌ Keshni warm-up qilishda xato: {e}")
 
     @staticmethod
-    async def get_anime_by_id(session: AsyncSession, anime_id: int) -> Optional[Dict[str, Any]]:
-        """ 🔍 Anime ID bo'yicha keshdan yoki bazadan toza ma'lumot olish """
+    async def get_anime_by_id(session: Any, anime_id: int) -> Optional[Dict[str, Any]]:
+        """ 🔍 Anime ID bo'yicha keshdan yoki bazadan (Eager Loading bilan) ma'lumot olish """
         obj_key = f"id_{anime_id}"
         try:
             cached = await valkey.get(table="anime_list", obj_id=obj_key)
             if cached:
-                return cached.copy() # 💡 L1 kesh ma'lumotini tashqi tomondan o'zgarib ketishidan himoya qilamiz
+                return cached.copy()
         except Exception as err:
             logger.warning(f"⚠️ Anime kesh o'qishda xato: {err}")
 
-        # Agar keshda bo'lmasa bazadan olamiz
-        result = await session.execute(select(Anime).where(Anime.anime_id == anime_id))
+        if hasattr(session, "_ensure_session"):
+            await session._ensure_session()
+
+        # 🔥 FIX: N+1 muammosini yo'qotish uchun genres va episodes jadvallarini srazu birga yuklaymiz (Joined/SelectIn Load)
+        stmt = (
+            select(Anime)
+            .where(Anime.anime_id == anime_id)
+            .options(selectinload(Anime.genres), selectinload(Anime.episodes))
+        )
+        result = await session.execute(stmt)
         anime = result.scalar_one_or_none()
 
         if anime:
@@ -601,64 +620,62 @@ class AnimeRepository:
         return None
 
     @staticmethod
-    async def search_anime_by_title(session: AsyncSession, query_text: str) -> List[Dict[str, Any]]:
+    async def search_anime_by_title(session: Any, query_text: str) -> List[Dict[str, Any]]:
         """ 🔎 Nom bo'yicha birinchi KESHdan, topilmasa BAZAdan qisman qidirish """
         query_text = query_text.lower().strip()
         matched_anime_ids = []
 
         try:
-            # 1. Kesh menejerdagi yangi metod orqali xaritani xavfsiz olamiz
             all_titles = await valkey.get_anime_search_map()
-            
             if all_titles:
-                # 2. Kesh ichida qisman mos keluvchi sarlavhalarni qidiramiz
                 for anime_id_str, full_title in all_titles.items():
                     if query_text in full_title.lower():
                         matched_anime_ids.append(int(anime_id_str))
-                        if len(matched_anime_ids) >= 15: # Maksimal 15 ta natija yetarli
+                        if len(matched_anime_ids) >= 15:
                             break
         except Exception as cache_err:
             logger.error(f"⚠️ Qidiruv keshini o'qishda xatolik: {cache_err}")
 
-        # 3. Agar keshdan muvaffaqiyatli topilgan bo'lsa, ma'lumotlarni PARALLEL yig'amiz
         if matched_anime_ids:
-            # 💡 Optimizatsiya: Tsikl ichida kutmasdan, barcha so'rovlarni parallel asinxron ishga tushiramiz (N+1 yechimi)
             tasks = [AnimeRepository.get_anime_by_id(session, a_id) for a_id in matched_anime_ids]
             fetched_animes = await asyncio.gather(*tasks)
-            
-            # None bo'lmagan natijalarni filtrlash
             return [anime for anime in fetched_animes if anime]
 
-        # 4. FALLBACK: Agar kesh bo'sh bo'lsa yoki topilmasa, bazadan an'anaviy qidiramiz
-        logger.warning(f"⚠️ Qidiruv keshidan topilmadi yoki kesh bo'sh. Bazadan qidirilmoqda: '{query_text}'")
-        stmt = select(Anime).where(Anime.title.ilike(f"%{query_text}%")).limit(10)
+        # FALLBACK: Bazadan qidirganda ham munosabatlarni srazu yuklaymiz (N+1 oldini olish)
+        logger.warning(f"⚠️ Keshdan topilmadi. Bazadan qidirilmoqda: '{query_text}'")
+        stmt = (
+            select(Anime)
+            .where(Anime.title.ilike(f"%{query_text}%"))
+            .options(selectinload(Anime.genres), selectinload(Anime.episodes))
+            .limit(15)
+        )
         result = await session.execute(stmt)
         animes = result.scalars().all()
         
-        # Fon rejimida keshni qayta to'ldirib qo'yamiz
-        await AnimeRepository.warm_up_anime_search_cache(session)
+        # Fon rejimida kesh xaritani yangilab qo'yamiz
+        asyncio.create_task(AnimeRepository.warm_up_anime_search_cache(session))
 
         return [AnimeRepository._serialize_anime(anime) for anime in animes]
 
     @staticmethod
-    async def get_episode_file(session: AsyncSession, anime_id: int, episode_num: int) -> Optional[str]:
-        """ 🎬 Anriq epizodning Telegram file_id sini olish (Tezkor kesh zanjiri bilan) """
+    async def get_episode_file(session: Any, episode_num: int, anime_id: int) -> Optional[str]:
+        """ 🎬 Epizodning Telegram file_id sini olish """
         try:
-            # 💡 FIX: CacheManager ichidagi tayyor maxsus metoddan foydalanamiz (Kalitlar mosligi ta'minlandi)
             cached_file_id = await valkey.get_episode_file_id(anime_id, episode_num)
             if cached_file_id:
                 return cached_file_id
         except Exception as err:
             logger.warning(f"⚠️ Epizod keshini o'qishda xato: {err}")
 
-        # Keshda bo'lmasa, bazadan qidirish
+        if hasattr(session, "_ensure_session"):
+            await session._ensure_session()
+
         stmt = select(Episode).where(Episode.anime_id == anime_id, Episode.episode == episode_num)
         result = await session.execute(stmt)
         ep = result.scalar_one_or_none()
 
         if ep:
             try:
-                # 💡 FIX: CacheManager metodiga moslab keshga yozamiz
                 await valkey.set_episode_file_id(anime_id, episode_num, ep.file_id, ttl=86400)
             except Exception:
                 pass
@@ -667,14 +684,15 @@ class AnimeRepository:
 
     @staticmethod
     def _serialize_anime(anime: Anime) -> Dict[str, Any]:
-        """ 🔄 SQLAlchemy modelini JSON/Keshbop dict formatiga o'tkazish """
+        """ 🔄 SQLAlchemy modelini JSON/Keshbop dict formatiga o'tkazish (Xavfsiz va tez) """
+        # 💡 DIQQAT: selectinload ishlatganimiz sababli bu yerda yashirin so'rovlar (N+1) tugatildi!
         return {
             "anime_id": anime.anime_id,
             "title": anime.title,
             "poster_id": anime.poster_id,
             "year": anime.year,
-            "description": anime.description, # ➕ Keshga qo'shildi
-            "languages": anime.languages,     # ➕ Keshga qo'shildi
+            "description": anime.description,
+            "languages": anime.languages, 
             "is_completed": anime.is_completed,
             "views_week": anime.views_week,
             "genres": [g.name for g in anime.genres] if anime.genres else [],
