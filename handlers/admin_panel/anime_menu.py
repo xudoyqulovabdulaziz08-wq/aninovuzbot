@@ -77,7 +77,7 @@ async def admin_anime_panel(callback: types.CallbackQuery, state: FSMContext): #
 # =====================================================================
 # QADAM 1: Anime qo'shish boshlanishi
 # =====================================================================
-@router.callback_query(F.data == AnimeMenuCallbacks.ADD_ANIME)
+@router.callback_query(F.data == "AnimeMenuCallbacks.ADD_ANIME")
 async def admin_add(callback: CallbackQuery, state: FSMContext):
     await callback.answer("📌 Yangi anime qo'shish jarayoni boshlandi!")
     
