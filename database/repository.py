@@ -415,29 +415,26 @@ class AnimeRepository:
     @staticmethod
     async def add_anime(session: Any, title: str, poster_id: str, year: int, is_completed: bool, 
                         genres: List[str], description: str, languages: str, episodes: List[Dict[str, Any]]) -> Anime:
-        """
-        ➕ Yangi anime qo'shish (Xavfsiz sessiya va Outbox/Kesh moslashuvi bilan)
-        """
-        try:
-            # SafeSession obyektini tayyorlashga majburlash (Proxy bo'lsa)
-            if hasattr(session, "_ensure_session"):
-                await session._ensure_session()
+        
+        # 1. Asl sessiyani aniqlab olish
+        real_session = session._session if hasattr(session, "_session") else session
+        
+        # 2. Agar proxy bo'lsa, uni uyg'otish
+        if hasattr(session, "_ensure_session"):
+            await session._ensure_session()
 
-            # 1. Obyektni yaratish
+        try:
             anime = Anime(
-                title=title, 
-                poster_id=poster_id, 
-                year=year, 
-                is_completed=is_completed,
-                description=description,
-                languages=languages
+                title=title, poster_id=poster_id, year=year, 
+                is_completed=is_completed, description=description, languages=languages
             )
             
-            session.add(anime)
-            await session.flush() # Anime ID sini olish uchun
+            # ENDI FAQAT real_session ISHLATAMIZ
+            real_session.add(anime)
+            await real_session.flush() 
 
-            # 2. Janrlarni tekshirish va optimallashgan holatda bog'lash
-            existing_genres_res = await session.execute(select(Genre).where(Genre.name.in_(genres)))
+            # Janrlarni olish
+            existing_genres_res = await real_session.execute(select(Genre).where(Genre.name.in_(genres)))
             existing_genres = {g.name: g for g in existing_genres_res.scalars().all()}
 
             new_genres_to_add = []
@@ -450,26 +447,22 @@ class AnimeRepository:
                     anime.genres.append(new_genre)
 
             if new_genres_to_add:
-                session.add_all(new_genres_to_add)
-                await session.flush() # Barcha yangi janrlarni bitta so'rovda flush qilamiz
+                real_session.add_all(new_genres_to_add)
+                await real_session.flush() 
 
-            # 3. Tranzaksiyani yakunlash
-            await session.commit()
+            await real_session.commit()
             
-            # 🔥 N+1 muammosini oldini olish uchun munosabatlarni srazu refresh qilamiz
-            await session.refresh(anime, attribute_names=["genres", "episodes"])
+            # Refresh o'rniga tanlangan yuklash (baza bosimini kamaytiradi)
+            await real_session.refresh(anime, attribute_names=["genres", "episodes"])
 
-            # 4. Qidiruv xaritasini yangilash
             await valkey.update_single_anime_in_search_map(
-                anime_id=anime.anime_id,
-                title=anime.title,
-                year=anime.year
+                anime_id=anime.anime_id, title=anime.title, year=anime.year
             )
             
             return anime
             
         except Exception as e:
-            await session.rollback()
+            await real_session.rollback() # Xatolik bo'lsa real_session'ni rollback qilamiz
             logger.error(f"❌ add_anime ichida xatolik: {e}")
             raise e
         
