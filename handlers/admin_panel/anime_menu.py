@@ -10,6 +10,9 @@ from typing import Any, Optional
 from aiogram.filters.callback_data import CallbackData
 
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
 
 from database.repository import AnimeRepository
 from database.connection import AsyncSession, async_sessionmaker
@@ -18,6 +21,7 @@ from config import config
 from keyboards.inline import anime_menu_kb
 from database.repository import AnimeRepository
 from database.connection import AsyncSession
+from database.models import Anime, Genre
 
 
 router = Router()
