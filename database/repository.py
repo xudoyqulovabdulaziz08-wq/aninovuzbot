@@ -416,27 +416,22 @@ class AnimeRepository:
     async def add_anime(session: Any, title: str, poster_id: str, year: int, is_completed: bool, 
                         genres: List[str], description: str, languages: str, episodes: List[Dict[str, Any]]) -> Anime:
         
-        # 1. Asl sessiyani aniqlab olish (Proxy bo'lsa ichidagini olish)
         real_session = session._session if hasattr(session, "_session") else session
-        
-        # 2. Agar proxy bo'lsa, uni uyg'otish (IO operatsiyasi)
         if hasattr(session, "_ensure_session"):
             await session._ensure_session()
 
         try:
+            # 1. Anime obyektini yaratamiz
             anime = Anime(
                 title=title, poster_id=poster_id, year=year, 
                 is_completed=is_completed, description=description, languages=languages
             )
             
-            # 3. FAQAT real_session ISHLATAMIZ
-            real_session.add(anime)
-            await real_session.flush() 
-
-            # Janrlarni olish (Optimallashtirilgan)
+            # 2. Janrlarni oldindan bazadan so'rab olamiz
             existing_genres_res = await real_session.execute(select(Genre).where(Genre.name.in_(genres)))
             existing_genres = {g.name: g for g in existing_genres_res.scalars().all()}
 
+            # 3. Janrlarni biriktiramiz
             for genre_name in genres:
                 if genre_name in existing_genres:
                     anime.genres.append(existing_genres[genre_name])
@@ -444,9 +439,16 @@ class AnimeRepository:
                     new_genre = Genre(name=genre_name)
                     anime.genres.append(new_genre)
 
+            # 4. Sessiyaga qo'shamiz (add)
+            real_session.add(anime)
+            
+            # 5. Flush - bu bosqichda hali ID va munosabatlar bazaga yoziladi
+            await real_session.flush() 
+            
+            # 6. Commit - tranzaksiyani yakunlaymiz
             await real_session.commit()
             
-            # 4. Refresh o'rniga qayta so'rov (yashirin IO ni oldini olish uchun)
+            # 7. Qayta yuklash (selectinload bilan xavfsiz)
             result = await real_session.execute(
                 select(Anime)
                 .options(selectinload(Anime.genres), selectinload(Anime.episodes))
@@ -454,6 +456,7 @@ class AnimeRepository:
             )
             anime_obj = result.scalar_one()
 
+            # Keshni yangilash
             await valkey.update_single_anime_in_search_map(
                 anime_id=anime_obj.anime_id, title=anime_obj.title, year=anime_obj.year
             )
@@ -461,7 +464,6 @@ class AnimeRepository:
             return anime_obj
             
         except Exception as e:
-            # Sessiya ochiq bo'lsa va ulanish mavjud bo'lsa rollback qilish
             if real_session:
                 await real_session.rollback()
             logger.error(f"❌ add_anime ichida xatolik: {e}")
