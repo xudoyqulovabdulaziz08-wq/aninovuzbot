@@ -6,7 +6,11 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import config
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
-from typing import Any
+from typing import Any, Optional
+from aiogram.filters.callback_data import CallbackData
+
+
+
 from database.repository import AnimeRepository
 from database.connection import AsyncSession, async_sessionmaker
 
@@ -44,6 +48,12 @@ class AnimeMenuCallbacks:
     UPDATE_ANIME = "update_anime"
 
     
+class AnimePageCallback(CallbackData, prefix="anime_page"):
+    page: int
+
+class AnimeDetailCallback(CallbackData, prefix="anime_detail"):
+    anime_id: int
+    page: int
 
 #==============================anime_menu================================#
 #========================================================================#
@@ -240,7 +250,6 @@ async def process_anime_description(message: Message, state: FSMContext):
 # =====================================================================
 @router.message(AnimeMenuState.adding_laguages)
 async def process_anime_languages_and_save(message: Message, state: FSMContext, session_pool: async_sessionmaker):
-    # session_pool middleware'dan kelishi kerak
     if not message.text:
         await message.reply("❌ Iltimos, matn kiriting:")
         return
@@ -249,10 +258,9 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     fsm_data = await state.get_data()
     loading_msg = await message.answer("🚀 Bazaga saqlanmoqda...")
 
-    # ✅ BAZA BILAN ISHLASH (Xavfsiz blok)
     async with session_pool() as session:
         try:
-            # Repositoryga toza asinxron sessiyani yuboramiz
+            # 1. Bazaga qo'shish
             new_anime = await AnimeRepository.add_anime(
                 session=session,
                 title=fsm_data["title"],
@@ -265,12 +273,28 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
                 episodes=[]
             )
             
-            await message.answer(f"🎉 {new_anime.title} muvaffaqiyatli qo'shildi!")
+            # 2. Tugmachalar (Builder to'g'rilandi)
+            builder = InlineKeyboardBuilder()
+            builder.row(types.InlineKeyboardButton(
+                text="Qism qo'shishni boshlash", 
+                callback_data=f"add_ep_{new_anime.anime_id}") # .anime_id ga o'zgartirildi
+            )
+            builder.row(types.InlineKeyboardButton(
+                text="🔙 Admin Panelga qaytish", 
+                callback_data="admin_anime_panel")
+            )
+            
+            # 3. Muvaffaqiyatli yakunlash
+            await loading_msg.edit_text(
+                f"🎉 {new_anime.title} muvaffaqiyatli qo'shildi!", 
+                reply_markup=builder.as_markup()
+            )
             
         except Exception as e:
-            await session.rollback() # Xatolik bo'lsa rollback
+            await session.rollback()
             logger.error(f"❌ Xatolik: {e}")
-            await loading_msg.edit_text("❌ Bazada xatolik. Maintenance vaqti tugashini kuting.")
+            await loading_msg.edit_text("❌ Bazada xatolik. Iltimos, keyinroq urinib ko'ring.")
+        
         finally:
             await state.clear()
 
@@ -474,3 +498,186 @@ async def publish_anime_to_channel(callback: CallbackQuery, state: FSMContext, s
     await state.clear()
 
 
+
+
+
+
+
+
+
+
+@router.callback_query(AnimePageCallback.filter())  # Sahifalar almashganda ushlab qolish uchun
+@router.callback_query(F.data == "list_anime")       # Birinchi marta menyudan bosilganda
+async def list_anime(callback: CallbackQuery, session: AsyncSession, callback_data: Optional[AnimePageCallback] = None):
+    await callback.answer("📋 Yuklanmoqda...")
+    
+    # 1. Sahifa raqamini aniqlash (agar navigatsiyadan kelgan bo'lsa callback_data'dan oladi, aks holda 1-sahifa)
+    page = callback_data.page if callback_data else 1
+    
+    # 2. Bazadan hamma animelarni olish
+    anime_list = await AnimeRepository.list_anime(session=session)
+    
+    # #1-Holat: Animelar mavjud bo'lmasa
+    if not anime_list:
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel"))
+        return await callback.message.edit_text(
+            "📭 Hozircha tizimda birorta ham anime qo'shilmagan.", 
+            reply_markup=builder.as_markup()
+        )
+    
+    # 3. Pagination sozlamalari (Har bir sahifada 5 tadan anime)
+    PER_PAGE = 5
+    total_anime = len(anime_list)
+    total_pages = (total_anime + PER_PAGE - 1) // PER_PAGE
+    
+    # Sahifa chegaradan chiqib ketmasligi tekshiruvi
+    page = max(1, min(page, total_pages))
+    
+    # Joriy sahifaga tegishli animelarni kesib olish (Slice)
+    start_idx = (page - 1) * PER_PAGE
+    end_idx = start_idx + PER_PAGE
+    page_anime = anime_list[start_idx:end_idx]
+    
+    # 4. Tugmalarni yig'ish (InlineKeyboardBuilder)
+    builder = InlineKeyboardBuilder()
+    
+    for anime in page_anime:
+        # Masalan: is_completed True bo'lsa "🟢 Tugallangan", False bo'lsa "🔴 Davom etyapti"
+        status = "🟢" if anime.is_completed else "🔴" 
+        text = f"{status} {anime.title} ({anime.year})"
+        
+        # Har bir animeni alohida qator qilib tugma sifatida qo'shamiz
+        builder.row(
+            types.InlineKeyboardButton(
+                text=text,
+                callback_data=AnimeDetailCallback(
+                    anime_id=int(anime.anime_id), 
+                    page=page
+                ).pack()
+            )
+        )
+    
+    # 5. Navigatsiya (Orqaga/Oldinga) tugmalari
+    nav_buttons = []
+    
+    # Oldingi sahifa tugmasi
+    if page > 1:
+        nav_buttons.append(
+            types.InlineKeyboardButton(
+                text="⬅️ Oldingi", 
+                callback_data=AnimePageCallback(page=page - 1).pack()
+            )
+        )
+    else:
+        nav_buttons.append(types.InlineKeyboardButton(text="❌", callback_data="noop"))
+        
+    # Joriy sahifa ko'rsatkichi
+    nav_buttons.append(
+        types.InlineKeyboardButton(
+            text=f"📄 {page}/{total_pages}", 
+            callback_data="noop"
+        )
+    )
+    
+    # Keyingi sahifa tugmasi
+    if page < total_pages:
+        nav_buttons.append(
+            types.InlineKeyboardButton(
+                text="Keyingi ➡️", 
+                callback_data=AnimePageCallback(page=page + 1).pack()
+            )
+        )
+    else:
+        nav_buttons.append(types.InlineKeyboardButton(text="❌", callback_data="noop"))
+        
+    builder.row(*nav_buttons)
+    
+    # 6. Eng pastdagi doimiy "Orqaga" tugmasi (Admin panelga qaytish)
+    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel"))
+    
+    # Xabarni yangilash (edit_text) orqali inline tugmalarni ko'rsatamiz
+    await callback.message.edit_text(
+        text=f"📋 <b>ANIMELAR RO'YXATI (Jami: {total_anime} ta)</b>\n\n"
+             f"<i>Kerakli animeni tanlab, ustiga bosing:</i>",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+
+
+
+
+
+
+@router.callback_query(AnimeDetailCallback.filter())
+async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetailCallback, session: AsyncSession):
+    await callback.answer("📖 Ma'lumotlar yuklanmoqda...")
+    
+    anime_id = callback_data.anime_id
+    current_page = callback_data.page  # Orqaga qaytganimizda aynan o'sha sahifaga qaytish uchun
+    
+    # 1. Animeni barcha munosabatlari (janrlari) bilan birga bazadan olamiz
+    stmt = (
+        select(Anime)
+        .options(selectinload(Anime.genres))
+        .where(Anime.anime_id == anime_id)
+    )
+    result = await session.execute(stmt)
+    anime = result.scalar_one_or_none()
+    
+    if not anime:
+        await callback.message.edit_text("❌ Kechirasiz, ushbu anime topilmadi.")
+        return
+
+    # 2. Janrlarni chiroyli matn holatiga keltiramiz
+    genres_str = ", ".join([g.name for g in anime.genres]) if anime.genres else "Mavjud emas"
+    status_str = "🟢 Tugallangan" if anime.is_completed else "🔴 Davom etmoqda"
+
+    # 3. Anime haqida to'liq ma'lumot matni
+    text = (
+        f"🎬 <b>ANIME TAFIYOLATLARI</b>\n\n"
+        f"📌 <b>Nomi:</b> {anime.title}\n"
+        f"📅 <b>Yili:</b> {anime.year}-yil\n"
+        f"🚦 <b>Status:</b> {status_str}\n"
+        f"🌐 <b>Tillar:</b> {anime.languages or 'Koʻrsatilmagan'}\n"
+        f"🎭 <b>Janrlar:</b> {genres_str}\n\n"
+        f"📝 <b>Ta'rif:</b>\n<i>{anime.description or 'Taʻrif mavjud emas.'}</i>"
+    )
+
+    # 4. Inline tugmalarni yig'ish
+    builder = InlineKeyboardBuilder()
+    
+    # 🔥 SHU JOYIDAN QISM QO'SHISH TUGMASI
+    # Callback_data ichiga anime_id ni berib yuboramiz, keyingi bosqichda as qotadi
+    builder.row(
+        types.InlineKeyboardButton(
+            text="➕ Ushbu animega qism qo'shish", 
+            callback_data=f"add_ep_{anime.anime_id}"
+        )
+    )
+    
+    # 🔙 ORQAGA TUGMASI
+    # Foydalanuvchi adashib ketmasligi uchun aynan o'zi kelgan sahifa (page) raqamiga qaytaramiz
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🔙 Ro'yxatga qaytish", 
+            callback_data=AnimePageCallback(page=current_page).pack()
+        )
+    )
+
+    # Agar anime posteri (rasmi) bo'lsa rasmi bilan, bo'lmasa oddiy matn qilib chiqarish
+    if anime.poster_id:
+        try:
+            # Agar rasm bo'lsa, xabarni o'chirib yangi rasm ko'rinishida yuboramiz
+            await callback.message.delete()
+            await callback.message.answer_photo(
+                photo=anime.poster_id,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=builder.as_markup()
+            )
+        except Exception:
+            # Agar rasm o'chib ketgan bo'lsa, matn o'zini edit qilamiz
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+    else:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
