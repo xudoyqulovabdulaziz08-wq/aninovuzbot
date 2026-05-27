@@ -201,35 +201,35 @@ class OutboxWorker:
     # ==========================================
 
 
-async def handle_event(self, ev: OutboxEvent) -> bool:
-    try:
-        # 1. Payloadni yuklash (agar bazadan string kelsa - o'giramiz)
-        raw_payload = ev.payload
-        if isinstance(raw_payload, str):
-            payload = orjson.loads(raw_payload)
-        else:
-            payload = raw_payload
+    async def handle_event(self, ev: OutboxEvent) -> bool:
+        try:
+            # 1. Payloadni yuklash (agar bazadan string kelsa - o'giramiz)
+            raw_payload = ev.payload
+            if isinstance(raw_payload, str):
+                payload = orjson.loads(raw_payload)
+            else:
+                payload = raw_payload
 
-        # 2. Siqilganlik holatini tekshirish
-        if payload.get("is_compressed"):
-            # HEX stringni baytga o'girish
-            compressed_hex = payload.get("data")
-            raw_bytes = bytes.fromhex(compressed_hex)
+            # 2. Siqilganlik holatini tekshirish
+            if payload.get("is_compressed"):
+                # HEX stringni baytga o'girish
+                compressed_hex = payload.get("data")
+                raw_bytes = bytes.fromhex(compressed_hex)
             
-            # Decompression (zlib orqali ochish)
-            decompressed_bytes = zlib.decompress(raw_bytes)
+                # Decompression (zlib orqali ochish)
+                decompressed_bytes = zlib.decompress(raw_bytes)
             
-            # Ochilgan ma'lumotni dict ga o'girish
-            payload = orjson.loads(decompressed_bytes)
+                # Ochilgan ma'lumotni dict ga o'girish
+                payload = orjson.loads(decompressed_bytes)
             
-    except Exception as e:
-        logger.critical(f"🚨 PAYLOAD PARSING ERROR [ID: {ev.id}]: {e}")
-        await self.send_to_dlq_raw(ev, f"Parsing failed: {e}")
-        return True # Worker qulamasligi uchun True qaytaramiz
+        except Exception as e:
+            logger.critical(f"🚨 PAYLOAD PARSING ERROR [ID: {ev.id}]: {e}")
+            await self.send_to_dlq_raw(ev, f"Parsing failed: {e}")
+            return True # Worker qulamasligi uchun True qaytaramiz
 
-    # 3. Asosiy biznes logika davomi...
-    user_id = payload.get("user_id")
-    # ... qolgan kodlar
+        # 3. Asosiy biznes logika davomi...
+        user_id = payload.get("user_id")
+        # ... qolgan kodlar
 
     # ==========================================
     # 💀 RAW DLQ FOR BROKEN JSON
