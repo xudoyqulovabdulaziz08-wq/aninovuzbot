@@ -7,12 +7,14 @@ from config import config
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from typing import Any
-
+from database.repository import AnimeRepository
+from database.connection import AsyncSession, async_sessionmaker
 
 from config import config
 from keyboards.inline import anime_menu_kb
 from database.repository import AnimeRepository
 from database.connection import AsyncSession
+
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -237,26 +239,22 @@ async def process_anime_description(message: Message, state: FSMContext):
 # QADAM 7: Tillarni olish -> BAZAGA VA KESHGA YOZISH (YAKUN)
 # =====================================================================
 @router.message(AnimeMenuState.adding_laguages)
-async def process_anime_languages_and_save(message: Message, state: FSMContext, **data):
+async def process_anime_languages_and_save(message: Message, state: FSMContext, session_pool: async_sessionmaker):
+    # session_pool middleware'dan kelishi kerak
     if not message.text:
-        await message.reply("❌ Iltimos, faqat matnli xabar yuboring.")
+        await message.reply("❌ Iltimos, matn kiriting:")
         return
 
     await state.update_data(languages=message.text.strip())
     fsm_data = await state.get_data()
-    
-    loading_msg = await message.answer("🚀 Ma'lumotlar bazaga saqlanmoqda...")
-    
-    # Sessiyani aniqlash (xuddi confirm_add kabi)
-    safe_session = data.get("session")
-    session_pool = data.get("session_pool")
-    actual_session = getattr(safe_session, "_session", None)
+    loading_msg = await message.answer("🚀 Bazaga saqlanmoqda...")
 
-    try:
-        # Bazaga saqlash logikasi (xavfsiz sessiya bilan)
-        async def perform_save(db_session):
-            return await AnimeRepository.add_anime(
-                session=db_session,
+    # ✅ BAZA BILAN ISHLASH (Xavfsiz blok)
+    async with session_pool() as session:
+        try:
+            # Repositoryga toza asinxron sessiyani yuboramiz
+            new_anime = await AnimeRepository.add_anime(
+                session=session,
                 title=fsm_data["title"],
                 poster_id=fsm_data["poster_id"],
                 year=fsm_data["year"],
@@ -266,33 +264,15 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
                 languages=fsm_data["languages"],
                 episodes=[]
             )
-
-        # Sessiyani tekshirib, amallarni bajarish
-        if actual_session is not None:
-            new_anime = await perform_save(actual_session)
-        elif session_pool is not None:
-            async with session_pool() as new_session:
-                new_anime = await perform_save(new_session)
-        else:
-            raise RuntimeError("Database session pool topilmadi.")
-
-        # Muvaffaqiyatli xabar
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="➕ Qism qo'shish", callback_data=f"add_ep_{new_anime.anime_id}"))
-        builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
-        
-        await loading_msg.edit_text(
-            f"🎉 **Yangi anime qo'shildi!**\n\n🎬 **Nomi:** {new_anime.title}\n🆔 **ID:** `{new_anime.anime_id}`",
-            reply_markup=builder.as_markup()
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Animeni bazaga saqlashda xatolik: {e}")
-        await loading_msg.edit_text("❌ Tizimda xatolik yuz berdi. Ma'lumotlar bazaga saqlanmadi.")
-        
-    finally:
-        await state.clear()
-
+            
+            await message.answer(f"🎉 {new_anime.title} muvaffaqiyatli qo'shildi!")
+            
+        except Exception as e:
+            await session.rollback() # Xatolik bo'lsa rollback
+            logger.error(f"❌ Xatolik: {e}")
+            await loading_msg.edit_text("❌ Bazada xatolik. Maintenance vaqti tugashini kuting.")
+        finally:
+            await state.clear()
 
 # =====================================================================
 # QADAM 8: Qism qo'shish jarayoni (Video qabul qilish va bazaga saqlash)
