@@ -217,17 +217,21 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
     safe_title = html.escape(anime.title)
     safe_description = html.escape(anime.description or 'Description unavailable.')
     # 3. Anime haqida to'liq ma'lumot matni (HTML chiroyli formatda)
-    text = (
+    text =(
         f"╔══════════════════╗\n"
-        f"      🎬 <b>{safe_title}</b>\n"
+        f"       🎬 <b>{safe_title}</b>\n"
         f"╚══════════════════╝\n\n"
 
         f"📌 <b>Anime Info</b>\n"
+        f"╔══════════════════╗\n"
+        f"├ 🆔 ID: <code>#{anime.anime_id}</code>\n"  
         f"├ 📅 Year: <b>{anime.year}</b>\n"
         f"├ 🚦 Status: <b>{status_str}</b>\n"
-        f"├ 🌐 Languages: <b>{anime.languages or 'Unknown'}</b>\n"
+        f"├ 🌐 Lang: <b>{anime.languages or 'Unknown'}</b>\n"
+        f"╚══════════════════╝\n"
+        f"╔══════════════════╗\n"
         f"└ 🎭 Genres: <b>{genres_str}</b>\n\n"
-
+        f"╚══════════════════╝\n\n"
         f"📝 <b>Tavsif</b>\n"
         f"<blockquote expandable>"
         f"{safe_description}"

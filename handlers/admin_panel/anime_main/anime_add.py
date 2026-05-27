@@ -3,7 +3,7 @@ import html
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
 from config import config
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
@@ -352,7 +352,7 @@ async def process_episode_video(message: Message, state: FSMContext, session: As
 
     try:
         # 2. Bazaga epizodni qo'shamiz
-        await AnimeRepository.add_episode(
+        await AnimeRepository.add_anime_episode(
             session=session,
             anime_id=anime_id,
             episode_number=ep_number,
@@ -484,11 +484,15 @@ async def publish_anime_to_channel(callback: CallbackQuery, state: FSMContext, s
         f"╚══════════════════╝\n\n"
 
         f"📌 <b>Anime Info</b>\n"
+        f"╔══════════════════╗\n"
+        f"├ 🆔 ID: <code>#{anime.anime_id}</code>\n"  
         f"├ 📅 Year: <b>{anime.year}</b>\n"
         f"├ 🚦 Status: <b>{status_str}</b>\n"
-        f"├ 🌐 Languages: <b>{anime.languages or 'Unknown'}</b>\n"
+        f"├ 🌐 Lang: <b>{anime.languages or 'Unknown'}</b>\n"
+        f"╚══════════════════╝\n"
+        f"╔══════════════════╗\n"
         f"└ 🎭 Genres: <b>{genres_str}</b>\n\n"
-
+        f"╚══════════════════╝\n\n"
         f"📝 <b>Tavsif</b>\n"
         f"<blockquote expandable>"
         f"{safe_description}"
