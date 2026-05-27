@@ -416,10 +416,10 @@ class AnimeRepository:
     async def add_anime(session: Any, title: str, poster_id: str, year: int, is_completed: bool, 
                         genres: List[str], description: str, languages: str, episodes: List[Dict[str, Any]]) -> Anime:
         
-        # 1. Asl sessiyani aniqlab olish
+        # 1. Asl sessiyani aniqlab olish (Proxy bo'lsa ichidagini olish)
         real_session = session._session if hasattr(session, "_session") else session
         
-        # 2. Agar proxy bo'lsa, uni uyg'otish
+        # 2. Agar proxy bo'lsa, uni uyg'otish (IO operatsiyasi)
         if hasattr(session, "_ensure_session"):
             await session._ensure_session()
 
@@ -429,40 +429,41 @@ class AnimeRepository:
                 is_completed=is_completed, description=description, languages=languages
             )
             
-            # ENDI FAQAT real_session ISHLATAMIZ
+            # 3. FAQAT real_session ISHLATAMIZ
             real_session.add(anime)
             await real_session.flush() 
 
-            # Janrlarni olish
+            # Janrlarni olish (Optimallashtirilgan)
             existing_genres_res = await real_session.execute(select(Genre).where(Genre.name.in_(genres)))
             existing_genres = {g.name: g for g in existing_genres_res.scalars().all()}
 
-            new_genres_to_add = []
             for genre_name in genres:
                 if genre_name in existing_genres:
                     anime.genres.append(existing_genres[genre_name])
                 else:
                     new_genre = Genre(name=genre_name)
-                    new_genres_to_add.append(new_genre)
                     anime.genres.append(new_genre)
-
-            if new_genres_to_add:
-                real_session.add_all(new_genres_to_add)
-                await real_session.flush() 
 
             await real_session.commit()
             
-            # Refresh o'rniga tanlangan yuklash (baza bosimini kamaytiradi)
-            await real_session.refresh(anime, attribute_names=["genres", "episodes"])
+            # 4. Refresh o'rniga qayta so'rov (yashirin IO ni oldini olish uchun)
+            result = await real_session.execute(
+                select(Anime)
+                .options(selectinload(Anime.genres), selectinload(Anime.episodes))
+                .where(Anime.anime_id == anime.anime_id)
+            )
+            anime_obj = result.scalar_one()
 
             await valkey.update_single_anime_in_search_map(
-                anime_id=anime.anime_id, title=anime.title, year=anime.year
+                anime_id=anime_obj.anime_id, title=anime_obj.title, year=anime_obj.year
             )
             
-            return anime
+            return anime_obj
             
         except Exception as e:
-            await real_session.rollback() # Xatolik bo'lsa real_session'ni rollback qilamiz
+            # Sessiya ochiq bo'lsa va ulanish mavjud bo'lsa rollback qilish
+            if real_session:
+                await real_session.rollback()
             logger.error(f"❌ add_anime ichida xatolik: {e}")
             raise e
         
