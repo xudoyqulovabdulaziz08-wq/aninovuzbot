@@ -124,103 +124,121 @@ class DbSessionMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         data["session_pool"] = self.session_pool
         user_obj: Optional[User] = data.get("event_from_user")
-
-        # 1. System/Channel/Chat uchun fallback
-        if not user_obj:
-            data["user"] = {
-                "user_id": 0, "username": "System", "status": "system",
-                "points": 0, "referral_count": 0, "is_vip": False,
-                "vip_expire_date": None, "is_system": True
-            }
-            data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-            return await handler(event, data)
         
-        user_id = user_obj.id
+        # ✅ FIX 1: Butun oqim uchun faqat bitta boshqaruvchi proxy obyekt yaratamiz
+        session_obj = SafeSession(session=None, session_pool=self.session_pool)
+        data["session"] = session_obj
+        
+        # LEVEL 3 (Database) uchun qo'lda ochiladigan real sessiya o'zgaruvchisi
+        db_real_session = None
+        
+        try:
+            # 1. System/Channel/Chat uchun fallback (Foydalanuvchisiz kelgan so'rovlar)
+            if not user_obj:
+                data["user"] = {
+                    "user_id": 0, "username": "System", "status": "system",
+                    "points": 0, "referral_count": 0, "is_vip": False,
+                    "vip_expire_date": None, "is_system": True
+                }
+                return await handler(event, data)
+            
+            # Haqiqiy foydalanuvchi ID si
+            user_id = user_obj.id
 
-        # ======================================================
-        # 🔥 LEVEL 1: IN-MEMORY LRU CACHE (FAST PATH)
-        # ======================================================
-        cached_l1 = await state.l1_cache.get(user_id)
-        if cached_l1:
-            if (cached_l1.get("username") or "") != (user_obj.username or ""):
-                logger.info(f"🔄 Username updated (L1): {user_id}")
-                cached_l1["username"] = user_obj.username
-                self._fire_and_forget_cache_update(cached_l1)
+            # ======================================================
+            # 🔥 LEVEL 1: IN-MEMORY LRU CACHE (FAST PATH)
+            # ======================================================
+            cached_l1 = await state.l1_cache.get(user_id)
+            if cached_l1:
+                if (cached_l1.get("username") or "") != (user_obj.username or ""):
+                    logger.info(f"🔄 Username updated (L1): {user_id}")
+                    cached_l1["username"] = user_obj.username
+                    self._fire_and_forget_cache_update(cached_l1)
 
-            data["user"] = cached_l1
-            data["session"] = SafeSession(session=None, session_pool=self.session_pool) # Kesh ishladi -> sessiya ochilmaydi
-            return await handler(event, data)
+                data["user"] = cached_l1
+                return await handler(event, data)
 
-        # ======================================================
-        # 🔥 LEVEL 2: VALKEY/REDIS DISTRIBUTED CACHE
-        # ======================================================
-        if valkey.is_alive:
+            # ======================================================
+            # 🔥 LEVEL 2: VALKEY/REDIS DISTRIBUTED CACHE
+            # ======================================================
+            if valkey.is_alive:
+                try:
+                    cached_l2 = await valkey.get("{db_users}", user_id)
+                    if cached_l2:
+                        cached_l2 = dict(cached_l2)
+
+                        if (cached_l2.get("username") or "") != (user_obj.username or ""):
+                            logger.info(f"🔄 Username updated (L2): {user_id}")
+                            cached_l2["username"] = user_obj.username
+                            self._fire_and_forget_cache_update(cached_l2)
+
+                        await state.l1_cache.set(user_id, cached_l2)
+                        data["user"] = cached_l2
+                        return await handler(event, data)
+
+                except Exception as e:
+                    logger.exception(f"❌ L2 CACHE FAILURE user_id={user_id}: {e}")
+
+            # ======================================================
+            # 🔥 CIRCUIT BREAKER CHECK (PROTECTION LAYER)
+            # ======================================================
+            async with state.db_lock:
+                if not state.db_status:
+                    if time.time() - state.db_last_retry < state.cb_recovery_time:
+                        logger.warning(f"🚫 DB blocked (circuit open). Emergency mode for user_id={user_id}")
+                        data["user"] = self._emergency_user(user_obj)
+                        return await handler(event, data)
+
+            # ======================================================
+            # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
+            # ======================================================
+            # Faqat keshda topilmagandagina pooldan real sessiya ochamiz
+            db_real_session = self.session_pool()
+            
             try:
-                # Key pattern loyiha standartiga moslashtirildi `{db_users}`
-                cached_l2 = await valkey.get("{db_users}", user_id)
-                if cached_l2:
-                    cached_l2 = dict(cached_l2)
+                async with asyncio.timeout(10.0):
+                    db_user = await UserRepository.get_or_create(db_real_session, user_obj)
 
-                    if (cached_l2.get("username") or "") != (user_obj.username or ""):
-                        logger.info(f"🔄 Username updated (L2): {user_id}")
-                        cached_l2["username"] = user_obj.username
-                        self._fire_and_forget_cache_update(cached_l2)
+                user_data = self._model_to_dict(db_user)
+                await state.l1_cache.set(user_id, user_data)
+                self._fire_and_forget_cache_update(user_data)
 
-                    await state.l1_cache.set(user_id, cached_l2)
-                    data["user"] = cached_l2
-                    data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-                    return await handler(event, data)
+                data["user"] = copy.deepcopy(user_data)
+                
+                # ✅ FIX 2: SafeSession ichiga faol real sessiyani ulaymiz
+                session_obj._session = db_real_session
+                
+                return await handler(event, data)
 
             except Exception as e:
-                logger.exception(f"❌ L2 CACHE FAILURE user_id={user_id}: {e}")
+                await self._handle_db_failure(e)
+                logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
+                
+                # Xatolik yuz berganda xavfsiz foydalanuvchi rejimiga o'tish
+                data["user"] = self._emergency_user(user_obj)
+                return await handler(event, data)
 
-        # ======================================================
-        # 🔥 CIRCUIT BREAKER CHECK (PROTECTION LAYER)
-        # ======================================================
-        async with state.db_lock:
-            if not state.db_status:
-                if time.time() - state.db_last_retry < state.cb_recovery_time:
-                    logger.warning(f"🚫 DB blocked (circuit open). Emergency mode for user_id={user_id}")
-                    data["user"] = self._emergency_user(user_obj)
-                    data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-                    return await handler(event, data)
-
-        # ======================================================
-        # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
-        # ======================================================
-        # Tranzaksiya hayotiy tsikli (Lifecycle) handler to'liq tugaguncha ochiq qolishi shart!
-        session = self.session_pool()
-        try:
-            start_time = time.time()
-            # Timeout va baza operatsiyasi
-            async with asyncio.timeout(10.0):
-                db_user = await UserRepository.get_or_create(session, user_obj)
-
-            user_data = self._model_to_dict(db_user)
-            await state.l1_cache.set(user_id, user_data)
-            self._fire_and_forget_cache_update(user_data)
-
-            data["user"] = copy.deepcopy(user_data)
-            data["session"] = SafeSession(session)
-            
-            # Handler chaqiruvini o'zgaruvchiga olamiz
-            return await handler(event, data)
-
-        except Exception as e:
-            await self._handle_db_failure(e)
-            logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
-            
-            # Xatolik yuz berganda xavfsiz user va bo'sh sessiya
-            data["user"] = self._emergency_user(user_obj)
-            data["session"] = SafeSession(session=None, session_pool=self.session_pool)
-            return await handler(event, data)
-            
         finally:
-            if 'session' in locals() and session:
+            # ======================================================
+            # 🛡️ GLOBAL CLEANUP LAYER (MANDATORY CLOSURES)
+            # ======================================================
+            # 1. SafeSession proxy obyektini har qanday holatda yopamiz
+            if isinstance(session_obj, SafeSession):
                 try:
-                    await session.close()
+                    await session_obj.close()
                 except Exception as e:
-                    logger.debug(f"Session close error (ignored): {e}")
+                    logger.debug(f"SafeSession proxy close error (ignored): {e}")
+            
+            # 2. Qo'lda ochilgan bazaviy real sessiya ochiq qolgan bo'lsa poolga qaytaramiz
+            if db_real_session:
+                try:
+                    await db_real_session.close()
+                except Exception as e:
+                    logger.debug(f"Real DB session close error (ignored): {e}")
+            
+            # 3. Request ma'lumotlarini tozalaymiz (Memory leak/leakage oldini olish)
+            data.pop("session", None)
+            data.pop("session_pool", None)
 
     # ======================================================
     # 🔥 SAFE FIRE-AND-FORGET GARBAGE COLLECTOR PROOF

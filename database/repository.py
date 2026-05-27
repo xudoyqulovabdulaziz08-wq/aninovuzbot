@@ -817,3 +817,4 @@ class AnimeRepository:
                 for ep in anime.episodes
             ] if anime.episodes else []
         }
+    

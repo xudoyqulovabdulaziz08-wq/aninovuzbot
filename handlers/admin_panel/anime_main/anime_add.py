@@ -355,7 +355,7 @@ async def process_episode_video(message: Message, state: FSMContext, session: As
         await AnimeRepository.add_anime_episode(
             session=session,
             anime_id=anime_id,
-            episode_number=ep_number,
+            episode_num=ep_number,  # 🔥 MANA SHU YER FIX BOLDId: episode_number emas, episode_num bo'lishi shart!
             file_id=video_file_id
         )
         
