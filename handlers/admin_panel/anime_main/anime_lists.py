@@ -1,4 +1,5 @@
 import logging
+import html
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
@@ -145,13 +146,37 @@ async def list_anime(
     # 6. Eng pastdagi doimiy "Orqaga" tugmasi (Admin panelga qaytish)
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel"))
     
-    # Xabarni yangilash (edit_text) orqali inline tugmalarni ko'rsatamiz
-    await callback.message.edit_text(
-        text=f"📋 <b>ANIMELAR RO'YXATI (Jami: {total_anime} ta)</b>\n\n"
-             f"<i>Kerakli animeni tanlab, ustiga bosing:</i>",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
+    text_content = (
+        f"📋 <b>ANIMELAR RO'YXATI (Jami: {total_anime} ta)</b>\n\n"
+        f"<i>Kerakli animeni tanlab, ustiga bosing:</i>"
     )
+    markup_content = builder.as_markup()
+
+    try:
+        # Agar oldingi xabar oddiy matnli bo'lsa, silliqqina edit qiladi
+        await callback.message.edit_text(
+            text=text_content,
+            parse_mode="HTML",
+            reply_markup=markup_content
+        )
+    except TelegramBadRequest as e:
+        # Agar oldingi xabar rasmli bo'lsa (ya'ni edit_text xato bersa), 
+        # eski rasmli xabarni o'chirib, o'rniga toza matnli ro'yxatni yuboramiz.
+        if "there is no text in the message" in str(e).lower() or "message to edit not found" in str(e).lower():
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            
+            await callback.message.answer(
+                text=text_content,
+                parse_mode="HTML",
+                reply_markup=markup_content
+            )
+        else:
+            # Boshqa kutilmagan Telegram xatoliklari bo'lsa (masalan, message is not modified)
+            if "message is not modified" not in str(e).lower():
+                raise e
 
 
 
@@ -189,16 +214,24 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
     # 2. Janrlarni va statusni formatlaymiz
     genres_str = ", ".join([g.name for g in anime.genres]) if anime.genres else "Mavjud emas"
     status_str = "🟢 Tugallangan" if anime.is_completed else "🔴 Davom etmoqda"
-
+    safe_title = html.escape(anime.title)
+    safe_description = html.escape(anime.description or 'Description unavailable.')
     # 3. Anime haqida to'liq ma'lumot matni (HTML chiroyli formatda)
     text = (
-        f"🎬 <b>ANIME TAFSILOTLARI</b>\n\n"
-        f"📌 <b>Nomi:</b> {anime.title}\n"
-        f"📅 <b>Yili:</b> {anime.year}-yil\n"
-        f"🚦 <b>Status:</b> {status_str}\n"
-        f"🌐 <b>Tillar:</b> {anime.languages or 'Koʻrsatilmagan'}\n"
-        f"🎭 <b>Janrlar:</b> {genres_str}\n\n"
-        f"📝 <b>Ta'rif:</b>\n<i>{anime.description or 'Taʻrif mavjud emas.'}</i>"
+        f"╔══════════════════╗\n"
+        f"      🎬 <b>{safe_title}</b>\n"
+        f"╚══════════════════╝\n\n"
+
+        f"📌 <b>Anime Info</b>\n"
+        f"├ 📅 Year: <b>{anime.year}</b>\n"
+        f"├ 🚦 Status: <b>{status_str}</b>\n"
+        f"├ 🌐 Languages: <b>{anime.languages or 'Unknown'}</b>\n"
+        f"└ 🎭 Genres: <b>{genres_str}</b>\n\n"
+
+        f"📝 <b>Tavsif</b>\n"
+        f"<blockquote expandable>"
+        f"{safe_description}"
+        f"</blockquote>"
     )
 
     # 4. Inline tugmalarni yig'ish
