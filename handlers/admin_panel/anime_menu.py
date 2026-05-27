@@ -511,24 +511,26 @@ async def publish_anime_to_channel(callback: CallbackQuery, state: FSMContext, s
 
 
 @router.callback_query(AnimePageCallback.filter())  # Sahifalar almashganda ushlab qolish uchun
-@router.callback_query(F.data == "list_anime")       # Birinchi marta menyudan bosilganda
-async def list_anime(callback: CallbackQuery, session: AsyncSession, callback_data: Optional[AnimePageCallback] = None):
+@router.callback_query(F.data == "list_anime")
+async def list_anime(callback: CallbackQuery, session: AsyncSession = None, session_pool: async_sessionmaker = None):
     await callback.answer("📋 Yuklanmoqda...")
     
-    # 1. Sahifa raqamini aniqlash (agar navigatsiyadan kelgan bo'lsa callback_data'dan oladi, aks holda 1-sahifa)
-    page = callback_data.page if callback_data else 1
-    
-    # 2. Bazadan hamma animelarni olish
-    anime_list = await AnimeRepository.list_anime(session=session)
-    
-    # #1-Holat: Animelar mavjud bo'lmasa
+    # 💡 AGAR MIDDLEWARE'DAN SESSION 'NONE' KELSA, POOLDAN YANGI SESSYA OCHAMIZ
+    if session is None and session_pool is not None:
+        async with session_pool() as new_session:
+            anime_list = await AnimeRepository.list_anime(session=new_session)
+    else:
+        # Oddiy holatda uzatilgan sessiyadan foydalanamiz
+        anime_list = await AnimeRepository.list_anime(session=session)
+
     if not anime_list:
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel"))
-        return await callback.message.edit_text(
+        await callback.message.edit_text(
             "📭 Hozircha tizimda birorta ham anime qo'shilmagan.", 
             reply_markup=builder.as_markup()
         )
+        return
     
     # 3. Pagination sozlamalari (Har bir sahifada 5 tadan anime)
     PER_PAGE = 5

@@ -19,8 +19,6 @@ from config import config
 logger = logging.getLogger("CacheManager")
 
 
-
-
 # ================= METRICS =================
 class CacheMetrics:
     def __init__(self):
@@ -29,7 +27,6 @@ class CacheMetrics:
         self.misses = 0
         self.inflight_hits = 0
         self.errors = 0
-
         self.events_processed = 0
 
     def log(self):
@@ -55,28 +52,7 @@ class ShardRouter:
 sharder = ShardRouter()
 
 
-# ================= EVENT BUS (microcache invalidation) =================
-class EventBus:
-    def __init__(self):
-        self.subscribers: List[asyncio.Queue] = []
-
-    def subscribe(self) -> asyncio.Queue:
-        q = asyncio.Queue(maxsize=1000)
-        self.subscribers.append(q)
-        return q
-
-    async def publish(self, event: dict):
-        for q in self.subscribers:
-            try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
-                pass
-
-
-event_bus = EventBus()
-
-
-# ================= CACHE MANAGER =================
+# ================= CACHE MANAGER (PRODUCTION READY) =================
 class CacheManager:
     def __init__(self, url: str):
         self.namespace = "app"
@@ -96,7 +72,7 @@ class CacheManager:
         self._inflight: Dict[str, asyncio.Future] = {}
         self._inflight_lock = asyncio.Lock()
 
-        # ================= STREAMS =================
+        # ================= STREAMS (CLUSTER SYNC) =================
         self._stream_name = "cache:invalidate"
         self._group_name = "cache_group"
         self._consumer = self.node_id
@@ -122,65 +98,67 @@ class CacheManager:
         await self._connect()
         try:
             await self.redis.ping()
-        
-            # Stream va Guruhni majburiy yaratish (Silent Mode)
+            
+            # Stream va Guruhni xavfsiz sozlash
             await self._ensure_stream_setup()
 
+            # Fondagi barcha vazifalarni ishga tushirish
             self._tasks = [
                 asyncio.create_task(self._stream_listener()),
                 asyncio.create_task(self._pel_recovery()),
                 asyncio.create_task(self._l1_cleanup()),
-                asyncio.create_task(self._metrics_logger()),
-                asyncio.create_task(self._event_listener())
+                asyncio.create_task(self._metrics_logger())
             ]
-            logger.info(f"🚀 CACHE ONLINE [{self.node_id}]")
+            logger.info(f"🚀 CACHE ONLINE CONTROL KEY [{self.node_id}] | L1 Max Size: {self._l1_max_size}")
         except Exception as e:
-            logger.critical(f"START FAIL: {e}")
+            logger.critical(f"🚨 START FAIL: {e}")
             self.is_alive = False
 
-    # ================= KEY =================
+    # ================= KEY ENGINE =================
     def _key(self, table: str, obj_id: Any) -> str:
         shard = sharder.get_shard(f"{table}:{obj_id}")
         return f"{self.namespace}:{shard}:{table}:{obj_id}:{self.version}"
-    
 
-# ================= ANIME SEARCH & DETAILS CACHE =================
-
+    # ================= ANIME SEARCH & DETAILS CACHE =================
     async def set_anime_search_map(self, search_data: dict):
         """
-        🚀 Barcha anime nomlari va IDlarini qidiruv uchun Valkeyda saqlash.
-        Bu ma'lumot L1 keshda ham, Valkeyda ham 30 daqiqa turadi.
+        🚀 Barcha anime nomlari va IDlarini qidiruv uchun saqlash (30 daqiqa)
         """
         key = f"{self.namespace}:anime_search:all_titles"
         try:
             raw_data = orjson.dumps(search_data)
             if self.redis:
-                await self.redis.set(key, raw_data)
+                # L2 distributed keshga yozamiz va tarmoqqa xabar chiqaramiz
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.setex(key, 1800, raw_data)
+                    payload = {"key": key, "sender": self.node_id, "action": "SET"}
+                    pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)})
+                    await pipe.execute()
 
-            # L1 keshga ham yuklab qo'yamiz (Baza qidiruvini umuman o'ldirish uchun)
-            await self._set_l1(key, search_data, 1800) # 30 daqiqa L1 kesh
-            logger.info(f"🔥 CacheManager: {len(search_data)} ta anime sarlavhasi qidiruv keshiga yozildi.")
+            # L1 keshga nusxasini yuklaymiz
+            await self._set_l1(key, search_data, 1800)
+            logger.info(f"🔥 CacheManager: {len(search_data)} ta anime qidiruv keshiga yozildi va tarmoqqa tarqatildi.")
         except Exception as e:
             metrics.errors += 1
             logger.error(f"❌ SET ANIME SEARCH MAP ERROR: {e}")
 
     async def get_anime_search_map(self) -> Optional[dict]:
         """
-        🔎 Qidiruv uchun barcha animelar xaritasini L1 yoki L2 keshdan tezkor olish (0-1ms)
+        🔎 Qidiruv xaritasini L1 yoki L2 keshdan tezkor olish (0-1ms)
         """
         key = f"{self.namespace}:anime_search:all_titles"
         
-        # 1. L1 keshdan tekshiramiz
+        # 1. L1 Local Memory Cache
         async with self._l1_lock:
             if key in self._l1_cache:
                 data, exp = self._l1_cache[key]
                 if datetime.now(timezone.utc) < exp:
                     self._l1_cache.move_to_end(key)
                     metrics.l1_hits += 1
-                    return data.copy() # 💡 L1 dagi original ma'lumotni himoya qilish uchun nusxa qaytaramiz
+                    return data.copy() if hasattr(data, "copy") else data
                 self._l1_cache.pop(key, None)
 
-        # 2. Singleflight lock orqali L2 (Valkey) dan olamiz
+        # 2. Singleflight Lock orqali L2 (Redis/Valkey)
         async with self._inflight_lock:
             if key in self._inflight:
                 metrics.inflight_hits += 1
@@ -193,465 +171,336 @@ class CacheManager:
             data = orjson.loads(raw) if raw else None
             if data:
                 metrics.l2_hits += 1
-                await self._set_l1(key, data, 1800) # 30 daqiqa L1 kesh
+                await self._set_l1(key, data, 1800)
             else:
                 metrics.misses += 1
             
             if not fut.done():
                 fut.set_result(data)
-            return data.copy() if data else None # 💡 Nusxa qaytaramiz
+            return data.copy() if (data and hasattr(data, "copy")) else data
         except Exception as e:
             metrics.errors += 1
             if not fut.done():
                 fut.set_result(None)
-            logger.error(f"GET ANIME SEARCH MAP ERROR: {e}")
+            logger.error(f"❌ GET ANIME SEARCH MAP ERROR: {e}")
             return None
         finally:
             async with self._inflight_lock:
                 self._inflight.pop(key, None)
 
-    
     async def update_single_anime_in_search_map(self, anime_id: int, title: str, year: int):
         """
-        🔄 Admin yangi anime qo'shganda, qidiruv xaritasini buzib yubormasdan,
-        uning ichiga yangi animeni asinxron xavfsiz qo'shib qo'yish.
+        🔄 Qidiruv xaritasini buzmasdan ichiga yangi element qo'shish va tarmoqqa sinxronlash
         """
         key = f"{self.namespace}:anime_search:all_titles"
         try:
-            # Mavjud xaritani olamiz (Nusxasiz to'g'ridan-to'g'ri yangilash uchun get_anime_search_map ishlatildi)
             current_map = await self.get_anime_search_map() or {}
             current_map[str(anime_id)] = f"{title} ({year})"
             
-            # Qayta keshlaymiz
             raw_data = orjson.dumps(current_map)
             if self.redis:
-                await self.redis.set(key, raw_data)
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.setex(key, 1800, raw_data)
+                    payload = {"key": key, "sender": self.node_id, "action": "SET"}
+                    pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)})
+                    await pipe.execute()
+
             await self._set_l1(key, current_map, 1800)
-            
-            # Boshqa klaster node'lariga L1 ni tozalash haqida signal yuboramiz
-            await event_bus.publish({
-                "type": "SET",
-                "key": key,
-                "node": self.node_id
-            })
-            logger.info(f"🔄 CacheManager: Yangi anime [{anime_id}] qidiruv xaritasiga qo'shildi.")
+            logger.info(f"🔄 CacheManager: Yangi anime [{anime_id}] qidiruv xaritasiga qo'shildi cluster tarqatildi.")
         except Exception as e:
             metrics.errors += 1
             logger.error(f"❌ UPDATE SINGLE ANIME IN SEARCH MAP ERROR: {e}")
 
     async def set_episode_file_id(self, anime_id: int, episode: int, file_id: str, ttl: int = 86400):
         """
-        🎬 Epizod video faylini (file_id) L1 va L2 keshga yozish (24 soat kesh)
+        🎬 Epizod video faylini L1 va L2 keshga yozish
         """
         table = "anime_episodes"
         obj_id = f"{anime_id}_{episode}"
         key = self._key(table, obj_id)
-        
         data = {"file_id": file_id}
         try:
             if self.redis:
                 await self.redis.setex(key, ttl, orjson.dumps(data))
-            await self._set_l1(key, data, min(ttl // 10, 900)) # L1 keshda max 15 daqiqa
-            logger.info(f"🔥 CacheManager: Episode [{anime_id} - {episode}] file ID keshga yozildi.")
+            await self._set_l1(key, data, min(ttl // 10, 900))
         except Exception as e:
-            metrics.errors += 1 # 💡 Xatolik metrikasi qo'shildi
+            metrics.errors += 1
             logger.error(f"❌ SET EPISODE FILE ID ERROR: {e}")
 
     async def get_episode_file_id(self, anime_id: int, episode: int) -> Optional[str]:
-        """
-        🍿 Epizod file_id sini Dual-Layer kesh tizimidan super tezkor olish
-        """
         table = "anime_episodes"
         obj_id = f"{anime_id}_{episode}"
-        
         res = await self.get(table, obj_id)
         return res.get("file_id") if res else None
     
     # ================= CHANNELS CACHE =================
-    async def get_channels(self):
+    async def get_channels(self) -> Optional[list]:
         key = f"{self.namespace}:channels:active"
-        raw = await self.redis.get(key)
-        return orjson.loads(raw) if raw else None
+        try:
+            # Avval L1 local xotirani tekshirish
+            async with self._l1_lock:
+                if key in self._l1_cache:
+                    data, exp = self._l1_cache[key]
+                    if datetime.now(timezone.utc) < exp:
+                        return data
+            
+            raw = await self.redis.get(key) if self.redis else None
+            if raw:
+                res = orjson.loads(raw)
+                await self._set_l1(key, res, 600)
+                return res
+            return None
+        except Exception as e:
+            logger.error(f"❌ GET CHANNELS ERROR: {e}")
+            return None
 
     async def set_channels(self, channels_list: list):
         key = f"{self.namespace}:channels:active"
-        await self.redis.setex(key, 3600, orjson.dumps(channels_list))
+        try:
+            raw_data = orjson.dumps(channels_list)
+            if self.redis:
+                await self.redis.setex(key, 3600, raw_data)
+            await self._set_l1(key, channels_list, 600)
+        except Exception as e:
+            logger.error(f"❌ SET CHANNELS ERROR: {e}")
 
-    async def invalidate_channels(self):
-        """Kanal keshini majburiy tozalash"""
-        key = f"{self.namespace}:channels:active"
-        await self.redis.delete(key)
-    # ================= GET =================
+    # ================= CORE GET / SET =================
     async def get(self, table: str, obj_id: Any) -> Optional[dict]:
         key = self._key(table, obj_id)
         now = datetime.now(timezone.utc)
 
-        # ---------- L1 ----------
+        # ---------- L1 LOCAL CACHE ----------
         async with self._l1_lock:
             if key in self._l1_cache:
                 data, exp = self._l1_cache[key]
-
                 if now < exp:
                     self._l1_cache.move_to_end(key)
                     metrics.l1_hits += 1
-                    return data
-
+                    return data.copy() if hasattr(data, "copy") else data
                 self._l1_cache.pop(key, None)
 
-        # ---------- SINGLEFLIGHT ----------
+        # ---------- SINGLEFLIGHT PATTERN ----------
         async with self._inflight_lock:
             if key in self._inflight:
                 metrics.inflight_hits += 1
                 return await self._inflight[key]
-
             fut = asyncio.get_event_loop().create_future()
             self._inflight[key] = fut
 
         try:
-            raw = await self.redis.get(key)
+            raw = await self.redis.get(key) if self.redis else None
             data = orjson.loads(raw) if raw else None
 
             if data:
                 metrics.l2_hits += 1
                 await self._set_l1(key, data, 180)
-
             else:
                 metrics.misses += 1
 
             if not fut.done():
                 fut.set_result(data)
-
-            return data
-
+            return data.copy() if (data and hasattr(data, "copy")) else data
         except Exception as e:
             metrics.errors += 1
-
             if not fut.done():
                 fut.set_result(None)
-
-            logger.error(f"GET ERROR: {e}")
+            logger.error(f"❌ CORE GET ERROR: {e}")
             return None
-
         finally:
             async with self._inflight_lock:
                 self._inflight.pop(key, None)
 
-    # ================= SET =================
     async def set(self, table: str, obj_id: Any, data: dict, ttl: int = 3600):
         key = self._key(table, obj_id)
-
         try:
-            await self.redis.setex(key, ttl, orjson.dumps(data))
+            raw = orjson.dumps(data)
+            if self.redis:
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.setex(key, ttl, raw)
+                    payload = {"key": key, "sender": self.node_id, "action": "SET"}
+                    pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)})
+                    await pipe.execute()
+
             await self._set_l1(key, data, min(ttl // 10, 180))
-
-            # 🔥 event-driven sync
-            await event_bus.publish({
-                "type": "SET",
-                "key": key,
-                "node": self.node_id
-            })
-
         except Exception as e:
             metrics.errors += 1
-            logger.error(f"SET ERROR: {e}")
+            logger.error(f"❌ CORE SET ERROR: {e}")
 
-    # ================= DELETE =================
-    async def delete(self, table: str, obj_id: Any):
-        key = self._key(table, obj_id)
-
-        async with self._l1_lock:
-            self._l1_cache.pop(key, None)
-
+    # ================= 🔥 SMART UNIVERSAL INVALIDATE =================
+    async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None, broadcast: bool = True):
+        """
+        🧹 Worker va repozitoriy tomonidan chaqiriladigan universal tozalash metodi.
+        Klaster tarmog'idagi barcha node-larning mahalliy L1 keshini bir vaqtda tozalaydi.
+        """
         try:
-            async with self.redis.pipeline(transaction=True) as pipe:
-                pipe.delete(key)
+            # Maxsus yo'naltirish (Search Map uchun fallback)
+            if (table == "anime_list" and obj_id == "search_map") or (key and "anime_search" in key):
+                key = f"{self.namespace}:anime_search:all_titles"
+                table = None
+                obj_id = None
 
-                payload = {
-                    "key": key,
-                    "sender": self.node_id
-                }
+            keys_to_delete = []
 
-                pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)})
-                pipe.xadd(self._replication_stream, {"data": orjson.dumps(payload)})
+            # Channels event aniqlash
+            is_channel_event = (
+                table == "channels" or 
+                (key and ("channels" in key or key == f"{self.namespace}:channels:active"))
+            )
 
-                await pipe.execute()
+            if is_channel_event:
+                if table == "channels" and obj_id and obj_id not in ["all_list", "active_list"]:
+                    keys_to_delete.append(self._key(table, obj_id))
+                
+                keys_to_delete.append(self._key("channels", "all_list"))
+                keys_to_delete.append(self._key("channels", "active_list"))
+                keys_to_delete.append(f"{self.namespace}:channels:active")
+            elif key:
+                keys_to_delete.append(key)
+            elif table and obj_id:
+                keys_to_delete.append(self._key(table, obj_id))
 
+            if not keys_to_delete:
+                return
+
+            # Mahalliy L1 keshdan o'chirish
+            async with self._l1_lock:
+                for k in keys_to_delete:
+                    self._l1_cache.pop(k, None)
+
+            # Redis (L2) dan o'chirish va Pipeline orqali tarmoqqa tarqatish
+            if self.redis:
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    for k in keys_to_delete:
+                        pipe.delete(k)
+                        if broadcast:
+                            payload = {"key": k, "sender": self.node_id, "action": "DEL"}
+                            pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)})
+                            pipe.xadd(self._replication_stream, {"data": orjson.dumps(payload)})
+                    await pipe.execute()
+
+            logger.info(f"🧹 CacheManager Invalidation Cleaned keys: {keys_to_delete} (Broadcast={broadcast})")
         except Exception as e:
             metrics.errors += 1
-            logger.error(f"DELETE ERROR: {e}")
+            logger.error(f"❌ INVALIDATE METODIDA XATOLIK: {e}")
 
-    # ================= L1 =================
+    # ================= INTERNAL L1 SET =================
     async def _set_l1(self, key: str, data: Any, ttl: int):
         exp = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-
         async with self._l1_lock:
             if key in self._l1_cache:
                 self._l1_cache.move_to_end(key)
-
             self._l1_cache[key] = (data, exp)
-
             if len(self._l1_cache) > self._l1_max_size:
                 self._l1_cache.popitem(last=False)
 
-    # ================= STREAM LISTENER =================
+    # ================= REDIS STREAMS BROKER CONTROL =================
     async def _ensure_stream_setup(self):
-        """Stream va Guruh mavjudligini xatosiz ta'minlaydi"""
         try:
-            # mkstream=True stream bo'lmasa uni ham yaratadi
             await self.redis.xgroup_create(
-                self._stream_name, 
-                self._group_name, 
-                id="0", 
-                mkstream=True
+                self._stream_name, self._group_name, id="0", mkstream=True
             )
-            logger.info(f"✅ Redis Stream Group '{self._group_name}' tayyor.")
+            logger.info(f"✅ Redis Stream Group '{self._group_name}' tayyorlandi.")
         except ResponseError as e:
             if "BUSYGROUP" in str(e):
-                pass # Guruh allaqachon bor, muammo yo'q
+                pass
             else:
                 logger.warning(f"⚠️ Stream sozlashda kutilmagan holat: {e}")
-
 
     async def _stream_listener(self):
         while self.is_alive:
             try:
                 res = await self.redis.xreadgroup(
-                    self._group_name,
-                    self._consumer,
-                    {self._stream_name: ">"},
-                    count=30,
-                    block=2000 # Blok vaqtini biroz uzaytirdik (resurs tejash)
+                    self._group_name, self._consumer, {self._stream_name: ">"}, count=50, block=2000
                 )
                 if not res:
                     continue
 
                 for _, messages in res:
                     for msg_id, payload in messages:
-                        await self._process(msg_id, payload)
-
+                        try:
+                            raw_data = payload.get(b"data")
+                            if raw_data:
+                                data = orjson.loads(raw_data)
+                                # 🔥 ASOSIY KLASTER SINXRONIZATSIYASI:
+                                # Agar xabar boshqa server/node dan chiqqan bo'lsa, mahalliy L1 keshni urib tushiramiz!
+                                if data.get("sender") != self.node_id and "key" in data:
+                                    async with self._l1_lock:
+                                        self._l1_cache.pop(data["key"], None)
+                                    metrics.events_processed += 1
+                        except Exception as inner:
+                            logger.error(f"❌ Msg Process Error: {inner}")
+                        finally:
+                            await self.redis.xack(self._stream_name, self._group_name, msg_id)
             except ResponseError as e:
                 if "NOGROUP" in str(e):
-                    # AVTO-TUZATISH: Agar guruh o'chib ketgan bo'lsa, qayta yaratamiz
                     await self._ensure_stream_setup()
                     await asyncio.sleep(2)
                 else:
-                    logger.error(f"STREAM ERROR: {e}")
+                    logger.error(f"❌ Stream Listener Response Error: {e}")
                     await asyncio.sleep(5)
             except Exception as e:
-                logger.error(f"STREAM UNKNOWN ERROR: {e}")
-                await asyncio.sleep(5)
+                if self.is_alive:
+                    logger.error(f"❌ Stream Unknown Error: {e}")
+                    await asyncio.sleep(5)
 
-
-
-
-    async def _process(self, msg_id, payload):
-        try:
-            raw_data = payload.get(b"data")
-            if not raw_data:
-                # Agar ma'lumot bo'sh bo'lsa, xabarni ACK qilib navbatdan o'chiramiz
-                await self.redis.xack(self._stream_name, self._group_name, msg_id)
-                return
-
-            data = orjson.loads(raw_data)
-
-            if data.get("sender") != self.node_id and "key" in data:
-                async with self._l1_lock:
-                    self._l1_cache.pop(data["key"], None)
-
-        except orjson.JSONDecodeError as je:
-            logger.error(f"⚠️ JSON Parse Error in stream: {je}. Raw data: {raw_data}")
-        except Exception as e:
-            logger.error(f"❌ Process Stream Error: {e}")
-        finally:
-            # Xato bo'lsa ham xabarni ACK qilamiz, aks holda u DLQ ni to'ldirib tashlaydi va cheksiz aylanadi
-            await self.redis.xack(self._stream_name, self._group_name, msg_id)
-
-    # ================= 🔥 FIXED PEL RECOVERY =================
     async def _pel_recovery(self):
+        """Avariya holatida ACK qilinmay qolib ketgan xabarlarni qayta tiklash (PEL)"""
         while self.is_alive:
-            await asyncio.sleep(30)
-
+            await asyncio.sleep(60)
             try:
                 claimed = await self.redis.xautoclaim(
-                    self._stream_name,
-                    self._group_name,
-                    self._consumer,
-                    60000,
-                    "0-0",
-                    20
+                    self._stream_name, self._group_name, self._consumer, 60000, "0-0", count=30
                 )
-
-                if claimed and len(claimed) > 1:
+                if claimed and len(claimed) > 1 and claimed[1]:
                     for msg_id, payload in claimed[1]:
                         try:
                             raw_data = payload.get(b"data")
                             if raw_data:
                                 data = orjson.loads(raw_data)
-                                if "key" in data:
+                                if data.get("sender") != self.node_id and "key" in data:
                                     async with self._l1_lock:
                                         self._l1_cache.pop(data["key"], None)
-
-                            await self.redis.xack(
-                                self._stream_name,
-                                self._group_name,
-                                msg_id
-                            )
-                            metrics.events_processed += 1
-
-                        except orjson.JSONDecodeError:
-                            # Buzilgan xabarni avtomatik o'chirish (DLQ ga tushmasligi uchun)
+                        except Exception:
+                            pass
+                        finally:
                             await self.redis.xack(self._stream_name, self._group_name, msg_id)
-                        except Exception as inner:
-                            logger.error(f"PEL ITEM ERROR: {inner}")
-
             except Exception as e:
-                logger.error(f"PEL ERROR: {e}")
+                if self.is_alive:
+                    logger.debug(f"PEL Recovery Loop Info: {e}")
 
-    # ================= EVENT BUS LISTENER =================
-    async def _event_listener(self):
-        q = event_bus.subscribe()
-
-        while self.is_alive:
-            event = await q.get()
-
-            # Agar xabar aynan shu bot nusxasidan chiqqan bo'lsa, L1 keshni o'chirmaymiz!
-            if event["type"] == "SET" and event.get("node") != self.node_id:
-                async with self._l1_lock:
-                    self._l1_cache.pop(event["key"], None)
-
-    # ================= CLEANUP =================
     async def _l1_cleanup(self):
+        """L1 kesh ichidagi muddati o'tgan kalitlarni tozalab xotirani bo'shatish"""
         while self.is_alive:
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
+            try:
+                now = datetime.now(timezone.utc)
+                async with self._l1_lock:
+                    expired = [k for k, v in self._l1_cache.items() if now > v[1]]
+                    for k in expired:
+                        self._l1_cache.pop(k, None)
+            except Exception as e:
+                logger.error(f"❌ L1 Cleanup Error: {e}")
 
-            now = datetime.now(timezone.utc)
-
-            async with self._l1_lock:
-                expired = [k for k, v in self._l1_cache.items() if now > v[1]]
-                for k in expired:
-                    self._l1_cache.pop(k, None)
-
-    # ================= METRICS =================
     async def _metrics_logger(self):
         while self.is_alive:
             await asyncio.sleep(60)
-            metrics.log()
+            if self.is_alive:
+                metrics.log()
 
-    # ================= STOP =================
+    # ================= CLEAN STOP =================
     async def stop(self):
         self.is_alive = False
-    
-    
-    
         for t in self._tasks:
-           t.cancel()
-    
+            if not t.done():
+                t.cancel()
+        
         await asyncio.gather(*self._tasks, return_exceptions=True)
-    
+        self._tasks.clear()
+
         if self.redis:
             await self.redis.close()
-    
-        logger.info("✅ CACHE SHUTDOWN CLEAN (Group Preserved)")
-
-
-
-# ================= 🔥 SMART INVALIDATE METHOD =================
-# cache.py faylining eng oxiridagi eski 'invalidate' o'rniga to'liq almashtiring:
-
-    async def invalidate(self, table: str = None, obj_id: Any = None, key: str = None, broadcast: bool = True):
-        """
-        Workerlar va repozitoriy tomonidan chaqiriladigan universal kesh tozalash metodi.
-        Ham standart kalitlarni, ham maxsus kanallar va anime keshlarini xavfsiz tozalaydi.
-        """
-        try:
-            # -----------------------------------------------------------------
-            # 🔥 SPECIAL FIX: ANIME QIDIRUV XARITASI PREVENTIVE TOZALASH
-            # Agar tasodifan eski kodlar yoki boshqa modullardan "search_map" ni o'chirish kelsa,
-            # uni bizning yangi maxsus qidiruv kalitimizga yo'naltiramiz.
-            # -----------------------------------------------------------------
-            if (table == "anime_list" and obj_id == "search_map") or (key and "anime_search" in key):
-                key = f"{self.namespace}:anime_search:all_titles"
-                table = None
-                obj_id = None
-
-            # 1. 📢 KANALLAR KESHINI TOZALASH
-            is_channel_event = (
-                table == "channels" or 
-                (key and (
-                    key == f"{self.namespace}:channels:active" or 
-                    "channels" in key or 
-                    key.startswith("cache:")
-                ))
-            )
-            
-            if is_channel_event:
-                if self.redis:
-                    # A. Aniq bitta kanal ID'si kelsa
-                    if table == "channels" and obj_id and obj_id not in ["all_list", "active_list"]:
-                        specific_key = self._key(table, obj_id)
-                        async with self._l1_lock:
-                            self._l1_cache.pop(specific_key, None)
-                        await self.redis.delete(specific_key)
-                        logger.info(f"🧹 CacheManager: Specific channel [{obj_id}] cache deleted.")
-
-                    # B. Umumiy ro'yxat keshlarini majburiy o'chirish
-                    key_all = self._key("channels", "all_list")
-                    key_act = self._key("channels", "active_list")
-                    
-                    async with self._l1_lock:
-                        self._l1_cache.pop(key_all, None)
-                        self._l1_cache.pop(key_act, None)
-                        
-                    await self.redis.delete(key_all)
-                    await self.redis.delete(key_act)
-                    
-                    # C. Eski hardcoded kalitlarni ham tozalaymiz
-                    await self.redis.delete(f"{self.namespace}:channels:active")
-                    await self.redis.delete("cache:all_channels")
-                    await self.redis.delete("cache:active_channels")
-                
-                logger.info("🧹 CacheManager: All channel lists successfully wiped out from L1 & L2.")
-                
-                # 💡 Cluster Node-larni ogohlantirish (Boshqa serverlar ham L1 ni tozalashi uchun)
-                if broadcast and hasattr(self, 'event_bus') and self.event_bus:
-                    await self.event_bus.publish({"type": "INVALIDATE_CHANNELS", "node": self.node_id})
-                return
-
-            # 2. Agar tayyor to'liq kalit (key) berilgan bo'lsa
-            if key:
-                async with self._l1_lock:
-                    self._l1_cache.pop(key, None)
-                if self.redis:
-                    await self.redis.delete(key)
-                
-                # 💡 Klaster tarmoq xabari
-                if broadcast and hasattr(self, 'event_bus') and self.event_bus:
-                    await self.event_bus.publish({"type": "DEL", "key": key, "node": self.node_id})
-                
-                logger.info(f"🧹 CacheManager: Invalidated full key -> {key}")
-                return
-
-            # 3. Agar standart boshqa table va obj_id berilgan bo'lsa
-            if table and obj_id:
-                target_key = self._key(table, obj_id)
-                async with self._l1_lock:
-                    self._l1_cache.pop(target_key, None)
-                if self.redis:
-                    await self.redis.delete(target_key)
-                
-                # 💡 Klaster tarmoq xabari
-                if broadcast and hasattr(self, 'event_bus') and self.event_bus:
-                    await self.event_bus.publish({"type": "DEL", "key": target_key, "node": self.node_id})
-                
-                logger.info(f"🧹 CacheManager: Invalidated standard key -> {target_key}")
-
-        except Exception as e:
-            metrics.errors += 1
-            logger.error(f"❌ INVALIDATE ERROR: {e}")
-
+        logger.info("✅ CACHE SHUTDOWN CLEAN (Cluster Streams Preserved)")
 
 
 cache_manager = CacheManager(config.VALKEY_URL)
-
-
 valkey = cache_manager

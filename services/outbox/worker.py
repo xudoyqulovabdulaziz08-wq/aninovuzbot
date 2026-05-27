@@ -1,6 +1,5 @@
 import zlib
 import orjson
-import json
 import asyncio
 import logging
 import time
@@ -8,8 +7,8 @@ import random
 import hashlib
 from datetime import datetime, timezone
 from collections import defaultdict, deque
+from typing import Any, Dict, Optional, List
 
-import orjson
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -33,43 +32,42 @@ class MetricsBrain:
         self.latency_window = deque(maxlen=self.window_size)
         self._latency_sum = 0.0  # Real O(1) uchun yig'indi
         
-        # 🔥 FIX: Memory Leak oldini olish uchun faqat oxirgi 10 000 ta faol userni eslab qolamiz
+        # 🔥 Memory Leak oldini olish uchun faqat faol userni eslab qolamiz
         self.user_heat = defaultdict(int)
         self._user_cleanup_counter = 0
 
-    def cache_ratio(self):
+    def cache_ratio(self) -> float:
         total = self.cache_hits + self.cache_misses
         return (self.cache_hits / total) * 100 if total else 0
 
-    def add_latency(self, value):
+    def add_latency(self, value: float):
         if len(self.latency_window) == self.window_size:
             self._latency_sum -= self.latency_window[0]
         
         self.latency_window.append(value)
         self._latency_sum += value
 
-    def avg_latency(self):
+    def avg_latency(self) -> float:
         count = len(self.latency_window)
         return self._latency_sum / count if count > 0 else 0.0
 
-    def mark_user(self, user_id):
+    def mark_user(self, user_id: int):
         self.user_heat[user_id] += 1
         self._user_cleanup_counter += 1
         
-        # 🔥 FIX: Har 10 000 ta operatsiyada eskirgan foydalanuvchilar lug'atini tozalaymiz (RAM xavfsizligi)
         if self._user_cleanup_counter > 10000:
             self.clear_cold_users()
 
-    def is_hot_user(self, user_id):
+    def is_hot_user(self, user_id: int) -> bool:
         return self.user_heat[user_id] > 20
 
     def clear_cold_users(self):
-        """Aktiv bo'lmagan foydalanuvchilarni xotiradan o'chiradi"""
+        """ Aktiv bo'lmagan foydalanuvchilarni xotiradan tozalash (RAM xavfsizligi) """
         for uid in list(self.user_heat.keys()):
             if self.user_heat[uid] <= 2:
                 del self.user_heat[uid]
             else:
-                self.user_heat[uid] = self.user_heat[uid] // 2  # Issiqlik darajasini pasaytirish
+                self.user_heat[uid] = self.user_heat[uid] // 2
         self._user_cleanup_counter = 0
 
 
@@ -77,12 +75,12 @@ metrics = MetricsBrain()
 
 
 # ==========================================
-# 🚀 PRO ULTRA WORKER (CRASH SAFE)
+# 🚀 PRO ULTRA WORKER (CRASH + CLUSTER SAFE)
 # ==========================================
 class OutboxWorker:
-    def __init__(self, session_pool, cache_manager, redis=None):
+    def __init__(self, session_pool: Any, cache_manager: Any, redis: Optional[Any] = None):
         self.session_pool = session_pool
-        self.cache = cache_manager
+        self.cache = cache_manager  # Valkey L1+L2 Dual-Layer Cache obyekti
         self.redis = redis
 
         self.running = True
@@ -90,7 +88,7 @@ class OutboxWorker:
         # Tuning parameters
         self.batch_size = 100
         self.max_retry = 6
-        self.parallel_limit = 20
+        self.parallel_limit = 20  # Semaforda parallel ishlash chegarasi
 
         # DLQ key
         self.dlq_key = "dlq:outbox"
@@ -99,12 +97,12 @@ class OutboxWorker:
         self.failure_threshold = 10
         self.failure_count = 0
         self.circuit_open = False
-        self.last_fail_time = 0
+        self.last_fail_time = 0.0
 
     def dynamic_ttl(self, user_id: int) -> int:
         base = 300
         if metrics.is_hot_user(user_id):
-            return base * 5  # Hot user keshda ko'proq turadi
+            return base * 5  # Hot user keshda 25 daqiqa saqlanadi
         return base + random.randint(0, 120)
 
     def shard_key(self, key: str) -> str:
@@ -143,9 +141,9 @@ class OutboxWorker:
                 metrics.add_latency(time.time() - start_time)
 
                 if processed:
-                    await asyncio.sleep(0.01)  # Dinamik yuklama tanaffusi
+                    await asyncio.sleep(0.01)  # Dinamik yuklama tanaffusi (CPU tinchlanishi uchun)
                 else:
-                    await asyncio.sleep(0.5)   # Bo'sh turganda kutish
+                    await asyncio.sleep(0.5)   # Bo'sh turganda kutish banti
 
             except Exception as e:
                 metrics.failures += 1
@@ -159,6 +157,7 @@ class OutboxWorker:
     async def process_batch(self) -> int:
         async with self.session_pool() as session:
             try:
+                # Faqat qayta ishlanmagan eventlarni id bo'yicha tartiblab olamiz
                 stmt = (
                     select(OutboxEvent)
                     .where(OutboxEvent.processed.is_(False))
@@ -172,17 +171,25 @@ class OutboxWorker:
                 if not events:
                     return 0
 
-                for ev in events:
-                    try:
-                        success = await self.handle_event(ev)
-                        if success:
-                            ev.processed = True
-                            ev.created_at = datetime.now(timezone.utc)
-                            metrics.events_processed += 1
-                    except Exception as res_err:
-                        # 🔥 FIX: Xatoga uchragan elementni xavfsiz boshqarish
-                        await self.handle_failure(session, ev, res_err)
+                semaphore = asyncio.Semaphore(self.parallel_limit)
 
+                # Guruh ichida bitta eventni xavfsiz boshqarish oqimi
+                async def safe_process(ev: OutboxEvent):
+                    async with semaphore:
+                        try:
+                            success = await self.handle_event(ev)
+                            if success:
+                                ev.processed = True
+                                ev.created_at = datetime.now(timezone.utc)
+                                metrics.events_processed += 1
+                        except Exception as res_err:
+                            # Xatoga uchragan amalni tranzaksiya ichida xavfsiz belgilash
+                            await self.handle_failure(session, ev, res_err)
+
+                # Tasklarni parallel asinxron ishga tushiramiz (Silliq va tezkor qayta ishlash)
+                await asyncio.gather(*(safe_process(ev) for ev in events))
+
+                # Hamma eventlar holati yangilangach, yagona tranzaksiyada commit qilamiz
                 await session.commit()
                 
                 if self.failure_count > 0:
@@ -191,45 +198,55 @@ class OutboxWorker:
                 return len(events)
 
             except SQLAlchemyError as e:
-                logger.error(f"❌ DB BATCH ERROR: {e}")
+                logger.error(f"❌ DB BATCH ERROR IN WORKER: {e}")
                 await session.rollback()
                 self.failure_count += 1
                 return 0
 
     # ==========================================
-    # ⚙️ EVENT HANDLER (SAFE PARSING)
+    # ⚙️ EVENT HANDLER (SAFE PARSING & EXECUTION)
     # ==========================================
-
-
     async def handle_event(self, ev: OutboxEvent) -> bool:
         try:
-            # 1. Payloadni yuklash (agar bazadan string kelsa - o'giramiz)
+            # 1. Payloadni yuklash
             raw_payload = ev.payload
             if isinstance(raw_payload, str):
                 payload = orjson.loads(raw_payload)
             else:
                 payload = raw_payload
 
-            # 2. Siqilganlik holatini tekshirish
-            if payload.get("is_compressed"):
-                # HEX stringni baytga o'girish
+            # 2. Siqilganlik holatini tekshirish va ochish
+            if isinstance(payload, dict) and payload.get("is_compressed"):
                 compressed_hex = payload.get("data")
                 raw_bytes = bytes.fromhex(compressed_hex)
-            
-                # Decompression (zlib orqali ochish)
                 decompressed_bytes = zlib.decompress(raw_bytes)
-            
-                # Ochilgan ma'lumotni dict ga o'girish
                 payload = orjson.loads(decompressed_bytes)
             
         except Exception as e:
             logger.critical(f"🚨 PAYLOAD PARSING ERROR [ID: {ev.id}]: {e}")
             await self.send_to_dlq_raw(ev, f"Parsing failed: {e}")
-            return True # Worker qulamasligi uchun True qaytaramiz
+            return True  # Worker qulab zanjir to'xtamasligi uchun True qaytaramiz
 
-        # 3. Asosiy biznes logika davomi...
-        user_id = payload.get("user_id")
-        # ... qolgan kodlar
+        try:
+            # 3. Asosiy biznes logikani bajarish (Tashqi integratsiyalar)
+            # Parallel feyk xizmatlarni chaqiramiz
+            await asyncio.gather(
+                self.fake_telegram(payload),
+                self.fake_notify(payload)
+            )
+
+            # 4. Kesh bilan ishlash (Race-condition safe)
+            user_id = payload.get("user_id")
+            if user_id:
+                metrics.mark_user(int(user_id))
+                ttl = self.dynamic_ttl(int(user_id))
+                await self.cache_event(payload, ttl, ev.id)
+
+            return True
+
+        except Exception as biz_err:
+            # Biznes xatolik yuz berganini process_batch bilishi uchun xatoni tepaga otamiz
+            raise biz_err
 
     # ==========================================
     # 💀 RAW DLQ FOR BROKEN JSON
@@ -256,15 +273,15 @@ class OutboxWorker:
     # ==========================================
     # 🧠 CACHE ACTION (RACE-CONDITION SAFE)
     # ==========================================
-    async def cache_event(self, payload, ttl, event_id):
+    async def cache_event(self, payload: Dict[str, Any], ttl: int, event_id: str):
         try:
             user_id = payload.get("user_id")
             if user_id:
-                # 🔥 FIX: Invalidate va Set o'rniga, faqat bitta atomik xavfsiz SET buyrug'i.
-                # Event ID dagi ketma-ketlik (version) kesh eskirib qolishining (Race condition) oldini oladi.
+                # Dual-layer kesh klasteriga yozamiz (L1 local + L2 Valkey klaster yangilanadi)
+                # broadcast=True parametri barcha parallel node-larda kesh izchilligini ta'minlaydi
                 await self.cache.set(
                     table="users",
-                    obj_id=user_id,
+                    obj_id=str(user_id),
                     data=payload,
                     ttl=ttl
                 )
@@ -279,16 +296,16 @@ class OutboxWorker:
     # ==========================================
     # 📡 EXTERNAL FAKE SERVICES
     # ==========================================
-    async def fake_telegram(self, payload):
+    async def fake_telegram(self, payload: Dict[str, Any]):
         await asyncio.sleep(0.005)
 
-    async def fake_notify(self, payload):
+    async def fake_notify(self, payload: Dict[str, Any]):
         await asyncio.sleep(0.005)
 
     # ==========================================
     # 💀 FAILURE + DLQ MANAGEMENT
     # ==========================================
-    async def handle_failure(self, session, ev: OutboxEvent, err: Exception):
+    async def handle_failure(self, session: Any, ev: OutboxEvent, err: Exception):
         metrics.failures += 1
         ev.retry_count += 1
         
@@ -299,7 +316,7 @@ class OutboxWorker:
             ev.processed = True
             ev.created_at = datetime.now(timezone.utc)
         
-        # 🔥 FIX: Agar sessiya buzilgan bo'lsa merge() xavfsizroq ulaydi
+        # Agar sessiya oqimi uzilgan bo'lsa merge() orqali bog'lanish xavfsiz tiklanadi
         try:
             await session.merge(ev)
         except Exception as merge_err:

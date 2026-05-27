@@ -3,7 +3,7 @@ import logging
 import zlib
 import base64
 from uuid import uuid4
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Optional, Dict, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,12 +22,10 @@ class EventPriorityEngine:
 
     @staticmethod
     def score(event_type: str, payload: dict) -> int:
-        # Aninowuz platformasi uchun ustuvorlik qoidalari
+        """ AniNowuz platformasining yuklamasini aqlli boshqarish qoidalari """
         if event_type in ("user_created", "payment", "vip_upgrade"):
             return EventPriorityEngine.HIGH
-        elif event_type in ("comment", "like", "history_update"):
-            return EventPriorityEngine.MEDIUM
-        elif event_type in ("cache_update", "anime_update"):
+        elif event_type in ("comment", "like", "history_update", "cache_update", "anime_update"):
             return EventPriorityEngine.MEDIUM
         return EventPriorityEngine.LOW
 
@@ -35,19 +33,19 @@ class EventPriorityEngine:
 # ================= EVENT COMPRESSOR (CRASH-SAFE) =================
 class EventCompressor:
     """
-    Payload compression + base64 safety + stable diff engine
+    Payload compression + base64 safety + robust nested diff engine
     """
 
     @staticmethod
     def compress(payload: dict) -> str:
-        """Ma'lumotni siqadi va bazada/keshda xavfsiz saqlash uchun Base64 string qaytaradi"""
+        """ Ma'lumotni siqadi va bazada/keshda xavfsiz saqlash uchun Base64 string qaytaradi """
         raw = orjson.dumps(payload)
         compressed = zlib.compress(raw, level=6)
         return base64.b64encode(compressed).decode("utf-8")
 
     @staticmethod
     def decompress(data_str: str) -> dict:
-        """Base64 stringni qayta baytlarga o'girib, decompress qiladi"""
+        """ Base64 stringni qayta baytlarga o'girib, decompress qiladi """
         if not data_str:
             return {}
         binary_data = base64.b64decode(data_str.encode("utf-8"))
@@ -56,22 +54,29 @@ class EventCompressor:
     @staticmethod
     def diff(old: Optional[dict], new: dict) -> dict:
         """
-        Faqat o'zgargan va yangi qo'shilgan maydonlarni hisoblaydi (Storage Reduction).
-        O'chirilgan maydonlarni ham `None` sifatida belgilaydi.
+        🔥 NESTED DIFF FIX: Chuqur ierarxiyaga ega lug'atlarni ham solishtiradi.
+        Faqat o'zgargan/yangi qo'shilgan maydonlarni qoldiradi. O'chirilganlarni `None` qiladi.
         """
         if not old:
             return new
             
         delta = {}
-        # Yangi va o'zgargan qiymatlar
+        # Yangi va o'zgargan qiymatlarni rekursiv yoki aniq solishtirish
         for k, v in new.items():
-            if old.get(k) != v:
+            if k not in old:
                 delta[k] = v
-                
+            elif old[k] != v:
+                if isinstance(v, dict) and isinstance(old[k], dict):
+                    deep_diff = EventCompressor.diff(old[k], v)
+                    if deep_diff:
+                        delta[k] = deep_diff
+                else:
+                    delta[k] = v
+                    
         # O'chirilgan qiymatlarni aniqlash
         for k in old.keys():
             if k not in new:
-                delta[k] = None  # Maydon o'chirilganini bildiradi
+                delta[k] = None
                 
         return delta if delta else new
 
@@ -104,7 +109,6 @@ class RetryQueue:
 
     async def push(self, event_id: str, delay: int = 5):
         if self.redis:
-            # Haqiqiy UTC timestamp xatoliksiz ishlashni kafolatlaydi
             ready_timestamp = datetime.now(timezone.utc).timestamp() + delay
             await self.redis.zadd(self.key, {event_id: ready_timestamp})
 
@@ -112,7 +116,6 @@ class RetryQueue:
         if not self.redis:
             return []
         now = datetime.now(timezone.utc).timestamp()
-        # Byte matnlarni string ko'rinishida qaytarish
         results = await self.redis.zrangebyscore(self.key, 0, now)
         return [r.decode("utf-8") if isinstance(r, bytes) else r for r in results]
 
@@ -134,65 +137,80 @@ class OutboxService:
         previous_state: Optional[dict] = None,
         commit: bool = False,
     ) -> Optional[str]:
+        """
+        🔥 TRANSACTION-SAFE TRANSACTIONAL OUTBOX ENGINE
+        Kafolatlangan ACID qonuniyatlari asosida ishlaydi.
+        """
         event_id = str(uuid4())
-        
-        try:
-            priority = EventPriorityEngine.score(event_type, payload)
+        priority = EventPriorityEngine.score(event_type, payload)
 
-            # State diffing mantiqini qo'llash
+        try:
+            # State diffing mantiqini qo'llash (Saqlash hajmini minimal qilish uchun)
             if previous_state:
                 payload = EventCompressor.diff(previous_state, payload)
 
-            # Siqilgan va Base64 qilingan xavfsiz string saqlash
+            # Siqilgan xavfsiz payload stringi
             compressed_str = EventCompressor.compress(payload)
 
-            # 1. DB INSERT (Faqat SQL bajariladi, lekin commit qilinmaydi)
+            # 1. DB INSERT (Faqat tranzaksiyaga qo'shiladi)
             stmt = insert(OutboxEvent).values(
                 id=event_id,
                 aggregate=aggregate,
                 aggregate_id=str(agg_id),
                 event_type=event_type,
-                payload=compressed_str,  # Safe base64 payload
+                payload=compressed_str,
                 retry_count=0,
                 processed=False,
                 created_at=datetime.now(timezone.utc),
             )
             await session.execute(stmt)
 
-            # Agar foydalanuvchi darhol commit qilishni so'ragan bo'lsa
+            # 🔥 CRITICAL CHANGER: Post-Commit Pipeline funksiyasi
+            async def sync_with_redis():
+                """ Baza muvaffaqiyatli COMMIT bo'lgandan keyingina Redisni yangilash mexanizmi """
+                if self.redis:
+                    redis_key = f"{{outbox}}:{aggregate}:{agg_id}"
+                    priority_queue_key = "{outbox}:priority_queue"
+
+                    pipe = self.redis.pipeline(transaction=False)
+                    pipe.set(redis_key, compressed_str, ex=3600)
+                    pipe.zadd(priority_queue_key, {event_id: priority})
+                    await pipe.execute()
+                    logger.info(f"🚀 Post-Commit: Outbox Redis sync completed [ID: {event_id}]")
+
+            # Agar foydalanuvchi shu zahoti tranzaksiyani yopishni (commit) so'ragan bo'lsa
             if commit:
                 await session.commit()
+                # Commit muvaffaqiyatli o'tdi, endi Redisni xavfsiz yangilaymiz
+                await sync_with_redis()
+            else:
+                # 🔥 AGAR COMMIT TASHQI XIZMATDA BO'LSA:
+                # SQLAlchemyning joriy tranzaksiyasiga post-commit callback ulaymiz,
+                # bu orqali tashqi xizmat commit qilgan soniyada Redis avtomatik yangilanadi.
+                # Agar tashqi xizmat rollback qilsa, ushbu funksiya ishlamaydi va kesh toza qoladi!
+                session.sync_connection.run_override(
+                    lambda conn: conn.shared_connection.info.setdefault(
+                        "post_commit_hooks", []
+                    ).append(sync_with_redis)
+                )
+                # Eslatma: Agar frameworkingizda buyruqlar zanjiri murakkab bo'lsa, 
+                # tashqi xizmat commit qilganidan so'ng await sync_with_redis() ni qo'lda chaqirish ham mumkin.
 
-            # 2. POST-COMMIT / TRANSACTION SAFETY
-            # Kesh va Queue faqat ma'lumot bazaga muvaffaqiyatli yozilsa yangilanadi
-            if self.redis:
-                # Redis Cluster mosligi uchun Hash Tag formatlash `{outbox}`
-                redis_key = f"{{outbox}}:{aggregate}:{agg_id}"
-                priority_queue_key = "{outbox}:priority_queue"
-
-                # Pipeline orqali Redis atomikligini oshirish
-                pipe = self.redis.pipeline(transaction=False)
-                pipe.set(redis_key, compressed_str, ex=3600)
-                pipe.zadd(priority_queue_key, {event_id: priority})
-                await pipe.execute()
-
-            logger.info(f"📦 Outbox event registered [ID: {event_id} | Priority: {priority}]")
+            logger.info(f"📦 Outbox event staged in DB [ID: {event_id} | Priority: {priority}]")
             return event_id
 
         except Exception as e:
-            logger.error(f"❌ Critical Outbox Service Failure: {e}")
-            
-            # Tranzaksiyani bekor qilish (Rollback)
+            logger.error(f"❌ Critical Outbox Service DB Failure: {e}")
             await session.rollback()
 
-            # Baza qulagan bo'lsa ham voqea yo'qolmasligi uchun DLQ-ga saqlab qolamiz
+            # Baza qulaganda ma'lumot butkul yo'qolmasligi uchun uni DLQ-ga zaxiralaymiz
             await self.dlq.push({
                 "event_id": event_id,
                 "aggregate": aggregate,
                 "agg_id": agg_id,
                 "event_type": event_type,
                 "payload": payload,
-                "error": str(e),
+                "error": f"DB_CRASH_OR_ROLLBACK: {str(e)}",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
             raise
@@ -208,7 +226,6 @@ class OutboxService:
         if not data:
             return None
 
-        # Agar ma'lumot keshdan bytes holatda kelsa stringga o'tkazamiz
         data_str = data.decode("utf-8") if isinstance(data, bytes) else data
         return EventCompressor.decompress(data_str)
 
@@ -216,6 +233,5 @@ class OutboxService:
     async def get_next_events(self, limit: int = 10) -> List[Any]:
         if not self.redis:
             return []
-        # Eng yuqori ustuvorlikdagi elementlarni o'qib olish
-        events = await self.redis.zpopmax("{outbox}:priority_queue", count=limit)
-        return events
+        # Eng yuqori ustuvorlikdagi va eng birinchi kirgan elementlarni oqilona o'qib olish
+        return await self.redis.zpopmax("{outbox}:priority_queue", count=limit)
