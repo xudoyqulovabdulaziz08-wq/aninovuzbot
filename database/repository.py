@@ -630,6 +630,31 @@ class AnimeRepository:
         return None
 
     @staticmethod
+    async def list_anime(session: Any) -> List[Anime]:
+        """
+        📋 Bazadagi barcha animelarni oxirgi qo'shilgan tartibda olish.
+        N+1 muammosini oldini olish uchun janrlarini ham birga yuklaydi.
+        """
+        # SafeSession obyektini tayyorlashga majburlash (Proxy bo'lsa)
+        real_session = session._session if hasattr(session, "_session") else session
+        if hasattr(session, "_ensure_session"):
+            await session._ensure_session()
+
+        try:
+            # Oxirgi qo'shilgan animelar ro'yxat tepasida chiqishi uchun anime_id.desc() qildik
+            stmt = (
+                select(Anime)
+                .options(selectinload(Anime.genres))
+                .order_by(Anime.anime_id.desc())
+            )
+            result = await real_session.execute(stmt)
+            return result.scalars().all()
+            
+        except Exception as e:
+            logger.error(f"❌ list_anime ichida xatolik yuz berdi: {e}")
+            return []
+
+    @staticmethod
     def _serialize_anime(anime: Anime) -> Dict[str, Any]:
         """ 🔄 SQLAlchemy modelini JSON/Keshbop dict formatiga o'tkazish (Xavfsiz va tez) """
         # 💡 DIQQAT: selectinload ishlatganimiz sababli bu yerda yashirin so'rovlar (N+1) tugatildi!
