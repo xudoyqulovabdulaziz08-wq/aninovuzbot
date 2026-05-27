@@ -178,7 +178,7 @@ def admin_channels_kb():
 #========================================================================#
 def anime_menu_kb():
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="➕ Anime qo'shish", callback_data="AnimeMenuCallbacks.ADD_ANIME"))
+    builder.row(types.InlineKeyboardButton(text="➕ Anime qo'shish", callback_data="add_anime"))
     builder.row(types.InlineKeyboardButton(text="📋 Anime ro'yxati", callback_data="list_anime"))
     builder.row(types.InlineKeyboardButton(text="➖ Anime  o'chirish", callback_data="remove_anime"))
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_panel"))
@@ -408,6 +408,30 @@ def buy_vip_med_kb(user_id: int):
     # 4. Navigatsiya
     builder.row(
         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_menu")
+    )
+    
+    return builder.as_markup()
+
+
+
+
+#==========================add_anime_main_kb=============================#
+#========================================================================#
+def add_anime_main_kb():
+    builder = InlineKeyboardBuilder()
+    
+    # 1. Asosiy monitoring
+    builder.row(
+        types.InlineKeyboardButton(text="➕Anime qo'shish", callback_data="AnimeMenuCallbacks.ADD_ANIME")
+        
+    )
+    
+    builder.row(
+        types.InlineKeyboardButton(text="➕Qism qo'shish", callback_data="list_anime")
+    )
+
+    builder.row(
+         types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel")
     )
     
     return builder.as_markup()

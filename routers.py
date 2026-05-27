@@ -25,6 +25,10 @@ from handlers.admin_panel import (
 from handlers.creator_panel import (
     creator_admin_menu
 )
+from handlers.admin_panel.anime_main import(
+    anime_add,
+    anime_lists
+)
 # Asosiy router
 main_router = Router()
 
@@ -44,7 +48,10 @@ main_router.include_routers(
     user_control.router, #admin_panel/user_control router
     channel.router, #admin_panel/channel router
 
-    # 4. Qo'llanma, reklama, reyting, vip_buy, cabinet, referel va search routerlari (ular menyu bilan bog'liq)
+    # 4. Anime  routerlari
+    anime_add.router, #admin_panel/anime_main/anime_add router
+    anime_lists.router, #admin_panel/anime_main/anime_lists router
+    # 5. Qo'llanma, reklama, reyting, vip_buy, cabinet, referel va search routerlari (ular menyu bilan bog'liq)
     qollanma.router, #menu/qollanma router 
     reklama.router, #menu/reklama router
     reyting.router, #menu/reyting routter
@@ -52,7 +59,7 @@ main_router.include_routers(
     cabinet.router, #menu/cabinet router
     referel.router, #menu/referel router
 
-    # 5. Search routeri doimo pastda bo'lishi kerak, chunki u eng umumiy va ko'p ishlatiladi
+    # 6. Search routeri doimo pastda bo'lishi kerak, chunki u eng umumiy va ko'p ishlatiladi
     search.router   #menu/ search router doimo pastda
     
 )
