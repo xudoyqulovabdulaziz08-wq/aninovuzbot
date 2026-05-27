@@ -237,62 +237,58 @@ async def process_anime_description(message: Message, state: FSMContext):
 # QADAM 7: Tillarni olish -> BAZAGA VA KESHGA YOZISH (YAKUN)
 # =====================================================================
 @router.message(AnimeMenuState.adding_laguages)
-async def process_anime_languages_and_save(message: Message, state: FSMContext, session: Any): 
-    # 1. `session`ni to'g'ridan-to'g'ri argument sifatida qabul qiling 
-    # (Middleware uni data["session"] dan avtomatik yuklaydi)
-
+async def process_anime_languages_and_save(message: Message, state: FSMContext, **data):
     if not message.text:
-        await message.reply("❌ Iltimos, faqat matnli xabar yuboring. Anime tillarini kiriting:")
+        await message.reply("❌ Iltimos, faqat matnli xabar yuboring.")
         return
 
     await state.update_data(languages=message.text.strip())
     fsm_data = await state.get_data()
     
-    loading_msg = await message.answer("🚀 Ma'lumotlar bazaga saqlanmoqda, iltimos kuting...")
+    loading_msg = await message.answer("🚀 Ma'lumotlar bazaga saqlanmoqda...")
+    
+    # Sessiyani aniqlash (xuddi confirm_add kabi)
+    safe_session = data.get("session")
+    session_pool = data.get("session_pool")
+    actual_session = getattr(safe_session, "_session", None)
 
     try:
-        # 2. Xavfsiz sessiyani uyg'otish (Agar SafeSession bo'lsa)
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
+        # Bazaga saqlash logikasi (xavfsiz sessiya bilan)
+        async def perform_save(db_session):
+            return await AnimeRepository.add_anime(
+                session=db_session,
+                title=fsm_data["title"],
+                poster_id=fsm_data["poster_id"],
+                year=fsm_data["year"],
+                is_completed=False,
+                genres=fsm_data["genres"],
+                description=fsm_data["description"],
+                languages=fsm_data["languages"],
+                episodes=[]
+            )
 
-        # 3. Bazaga saqlash
-        new_anime = await AnimeRepository.add_anime(
-            session=session,
-            title=fsm_data["title"],
-            poster_id=fsm_data["poster_id"],
-            year=fsm_data["year"],
-            is_completed=False,
-            genres=fsm_data["genres"],
-            description=fsm_data["description"],
-            languages=fsm_data["languages"],
-            episodes=[]
-        )
-        
-        # 4. Muvaffaqiyatli xabar
+        # Sessiyani tekshirib, amallarni bajarish
+        if actual_session is not None:
+            new_anime = await perform_save(actual_session)
+        elif session_pool is not None:
+            async with session_pool() as new_session:
+                new_anime = await perform_save(new_session)
+        else:
+            raise RuntimeError("Database session pool topilmadi.")
+
+        # Muvaffaqiyatli xabar
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="➕ Qism qo'shish", callback_data=f"add_ep_{new_anime.anime_id}"))
         builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
         
         await loading_msg.edit_text(
-            f"🎉 **Yangi anime qo'shildi!**\n\n"
-            f"🎬 **Nomi:** {new_anime.title}\n"
-            f"🆔 **ID:** `{new_anime.anime_id}`",
+            f"🎉 **Yangi anime qo'shildi!**\n\n🎬 **Nomi:** {new_anime.title}\n🆔 **ID:** `{new_anime.anime_id}`",
             reply_markup=builder.as_markup()
         )
         
     except Exception as e:
         logger.error(f"❌ Animeni bazaga saqlashda xatolik: {e}")
-        
-        # 🔥 XAVFSIZ ROLLBACK: session None emasligini tekshiramiz
-        if session:
-            # Agar SafeSession bo'lsa, ichki sessiyani topamiz
-            target_session = getattr(session, "_session", session)
-            try:
-                await target_session.rollback()
-            except Exception as rb_err:
-                logger.error(f"Rollback qilishda xatolik: {rb_err}")
-        
-        await loading_msg.edit_text("❌ Bazada xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
+        await loading_msg.edit_text("❌ Tizimda xatolik yuz berdi. Ma'lumotlar bazaga saqlanmadi.")
         
     finally:
         await state.clear()
