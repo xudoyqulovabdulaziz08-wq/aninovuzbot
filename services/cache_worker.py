@@ -9,10 +9,15 @@ from typing import Any, List, Optional
 
 from sqlalchemy import select, delete, and_, or_
 from sqlalchemy.exc import SQLAlchemyError
-
 from database.models import OutboxEvent
 
+
 logger = logging.getLogger("CacheWorker")
+
+print("=" * 50)
+print("DEBUG: OutboxEvent modelining ustunlari:")
+print(OutboxEvent.__table__.columns.keys())
+print("=" * 50)
 
 
 class CacheInvalidationWorker:
