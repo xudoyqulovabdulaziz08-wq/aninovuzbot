@@ -1,348 +1,249 @@
-import zlib
-import orjson
 import asyncio
 import logging
 import time
-import random
-import hashlib
-from datetime import datetime, timezone
-from collections import defaultdict, deque
-from typing import Any, Dict, Optional, List
+from collections import OrderedDict, defaultdict
+from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional
 
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+import orjson
+from database.cache import valkey
 
-from database.models import OutboxEvent
-
-logger = logging.getLogger("PRO_WORKER")
+logger = logging.getLogger("AI-Orchestrator")
 
 
-# ==========================================
-# 🧠 AI CACHE + METRICS ENGINE (REAL O(1) & MEMORY SAFE)
-# ==========================================
-class MetricsBrain:
-    def __init__(self):
-        self.cache_hits = 0
-        self.cache_misses = 0
-        self.db_calls = 0
-        self.events_processed = 0
-        self.failures = 0
-
-        self.window_size = 200
-        self.latency_window = deque(maxlen=self.window_size)
-        self._latency_sum = 0.0  # Real O(1) uchun yig'indi
-        
-        # 🔥 Memory Leak oldini olish uchun faqat faol userni eslab qolamiz
-        self.user_heat = defaultdict(int)
-        self._user_cleanup_counter = 0
-
-    def cache_ratio(self) -> float:
-        total = self.cache_hits + self.cache_misses
-        return (self.cache_hits / total) * 100 if total else 0
-
-    def add_latency(self, value: float):
-        if len(self.latency_window) == self.window_size:
-            self._latency_sum -= self.latency_window[0]
-        
-        self.latency_window.append(value)
-        self._latency_sum += value
-
-    def avg_latency(self) -> float:
-        count = len(self.latency_window)
-        return self._latency_sum / count if count > 0 else 0.0
-
-    def mark_user(self, user_id: int):
-        self.user_heat[user_id] += 1
-        self._user_cleanup_counter += 1
-        
-        if self._user_cleanup_counter > 10000:
-            self.clear_cold_users()
-
-    def is_hot_user(self, user_id: int) -> bool:
-        return self.user_heat[user_id] > 20
-
-    def clear_cold_users(self):
-        """ Aktiv bo'lmagan foydalanuvchilarni xotiradan tozalash (RAM xavfsizligi) """
-        for uid in list(self.user_heat.keys()):
-            if self.user_heat[uid] <= 2:
-                del self.user_heat[uid]
-            else:
-                self.user_heat[uid] = self.user_heat[uid] // 2
-        self._user_cleanup_counter = 0
-
-
-metrics = MetricsBrain()
-
-
-# ==========================================
-# 🚀 PRO ULTRA WORKER (CRASH + CLUSTER SAFE)
-# ==========================================
-class OutboxWorker:
-    def __init__(self, session_pool: Any, cache_manager: Any, redis: Optional[Any] = None):
-        self.session_pool = session_pool
-        self.cache = cache_manager  # Valkey L1+L2 Dual-Layer Cache obyekti
-        self.redis = redis
-
-        self.running = True
-
-        # Tuning parameters
-        self.batch_size = 100
-        self.max_retry = 6
-        self.parallel_limit = 20  # Semaforda parallel ishlash chegarasi
-
-        # DLQ key
-        self.dlq_key = "dlq:outbox"
-
-        # Circuit Breaker state
-        self.failure_threshold = 10
-        self.failure_count = 0
-        self.circuit_open = False
-        self.last_fail_time = 0.0
-
-    def dynamic_ttl(self, user_id: int) -> int:
-        base = 300
-        if metrics.is_hot_user(user_id):
-            return base * 5  # Hot user keshda 25 daqiqa saqlanadi
-        return base + random.randint(0, 120)
-
-    def shard_key(self, key: str) -> str:
-        if not self.redis:
-            return key
-        hasher = hashlib.md5(key.encode('utf-8'))
-        shard = int(hasher.hexdigest(), 16) % 3
-        return f"{{shard:{shard}}}:{key}"
-
-    def check_circuit(self):
-        if self.failure_count >= self.failure_threshold:
-            if not self.circuit_open:
-                self.circuit_open = True
-                self.last_fail_time = time.time()
-                logger.critical("🚨 CIRCUIT BREAKER OPENED! DATABASE OR SERVICE IS DOWN.")
-
-        if self.circuit_open and time.time() - self.last_fail_time > 30:
-            self.circuit_open = False
-            self.failure_count = 0
-            logger.info("✅ CIRCUIT BREAKER CLOSED. RESUMING OPERATIONS.")
-
-    async def start(self):
-        logger.info("🚀 PRO ULTRA WORKER STARTED SUCCESSFULLY")
-
-        while self.running:
-            try:
-                self.check_circuit()
-
-                if self.circuit_open:
-                    await asyncio.sleep(2)
-                    continue
-
-                start_time = time.time()
-                processed = await self.process_batch()
-                
-                metrics.add_latency(time.time() - start_time)
-
-                if processed:
-                    await asyncio.sleep(0.01)  # Dinamik yuklama tanaffusi (CPU tinchlanishi uchun)
-                else:
-                    await asyncio.sleep(0.5)   # Bo'sh turganda kutish banti
-
-            except Exception as e:
-                metrics.failures += 1
-                self.failure_count += 1
-                logger.error(f"🔥 WORKER MAIN LOOP ERROR: {e}")
-                await asyncio.sleep(1)
-
-    # ==========================================
-    # 📦 BATCH PROCESSING (SAFE CONCURRENCY)
-    # ==========================================
-    async def process_batch(self) -> int:
-        async with self.session_pool() as session:
-            try:
-                # Faqat qayta ishlanmagan eventlarni id bo'yicha tartiblab olamiz
-                stmt = (
-                    select(OutboxEvent)
-                    .where(OutboxEvent.processed.is_(False))
-                    .order_by(OutboxEvent.id.asc()) 
-                    .limit(self.batch_size)
-                )
-
-                result = await session.execute(stmt)
-                events = result.scalars().all()
-
-                if not events:
-                    return 0
-
-                semaphore = asyncio.Semaphore(self.parallel_limit)
-
-                # Guruh ichida bitta eventni xavfsiz boshqarish oqimi
-                async def safe_process(ev: OutboxEvent):
-                    async with semaphore:
-                        try:
-                            success = await self.handle_event(ev)
-                            if success:
-                                ev.processed = True
-                                ev.created_at = datetime.now(timezone.utc)
-                                metrics.events_processed += 1
-                        except Exception as res_err:
-                            # Xatoga uchragan amalni tranzaksiya ichida xavfsiz belgilash
-                            await self.handle_failure(session, ev, res_err)
-
-                # Tasklarni parallel asinxron ishga tushiramiz (Silliq va tezkor qayta ishlash)
-                await asyncio.gather(*(safe_process(ev) for ev in events))
-
-                # Hamma eventlar holati yangilangach, yagona tranzaksiyada commit qilamiz
-                await session.commit()
-                
-                if self.failure_count > 0:
-                    self.failure_count = max(0, self.failure_count - 1)
-                
-                return len(events)
-
-            except SQLAlchemyError as e:
-                logger.error(f"❌ DB BATCH ERROR IN WORKER: {e}")
-                await session.rollback()
-                self.failure_count += 1
-                return 0
-
-    # ==========================================
-    # ⚙️ EVENT HANDLER (SAFE PARSING & EXECUTION)
-    # ==========================================
-    async def handle_event(self, ev: OutboxEvent) -> bool:
-        try:
-            # 1. Payloadni yuklash
-            raw_payload = ev.payload
-            if isinstance(raw_payload, str):
-                payload = orjson.loads(raw_payload)
-            else:
-                payload = raw_payload
-
-            # 2. Siqilganlik holatini tekshirish va ochish
-            if isinstance(payload, dict) and payload.get("is_compressed"):
-                compressed_hex = payload.get("data")
-                raw_bytes = bytes.fromhex(compressed_hex)
-                decompressed_bytes = zlib.decompress(raw_bytes)
-                payload = orjson.loads(decompressed_bytes)
-            
-        except Exception as e:
-            logger.critical(f"🚨 PAYLOAD PARSING ERROR [ID: {ev.id}]: {e}")
-            await self.send_to_dlq_raw(ev, f"Parsing failed: {e}")
-            return True  # Worker qulab zanjir to'xtamasligi uchun True qaytaramiz
-
-        try:
-            # 3. Asosiy biznes logikani bajarish (Tashqi integratsiyalar)
-            # Parallel feyk xizmatlarni chaqiramiz
-            await asyncio.gather(
-                self.fake_telegram(payload),
-                self.fake_notify(payload)
-            )
-
-            # 4. Kesh bilan ishlash (Race-condition safe)
-            user_id = payload.get("user_id")
-            if user_id:
-                metrics.mark_user(int(user_id))
-                ttl = self.dynamic_ttl(int(user_id))
-                await self.cache_event(payload, ttl, ev.id)
-
-            return True
-
-        except Exception as biz_err:
-            # Biznes xatolik yuz berganini process_batch bilishi uchun xatoni tepaga otamiz
-            raise biz_err
-
-    # ==========================================
-    # 💀 RAW DLQ FOR BROKEN JSON
-    # ==========================================
-    async def send_to_dlq_raw(self, ev: OutboxEvent, err_msg: str):
-        if self.redis:
-            try:
-                dlq_sharded_key = self.shard_key(self.dlq_key)
-                safe_payload = str(ev.payload) if ev.payload else "EMPTY_PAYLOAD"
-                await self.redis.lpush(
-                    dlq_sharded_key,
-                    orjson.dumps({
-                        "id": ev.id,
-                        "event_type": ev.event_type,
-                        "error": err_msg,
-                        "raw_payload": safe_payload,
-                        "time": datetime.now(timezone.utc).isoformat()
-                    })
-                )
-            except Exception as redis_err:
-                logger.error(f"🚨 FAILED TO PUSH TO REDIS RAW DLQ: {redis_err}")
-        logger.critical(f"💀 BROKEN EVENT FORCED TO DLQ: {ev.id}")
+# ================= AI METRICS =================
+@dataclass
+class AIMetrics:
+    total_requests: int = 0
+    cache_writes_l1: int = 0  # Write hisoblagichi
+    cache_writes_l2: int = 0
     
-    # ==========================================
-    # 🧠 CACHE ACTION (RACE-CONDITION SAFE)
-    # ==========================================
-    async def cache_event(self, payload: Dict[str, Any], ttl: int, event_id: str):
+    # RAM to'lib ketmasligi uchun vaqtga asoslangan issiqlik lug'ati
+    # user_id -> [score, last_activity_timestamp]
+    hot_users: Dict[int, List[Any]] = field(default_factory=lambda: defaultdict(list))
+
+    avg_latency: float = 0.0
+    last_batch_size: int = 0
+
+
+metrics = AIMetrics()
+
+
+# ================= STATE =================
+@dataclass
+class AppState:
+    l1_cache: OrderedDict = field(default_factory=OrderedDict)
+
+    cache_queue: asyncio.Queue = field(
+        default_factory=lambda: asyncio.Queue(maxsize=30000)
+    )
+
+    l1_max_size: int = 8000
+    is_running: bool = True
+
+    # adaptive engine speed
+    dynamic_sleep: float = 0.01
+
+    # prediction cache (AI TTL simulation)
+    user_score: Dict[int, float] = field(default_factory=lambda: defaultdict(float))
+    
+    # Issiqlik xaritasini pasaytirish intervali (Har 10 minutda)
+    last_decay_time: float = field(default_factory=time.time)
+
+
+state = AppState()
+
+
+# ================= AI: HOT USER DETECTION (SMOOTH, ASYNC DECAY & MEMORY SAFE) =================
+async def maybe_decay_heat_map():
+    """
+    ✅ Jiddiy Xato 1 & 2 FIX: Event Loop'ni bloklamaslik uchun vaqtga asoslangan asinxron tozalash engine.
+    Aktiv bo'lmagan foydalanuvchilar xotirada uzoq qolib ketmaydi.
+    """
+    current_time = time.time()
+    if current_time - state.last_decay_time < 600:  # Har 10 minutda
+        return
+
+    state.last_decay_time = current_time
+    logger.info("🧹 Optimizing AI user heat map & scores asynchronously to prevent memory leaks...")
+
+    user_keys = list(metrics.hot_users.keys())
+    chunk_size = 500  # Har 500 ta element tekshirilganda nafas rostlanadi
+    
+    for i, uid in enumerate(user_keys):
+        user_data = metrics.hot_users.get(uid)
+        if not user_data:
+            continue
+            
+        score, last_active = user_data
+        
+        # Agar foydalanuvchi 20 minutdan beri aktiv bo'lmasa yoki balli juda past bo'lsa - Xotiradan tozalash
+        if current_time - last_active > 1200 or score <= 2:
+            metrics.hot_users.pop(uid, None)
+            state.user_score.pop(uid, None)
+        else:
+            # Faol foydalanuvchilar ballini yumshoq pasaytirish
+            metrics.hot_users[uid][0] = score // 2
+
+        # 🚀 Event loop muzlab qolmasligi uchun har chunk yakunida boshqa korutinlarga yo'l beramiz
+        if i % chunk_size == 0:
+            await asyncio.sleep(0)
+
+
+def update_user_heat(user_id: int):
+    """ Foydalanuvchining ballarini yangilash (O(1) operatsiya, sinxron qism) """
+    current_time = time.time()
+    
+    if user_id in metrics.hot_users:
+        metrics.hot_users[user_id][0] += 1
+        metrics.hot_users[user_id][1] = current_time
+    else:
+        metrics.hot_users[user_id] = [1, current_time]
+
+    score = metrics.hot_users[user_id][0]
+
+    if score > 50:
+        state.user_score[user_id] = 0.2   # VERY HOT → Uzoq muddatli kesh (1 soat)
+    elif score > 20:
+        state.user_score[user_id] = 0.5   # Medium hot (30 minut)
+    else:
+        state.user_score[user_id] = 1.0   # Normal (10 minut)
+
+
+def predict_ttl(user_id: int) -> int:
+    """ AI TTL prediction engine based on behavior scores """
+    score = state.user_score.get(user_id, 1.0)
+    if score < 0.3:
+        return 3600   # 1 soat
+    elif score < 0.7:
+        return 1800   # 30 minut
+    else:
+        return 600    # 10 minut
+
+
+# ================= L1 CACHE MANAGEMENT =================
+def l1_set(user_id: int, data: Dict[str, Any]):
+    """ LRU (Least Recently Used) uslubida ishlaydigan xavfsiz L1 xotira keshi """
+    if user_id in state.l1_cache:
+        state.l1_cache.move_to_end(user_id)
+    state.l1_cache[user_id] = data
+
+    if len(state.l1_cache) > state.l1_max_size:
+        state.l1_cache.popitem(last=False)
+
+
+# ================= MAIN ORCHESTRATOR =================
+async def cache_orchestrator():
+    """
+    🚀 AI CACHE BRAIN ENGINE - High Throughput, Cluster-Safe & Ultra Fast
+    """
+    logger.info("🧠 AI CACHE ORCHESTRATOR STARTED (PRO MODE)")
+
+    while state.is_running:
+        raw_batch: List[Dict[str, Any]] = []
+        start_time = time.time()
+
         try:
-            user_id = payload.get("user_id")
-            if user_id:
-                # Dual-layer kesh klasteriga yozamiz (L1 local + L2 Valkey klaster yangilanadi)
-                # broadcast=True parametri barcha parallel node-larda kesh izchilligini ta'minlaydi
-                await self.cache.set(
-                    table="users",
-                    obj_id=str(user_id),
-                    data=payload,
-                    ttl=ttl
-                )
-                metrics.cache_hits += 1
+            # Davriy tozalash mantiqini asinxron ishga tushirish (Muzlashlarsiz)
+            await maybe_decay_heat_map()
+
+            # 1. Queue-dan birinchi xabarni bloklanib kutish
+            item = await state.cache_queue.get()
+            raw_batch.append(item)
+
+            # 2. High-Throughput yuklama: Qolgan xabarlarni non-blocking usulda yig'ish
+            for _ in range(300):
+                try:
+                    raw_batch.append(state.cache_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+
+            # L1 Local Cache va Issiqlik xaritasini yangilash
+            for entry in raw_batch:
+                u_id = entry.get("user_id")
+                if u_id:
+                    l1_set(u_id, entry)
+                    update_user_heat(u_id)
+                    metrics.cache_writes_l1 += 1
+                    metrics.total_requests += 1
+
+            # ================= DEDUPLICATION FOR L2 (VALKEY) =================
+            deduplicated_batch = {}
+            for entry in raw_batch:
+                u_id = entry.get("user_id")
+                if u_id:
+                    deduplicated_batch[u_id] = entry
+
+            # ================= VALKEY PIPELINE PREPARATION =================
+            redis_pipe = None
+            if valkey.is_alive and valkey.redis:
+                redis_pipe = valkey.redis.pipeline(transaction=False)
+
+            for user_id, entry in deduplicated_batch.items():
+                ttl = predict_ttl(user_id)
+                if redis_pipe:
+                    key = f"{{ai:users}}:{user_id}:v1"
+                    redis_pipe.set(
+                        key,
+                        orjson.dumps(entry),
+                        ex=ttl
+                    )
+                    metrics.cache_writes_l2 += 1
+
+            # ================= EXECUTE PIPELINE ASYNC =================
+            if redis_pipe and len(deduplicated_batch) > 0:
+                try:
+                    await redis_pipe.execute()
+                except Exception as e:
+                    logger.error(f"❌ Valkey Pipeline execution error: {e}")
+
+            # ================= METRICS UPDATE =================
+            metrics.last_batch_size = len(raw_batch)
+            latency = time.time() - start_time
+            
+            # ✅ Metrika optimizatsiyasi (Cold Start EMA shovqinini to'g'rilash)
+            if metrics.avg_latency == 0.0:
+                metrics.avg_latency = latency
             else:
-                logger.warning("⚠️ cache_event: Payload ichida user_id topilmadi.")
-                metrics.cache_misses += 1
+                metrics.avg_latency = (metrics.avg_latency * 0.9) + (latency * 0.1)
+
+            # ================= ADAPTIVE SPEED ENGINE =================
+            if len(raw_batch) > 200:
+                state.dynamic_sleep = max(0.001, state.dynamic_sleep * 0.7)
+            elif len(raw_batch) < 50:
+                state.dynamic_sleep = min(0.05, state.dynamic_sleep * 1.1)
+
+            await asyncio.sleep(state.dynamic_sleep)
+
+        except asyncio.CancelledError:
+            logger.warning("🛑 AI Orchestrator execution stopped via signal")
+            break
         except Exception as e:
-            metrics.cache_misses += 1
-            logger.error(f"❌ Cache operation error in worker: {e}")
+            logger.error(f"🔥 Orchestrator loop unexpected crash: {e}")
+            await asyncio.sleep(1.0)
+            
+        finally:
+            # ✅ Jiddiy Xato 3 FIX: task_done() har doim (hatto xatolik bo'lsa ham) xavfsiz chaqiriladi
+            if raw_batch:
+                for _ in range(len(raw_batch)):
+                    state.cache_queue.task_done()
 
-    # ==========================================
-    # 📡 EXTERNAL FAKE SERVICES
-    # ==========================================
-    async def fake_telegram(self, payload: Dict[str, Any]):
-        await asyncio.sleep(0.005)
 
-    async def fake_notify(self, payload: Dict[str, Any]):
-        await asyncio.sleep(0.005)
+# ================= STATS API =================
+def get_ai_stats() -> Dict[str, Any]:
+    total = metrics.total_requests
+    return {
+        "total_processed_requests": total,
+        "l1_total_writes": metrics.cache_writes_l1,
+        "l2_total_writes": metrics.cache_writes_l2,
+        "avg_latency_ms": round(metrics.avg_latency * 1000, 2),
+        "tracked_hot_users_count": len(metrics.hot_users),
+        "last_batch_size": metrics.last_batch_size,
+        "current_dynamic_sleep": round(state.dynamic_sleep, 4)
+    }
 
-    # ==========================================
-    # 💀 FAILURE + DLQ MANAGEMENT
-    # ==========================================
-    async def handle_failure(self, session: Any, ev: OutboxEvent, err: Exception):
-        metrics.failures += 1
-        ev.retry_count += 1
-        
-        logger.warning(f"⚠️ Event operational failure [ID: {ev.id} | Attempt: {ev.retry_count}]: {err}")
 
-        if ev.retry_count >= self.max_retry:
-            await self.send_to_dlq(ev, str(err))
-            ev.processed = True
-            ev.created_at = datetime.now(timezone.utc)
-        
-        # Agar sessiya oqimi uzilgan bo'lsa merge() orqali bog'lanish xavfsiz tiklanadi
-        try:
-            await session.merge(ev)
-        except Exception as merge_err:
-            logger.error(f"🚨 Session merge failed for failed event: {merge_err}")
-
-    async def send_to_dlq(self, ev: OutboxEvent, err: str):
-        if self.redis:
-            try:
-                dlq_sharded_key = self.shard_key(self.dlq_key)
-                await self.redis.lpush(
-                    dlq_sharded_key,
-                    orjson.dumps({
-                        "id": ev.id,
-                        "event_type": ev.event_type,
-                        "error": err,
-                        "time": datetime.now(timezone.utc).isoformat()
-                    })
-                )
-            except Exception as redis_err:
-                logger.error(f"🚨 FAILED TO PUSH TO REDIS DLQ: {redis_err}")
-
-        logger.critical(f"💀 EVENT PERMANENTLY MOVED TO DLQ: {ev.id}")
-
-    # ==========================================
-    # 🛑 GRACEFUL STOP
-    # ==========================================
-    async def stop(self):
-        self.running = False
-        logger.info("🛑 OUTBOX WORKER SHUTTING DOWN GRACEFULLY")
+# ================= STOP =================
+async def stop_orchestrator():
+    state.is_running = False
+    logger.info("🛑 AI Cache Brain system stopping...")
