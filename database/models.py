@@ -599,10 +599,13 @@ class OutboxEvent(Base):
 
     event_type: Mapped[str] = mapped_column(String, index=True)
 
-    # 🚨 FIX: JSON o'rniga JSONB ishlatamiz va default qiymat beramiz
     payload: Mapped[dict] = mapped_column(JSONB, default=dict, server_default='{}')
 
     processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    # 🌟 MANA SHU USTUNNI QO'SHASIZ:
+    # default=1 (past ustuvorlik), index=True (saralash tez bo'lishi uchun)
+    priority: Mapped[int] = mapped_column(Integer, default=1, index=True)
 
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
