@@ -2,6 +2,7 @@ import asyncio
 import time
 import logging
 import copy
+import inspect
 from collections import OrderedDict
 from typing import Any, Dict, Optional
 
@@ -75,7 +76,7 @@ class SafeSession:
         self.__dict__["_session_pool"] = session_pool
 
     async def _ensure_session(self):
-        """Metodlar chaqirilganda sessiya yoq bo'lsa, uni dinamik yaratish"""
+        """Metodlar chaqirilganda sessiya yo'q bo'lsa, uni dinamik yaratish"""
         if self._session is None:
             if self._session_pool is None:
                 raise RuntimeError("❌ DB session is None va session_pool berilmagan (Cache-only mode restriction).")
@@ -92,14 +93,14 @@ class SafeSession:
             return await self._session.__aexit__(exc_type, exc_val, exc_tb)
 
     def __getattr__(self, item):
-        # Bu qism sinxron atributlar va metodlar uchun proxy vazifasini bajaradi
+        """ ✅ FIX 4: Asinxron va Sinxron metodlarni ajratib qaytaruvchi aqlli lazy_wrapper """
         if self._session is None:
-            # Agar sessiya hali ochilmagan bo'lsa va asinxron metod chaqirilayotgan bo'lsa
-            # Dinamik ravishda asinxron chaqiruvni o'rab (wrap) qaytaramiz
             async def lazy_wrapper(*args, **kwargs):
                 session = await self._ensure_session()
                 func = getattr(session, item)
-                return await func(*args, **kwargs)
+                if inspect.iscoroutinefunction(func):
+                    return await func(*args, **kwargs)
+                return func(*args, **kwargs)
             return lazy_wrapper
             
         return getattr(self._session, item)
@@ -125,7 +126,7 @@ class DbSessionMiddleware(BaseMiddleware):
         data["session_pool"] = self.session_pool
         user_obj: Optional[User] = data.get("event_from_user")
         
-        # ✅ FIX 1: Butun oqim uchun faqat bitta boshqaruvchi proxy obyekt yaratamiz
+        # Butun oqim uchun faqat bitta boshqaruvchi proxy obyekt yaratamiz
         session_obj = SafeSession(session=None, session_pool=self.session_pool)
         data["session"] = session_obj
         
@@ -163,6 +164,7 @@ class DbSessionMiddleware(BaseMiddleware):
             # ======================================================
             if valkey.is_alive:
                 try:
+                    # Key pattern loyiha standartiga moslashtirildi `{db_users}`
                     cached_l2 = await valkey.get("{db_users}", user_id)
                     if cached_l2:
                         cached_l2 = dict(cached_l2)
@@ -180,14 +182,19 @@ class DbSessionMiddleware(BaseMiddleware):
                     logger.exception(f"❌ L2 CACHE FAILURE user_id={user_id}: {e}")
 
             # ======================================================
-            # 🔥 CIRCUIT BREAKER CHECK (PROTECTION LAYER)
+            # 🔥 CIRCUIT BREAKER CHECK & HALF-OPEN STATE (FIXED)
             # ======================================================
             async with state.db_lock:
                 if not state.db_status:
+                    # ✅ FIX 3: Tiklanish vaqti o'tgan bo'lsa, Half-Open (sinab ko'rish) rejimini yoqamiz
                     if time.time() - state.db_last_retry < state.cb_recovery_time:
                         logger.warning(f"🚫 DB blocked (circuit open). Emergency mode for user_id={user_id}")
                         data["user"] = self._emergency_user(user_obj)
                         return await handler(event, data)
+                    else:
+                        logger.info(f"🔄 Circuit Breaker: HALF-OPEN rejimiga o'tdi. Bazani sinab ko'ramiz...")
+                        state.db_status = True
+                        state.db_fail_count = 0
 
             # ======================================================
             # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
@@ -199,13 +206,16 @@ class DbSessionMiddleware(BaseMiddleware):
                 async with asyncio.timeout(10.0):
                     db_user = await UserRepository.get_or_create(db_real_session, user_obj)
 
+                # ✅ FIX 2: Baza muvaffaqiyatli ishladi, Circuit Breaker holatini to'liq tiklaymiz
+                await self._reset_circuit_breaker()
+
                 user_data = self._model_to_dict(db_user)
                 await state.l1_cache.set(user_id, user_data)
                 self._fire_and_forget_cache_update(user_data)
 
                 data["user"] = copy.deepcopy(user_data)
                 
-                # ✅ FIX 2: SafeSession ichiga faol real sessiyani ulaymiz
+                # SafeSession ichiga faol real sessiyani ulaymiz
                 session_obj._session = db_real_session
                 
                 return await handler(event, data)
@@ -222,21 +232,27 @@ class DbSessionMiddleware(BaseMiddleware):
             # ======================================================
             # 🛡️ GLOBAL CLEANUP LAYER (MANDATORY CLOSURES)
             # ======================================================
-            # 1. SafeSession proxy obyektini har qanday holatda yopamiz
+            # ✅ FIX 1: Double Close oldini olish zanjiri. 
+            # Agar proxy ichida (lazy) sessiya ochilib ketgan bo'lsa va db_real_session None bo'lsa, uni nazoratga olamiz.
+            if session_obj._session is not None and db_real_session is None:
+                db_real_session = session_obj._session
+
+            # SafeSession proxy daxlsizligini buzmaslik uchun uning ichki bog'lanishini tozalaymiz
+            if db_real_session:
+                session_obj.__dict__["_session"] = None  # Proxy'dan uzish
+                try:
+                    await db_real_session.close()
+                except Exception as e:
+                    logger.debug(f"Real DB session close error (ignored): {e}")
+
+            # Proxy obyektining o'zini yopish (agar ulanish qolgan bo'lsa)
             if isinstance(session_obj, SafeSession):
                 try:
                     await session_obj.close()
                 except Exception as e:
                     logger.debug(f"SafeSession proxy close error (ignored): {e}")
             
-            # 2. Qo'lda ochilgan bazaviy real sessiya ochiq qolgan bo'lsa poolga qaytaramiz
-            if db_real_session:
-                try:
-                    await db_real_session.close()
-                except Exception as e:
-                    logger.debug(f"Real DB session close error (ignored): {e}")
-            
-            # 3. Request ma'lumotlarini tozalaymiz (Memory leak/leakage oldini olish)
+            # Request ma'lumotlarini tozalaymiz (Memory leak oldini olish)
             data.pop("session", None)
             data.pop("session_pool", None)
 
@@ -254,8 +270,9 @@ class DbSessionMiddleware(BaseMiddleware):
             state.cache_queue.put_nowait(user_data)
         except asyncio.QueueFull:
             try:
+                # Navbat to'lsa eng eski elementni olib tashlab, yangisini qo'shamiz
                 dropped = state.cache_queue.get_nowait()
-                logger.warning(f"⚠️ Cache queue overflow, dropped: {dropped.get('user_id')}")
+                logger.warning(f"⚠️ Cache queue overflow, dropped oldest update for user_id={dropped.get('user_id', 'unknown')}")
                 state.cache_queue.put_nowait(user_data)
             except Exception as e:
                 logger.error(f"❌ Cache queue push exception: {e}")
@@ -286,6 +303,14 @@ class DbSessionMiddleware(BaseMiddleware):
             "is_emergency": True
         }
 
+    # ✅ FIX 2 (Yordamchi metod): Circuit Breaker holatini muvaffaqiyatli so'rovdan keyin tiklash
+    async def _reset_circuit_breaker(self):
+        async with state.db_lock:
+            if not state.db_status or state.db_fail_count > 0:
+                logger.info("🎉 DB connection is healthy. Circuit Breaker reset to CLOSED state.")
+                state.db_fail_count = 0
+                state.db_status = True
+
     async def _handle_db_failure(self, e):
         async with state.db_lock:
             state.db_fail_count += 1
@@ -294,4 +319,4 @@ class DbSessionMiddleware(BaseMiddleware):
             if state.db_fail_count >= state.cb_threshold:
                 state.db_status = False
                 state.db_last_retry = time.time()
-                logger.critical(f"🚨 CIRCUIT BREAKER STEPPED IN (OPENED): {e}")
+                logger.critical(f"🚨 CIRCUIT BREAKER STEPPED IN (OPENED): Baza quladi. Favqulodda rejim yoqildi.")
