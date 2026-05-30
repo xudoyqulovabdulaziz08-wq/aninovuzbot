@@ -77,7 +77,7 @@ async def start_workers():
             logger.info(f"🚀 Worker starting: {name}")
             await coro
         except asyncio.CancelledError:
-            logger.warning(f"🛑 Worker {name} received cancellation signal")
+            logger.info("ℹ️ System release signal received. Gracefully closing background tasks {name}...")
         except Exception as e:
             logger.error(f"💥 Worker crash {name}: {e}")
 

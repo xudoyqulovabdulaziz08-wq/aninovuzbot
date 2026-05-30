@@ -19,7 +19,7 @@ print("DEBUG: OutboxEvent modelining ustunlari:")
 print(OutboxEvent.__table__.columns.keys())
 print("=" * 50)
 
-
+    
 class CacheInvalidationWorker:
     """
     🚀 ULTRA PRO MAX DISTRIBUTED ZERO-LOSS EVENT SYSTEM
