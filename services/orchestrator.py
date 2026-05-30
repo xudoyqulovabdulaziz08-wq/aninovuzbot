@@ -18,8 +18,9 @@ class AIMetrics:
     cache_writes_l1: int = 0  # Write hisoblagichi
     cache_writes_l2: int = 0
     
-    # RAM to'lib ketmasligi uchun sekin-asta pasaytiriladigan issiqlik lug'ati
-    hot_users: Dict[int, int] = field(default_factory=lambda: defaultdict(int))
+    # RAM to'lib ketmasligi uchun vaqtga asoslangan issiqlik lug'ati
+    # user_id -> [score, last_activity_timestamp]
+    hot_users: Dict[int, List[Any]] = field(default_factory=lambda: defaultdict(list))
 
     avg_latency: float = 0.0
     last_batch_size: int = 0
@@ -53,48 +54,70 @@ class AppState:
 state = AppState()
 
 
-# ================= AI: HOT USER DETECTION (SMOOTH & DECAY) =================
-def update_user_heat(user_id: int):
+# ================= AI: HOT USER DETECTION (SMOOTH, ASYNC DECAY & MEMORY SAFE) =================
+async def maybe_decay_heat_map():
     """
-    AI-style behavior tracking with smooth memory decay (No Race Conditions).
+    ✅ FIX 1: Lug'at o'zgarishi (RuntimeError) va poyga holatlaridan (Race Conditions) 
+    to'liq himoyalangan asinxron tozalash mantiqi.
     """
     current_time = time.time()
+    if current_time - state.last_decay_time < 600:  # Har 10 minutda
+        return
+
+    state.last_decay_time = current_time
+    logger.info("🧹 Optimizing AI user heat map & scores asynchronously to prevent memory leaks...")
+
+    # Lug'at o'zgarib ketmasligi uchun kalitlarni nusxalab olamiz
+    user_keys = list(metrics.hot_users.keys())
+    chunk_size = 500  
     
-    # 🔥 CRITICAL FIX: .clear() o'rniga yumshoq pasaytirish (Smooth Decay).
-    # Bu orqali xotira tozalanadi va parallel oqimdagi ma'lumotlar uzilib qolmaydi.
-    if current_time - state.last_decay_time > 600:  # Har 10 minutda
-        logger.info("🧹 Optimizing AI user heat map & scores to prevent memory leaks...")
+    for i, uid in enumerate(user_keys):
+        user_data = metrics.hot_users.get(uid)
+        if not user_data:
+            continue
+            
+        score, last_active = user_data
         
-        # Aktiv bo'lmagan foydalanuvchilarni xotiradan butkul tozalaymiz, faollarini ballini kamaytiramiz
-        for uid in list(metrics.hot_users.keys()):
-            if metrics.hot_users[uid] <= 2:
-                del metrics.hot_users[uid]
-                if uid in state.user_score:
-                    del state.user_score[uid]
-            else:
-                metrics.hot_users[uid] = metrics.hot_users[uid] // 2  # Ballni pasaytirish
-                
-        state.last_decay_time = current_time
+        # Foydalanuvchi 20 minutdan beri aktiv bo'lmasa yoki balli past bo'lsa -> Tozalash
+        if current_time - last_active > 1200 or score <= 2:
+            metrics.hot_users.pop(uid, None)
+            state.user_score.pop(uid, None)
+        else:
+            # Aktiv foydalanuvchilar ballini yumshoq kamaytirish
+            if uid in metrics.hot_users:
+                metrics.hot_users[uid][0] = score // 2
 
-    metrics.hot_users[user_id] += 1
-    score = metrics.hot_users[user_id]
+        # Har chunk yakunida Event Loop uzilib qolmasligi uchun yo'l beramiz
+        if i % chunk_size == 0:
+            await asyncio.sleep(0)
 
-    if score > 50:
-        state.user_score[user_id] = 0.2   # VERY HOT → Uzoq muddatli kesh (AniNowuz loyihasi uchun)
-    elif score > 20:
-        state.user_score[user_id] = 0.5   # Medium hot
+
+def update_user_heat(user_id: int):
+    """ Foydalanuvchining ballarini yangilash (O(1) operatsiya, sinxron qism) """
+    current_time = time.time()
+    
+    if user_id in metrics.hot_users:
+        metrics.hot_users[user_id][0] += 1
+        metrics.hot_users[user_id][1] = current_time
     else:
-        state.user_score[user_id] = 1.0   # Normal
+        metrics.hot_users[user_id] = [1, current_time]
+
+    score = metrics.hot_users[user_id][0]
+
+    # Shaxsiy loyihangiz (AnInovuz) mantiqiga mos moslashtirilgan TTL koeffitsiyenti
+    if score > 50:
+        state.user_score[user_id] = 0.2   # VERY HOT → Uzoq muddatli kesh (1 soat)
+    elif score > 20:
+        state.user_score[user_id] = 0.5   # Medium hot (30 minut)
+    else:
+        state.user_score[user_id] = 1.0   # Normal (10 minut)
 
 
 def predict_ttl(user_id: int) -> int:
-    """
-    AI TTL prediction engine based on behavior scores
-    """
+    """ AI TTL prediction engine based on behavior scores """
     score = state.user_score.get(user_id, 1.0)
-
     if score < 0.3:
-        return 3600   # 1 soat (Ko'p ko'rilayotgan va faol foydalanuvchilar ma'lumoti)
+        return 3600   # 1 soat
     elif score < 0.7:
         return 1800   # 30 minut
     else:
@@ -109,7 +132,7 @@ def l1_set(user_id: int, data: Dict[str, Any]):
     state.l1_cache[user_id] = data
 
     if len(state.l1_cache) > state.l1_max_size:
-        state.l1_cache.popitem(last=False)  # Eng eski elementni o'chirish (RAM himoyasi)
+        state.l1_cache.popitem(last=False)
 
 
 # ================= MAIN ORCHESTRATOR =================
@@ -124,6 +147,9 @@ async def cache_orchestrator():
         start_time = time.time()
 
         try:
+            # Davriy tozalash mantiqini asinxron ishga tushirish (Muzlashlarsiz)
+            await maybe_decay_heat_map()
+
             # 1. Queue-dan birinchi xabarni bloklanib kutish
             item = await state.cache_queue.get()
             raw_batch.append(item)
@@ -135,8 +161,7 @@ async def cache_orchestrator():
                 except asyncio.QueueEmpty:
                     break
 
-            # 🔥 CRITICAL FIX: L1 Local Cache barcha xabarlarni to'liq ko'rishi shart!
-            # Deduplikatsiyadan oldin barcha xabarlarni L1 keshga va issiqlik xaritasiga yozamiz
+            # L1 Local Cache va Issiqlik xaritasini yangilash
             for entry in raw_batch:
                 u_id = entry.get("user_id")
                 if u_id:
@@ -146,7 +171,6 @@ async def cache_orchestrator():
                     metrics.total_requests += 1
 
             # ================= DEDUPLICATION FOR L2 (VALKEY) =================
-            # Valkey/Redis tarmog'iga tushadigan yuklamani kamaytirish uchun faqat oxirgi holatni qoldiramiz
             deduplicated_batch = {}
             for entry in raw_batch:
                 u_id = entry.get("user_id")
@@ -156,22 +180,18 @@ async def cache_orchestrator():
             # ================= VALKEY PIPELINE PREPARATION =================
             redis_pipe = None
             if valkey.is_alive and valkey.redis:
-                # Tranzaksiyasiz pipeline (High performance bulk write)
                 redis_pipe = valkey.redis.pipeline(transaction=False)
 
             for user_id, entry in deduplicated_batch.items():
-                # AI model orqali eng optimal TTL qiymatini bashorat qilamiz
                 ttl = predict_ttl(user_id)
-
-                # L2 Distributed Valkey/Redis Cache-ga pipeline orqali joylash
                 if redis_pipe:
-                    # Redis Cluster arxitekturasiga mos keluvchi Hash Tags {...} pattern
                     key = f"{{ai:users}}:{user_id}:v1"
                     redis_pipe.set(
                         key,
                         orjson.dumps(entry),
                         ex=ttl
                     )
+                    # ✅ FIX 2: Metrika hisoblagichi faqat haqiqiy yozilgan elementlar uchun hisoblanadi
                     metrics.cache_writes_l2 += 1
 
             # ================= EXECUTE PIPELINE ASYNC =================
@@ -181,21 +201,22 @@ async def cache_orchestrator():
                 except Exception as e:
                     logger.error(f"❌ Valkey Pipeline execution error: {e}")
 
-            # Navbatga ishlangan barcha elementlar yakunlanganini bildirish
-            for _ in range(len(raw_batch)):
-                state.cache_queue.task_done()
-
             # ================= METRICS UPDATE =================
             metrics.last_batch_size = len(raw_batch)
             latency = time.time() - start_time
-            metrics.avg_latency = (metrics.avg_latency * 0.9) + (latency * 0.1)
+            
+            # Cold Start EMA shovqinini to'g'rilash
+            if metrics.avg_latency == 0.0:
+                metrics.avg_latency = latency
+            else:
+                metrics.avg_latency = (metrics.avg_latency * 0.9) + (latency * 0.1)
 
             # ================= ADAPTIVE SPEED ENGINE =================
-            # Tizim yuklamasiga qarab uxlash vaqtini dinamik sozlash
             if len(raw_batch) > 200:
-                state.dynamic_sleep = max(0.001, state.dynamic_sleep * 0.7)  # Yuklama ko'p → Tezlashtirish
+                # ✅ FIX 3: CPU Spike va OS thread ochligini oldini olish uchun minimal chegara 0.002 ga o'tkazildi
+                state.dynamic_sleep = max(0.002, state.dynamic_sleep * 0.7)
             elif len(raw_batch) < 50:
-                state.dynamic_sleep = min(0.05, state.dynamic_sleep * 1.1)   # Yuklama kam → Tinchlantirish
+                state.dynamic_sleep = min(0.05, state.dynamic_sleep * 1.1)
 
             await asyncio.sleep(state.dynamic_sleep)
 
@@ -205,6 +226,12 @@ async def cache_orchestrator():
         except Exception as e:
             logger.error(f"🔥 Orchestrator loop unexpected crash: {e}")
             await asyncio.sleep(1.0)
+            
+        finally:
+            # task_done() har doim xavfsiz chaqiriladi (Deadlock himoyasi)
+            if raw_batch:
+                for _ in range(len(raw_batch)):
+                    state.cache_queue.task_done()
 
 
 # ================= STATS API =================
