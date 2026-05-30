@@ -1,11 +1,12 @@
+import asyncio
 import orjson
 import logging
 import zlib
-import base64
 from uuid import uuid4
 from datetime import datetime, timezone
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict, List, Tuple
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
@@ -21,8 +22,11 @@ class EventPriorityEngine:
     LOW = 1
 
     @staticmethod
-    def score(event_type: str, payload: dict) -> int:
-        """ AniNowuz platformasining yuklamasini aqlli boshqarish qoidalari """
+    def score(event_type: str) -> int:
+        """ 
+        ✅ Kichik Muammo 3 FIX: Ishlatilmayotgan payload parametri olib tashlandi, 
+        faqat event_type bo'yicha tezkor aniqlanadi.
+        """
         if event_type in ("user_created", "payment", "vip_upgrade"):
             return EventPriorityEngine.HIGH
         elif event_type in ("comment", "like", "history_update", "cache_update", "anime_update"):
@@ -33,52 +37,48 @@ class EventPriorityEngine:
 # ================= EVENT COMPRESSOR (CRASH-SAFE) =================
 class EventCompressor:
     """
-    Payload compression + base64 safety + robust nested diff engine
+    Payload compression with robust nested diff engine.
+    🚀 FIX 4 & Standartlashtirish: Hex ham, Base64 ham emas — toza BINARY (bytes) ishlatiladi!
     """
 
     @staticmethod
-    def compress(payload: dict) -> str:
-        """ Ma'lumotni siqadi va bazada/keshda xavfsiz saqlash uchun Base64 string qaytaradi """
-        raw = orjson.dumps(payload)
-        compressed = zlib.compress(raw, level=6)
-        return base64.b64encode(compressed).decode("utf-8")
+    def compress(payload: dict) -> bytes:
+        """ Ma'lumotni JSON qilib siqadi va xom baytlar (bytes) qaytaradi """
+        return zlib.compress(orjson.dumps(payload), level=6)
 
     @staticmethod
-    def decompress(data_str: str) -> dict:
-        """ Base64 stringni qayta baytlarga o'girib, decompress qiladi """
-        if not data_str:
+    def decompress(binary_data: bytes) -> dict:
+        """ Baytlarni decompress qilib JSON obyekti sifatida yuklaydi """
+        if not binary_data:
             return {}
-        binary_data = base64.b64decode(data_str.encode("utf-8"))
         return orjson.loads(zlib.decompress(binary_data))
 
     @staticmethod
-    def diff(old: Optional[dict], new: dict) -> dict:
+    def diff(old: Optional[dict], new: dict) -> Optional[dict]:
         """
-        🔥 NESTED DIFF FIX: Chuqur ierarxiyaga ega lug'atlarni ham solishtiradi.
-        Faqat o'zgargan/yangi qo'shilgan maydonlarni qoldiradi. O'chirilganlarni `None` qiladi.
+        🔥 Jiddiy Xato 5 FIX: Chuqur ierarxiyani to'g'ri solishtiradi.
+        Agar hech narsa o'zgarmasa, bo'sh dict ({}) qaytaradi va bu o'zgarish yo'qligini anglatadi.
         """
         if not old:
             return new
             
         delta = {}
-        # Yangi va o'zgargan qiymatlarni rekursiv yoki aniq solishtirish
         for k, v in new.items():
             if k not in old:
                 delta[k] = v
             elif old[k] != v:
                 if isinstance(v, dict) and isinstance(old[k], dict):
                     deep_diff = EventCompressor.diff(old[k], v)
-                    if deep_diff:
+                    if deep_diff:  # Agar ichki obyektda o'zgarish bo'lsa
                         delta[k] = deep_diff
                 else:
                     delta[k] = v
                     
-        # O'chirilgan qiymatlarni aniqlash
         for k in old.keys():
             if k not in new:
                 delta[k] = None
                 
-        return delta if delta else new
+        return delta  # ✅ Hech narsa o'zgarmasa bo'sh dict ({}) qaytadi
 
 
 # ================= DLQ HANDLER =================
@@ -88,9 +88,13 @@ class DeadLetterQueue:
         self.key = "{outbox}:dlq"
 
     async def push(self, event: dict):
+        """ ✅ Jiddiy Xato 4 FIX: LTRIM qo'shildi, DLQ hajmi cheksiz o'smaydi (Max 10k) """
         if self.redis:
             try:
-                await self.redis.lpush(self.key, orjson.dumps(event))
+                pipe = self.redis.pipeline(transaction=False)
+                pipe.lpush(self.key, orjson.dumps(event))
+                pipe.ltrim(self.key, 0, 9999)  # Eng so'nggi 10,000 ta xato xabari saqlanadi
+                await pipe.execute()
             except Exception as e:
                 logger.critical(f"🚨 FAILED TO WRITE TO DLQ REDIS: {e}")
 
@@ -113,11 +117,21 @@ class RetryQueue:
             await self.redis.zadd(self.key, {event_id: ready_timestamp})
 
     async def pop_ready(self) -> List[str]:
+        """ ✅ Jiddiy Xato 3 FIX: Atomic Read + Delete (Pipeline MULTI/EXEC) orqali cheksiz loop bartaraf etildi """
         if not self.redis:
             return []
+        
         now = datetime.now(timezone.utc).timestamp()
-        results = await self.redis.zrangebyscore(self.key, 0, now)
-        return [r.decode("utf-8") if isinstance(r, bytes) else r for r in results]
+        try:
+            async with self.redis.pipeline(transaction=True) as pipe:
+                pipe.zrangebyscore(self.key, 0, now)
+                pipe.zremrangebyscore(self.key, 0, now)  # O'qilgan zahoti o'chirish
+                results, _ = await pipe.execute()
+                
+            return [r.decode("utf-8") if isinstance(r, bytes) else r for r in results]
+        except Exception as e:
+            logger.error(f"❌ RetryQueue pop_ready failed: {e}")
+            return []
 
 
 # ================= OUTBOX SERVICE CORE =================
@@ -139,78 +153,81 @@ class OutboxService:
     ) -> Optional[str]:
         """
         🔥 TRANSACTION-SAFE TRANSACTIONAL OUTBOX ENGINE
-        Kafolatlangan ACID qonuniyatlari asosida ishlaydi.
+        ACID va asinxron event-driven arxitektura qonuniyatlariga to'liq mos keladi.
         """
         event_id = str(uuid4())
-        priority = EventPriorityEngine.score(event_type, payload)
+        priority = EventPriorityEngine.score(event_type)
 
         try:
-            # State diffing mantiqini qo'llash (Saqlash hajmini minimal qilish uchun)
+            # State diffing mantiqini tekshirish
             if previous_state:
-                payload = EventCompressor.diff(previous_state, payload)
+                diff_payload = EventCompressor.diff(previous_state, payload)
+                # ✅ Jiddiy Xato 5 FIX: Agar diff bo'sh bo'lsa, demak o'zgarish yo'q, jarayonni to'xtatamiz
+                if previous_state and not diff_payload:
+                    logger.info(f"ℹ️ Outbox skipped: O'zgarish topilmadi ({aggregate}:{agg_id})")
+                    return None
+                payload = diff_payload
 
-            # Siqilgan xavfsiz payload stringi
-            compressed_str = EventCompressor.compress(payload)
+            # Siqilgan binary xom baytlar
+            compressed_bytes = EventCompressor.compress(payload)
 
-            # 1. DB INSERT (Faqat tranzaksiyaga qo'shiladi)
+            # DB INSERT
             stmt = insert(OutboxEvent).values(
                 id=event_id,
                 aggregate=aggregate,
                 aggregate_id=str(agg_id),
                 event_type=event_type,
-                payload=compressed_str,
+                payload=compressed_bytes, 
+                priority=priority,  # ✅ Kichik Muammo 1 FIX: DB modeliga priority saqlanadi
                 retry_count=0,
                 processed=False,
                 created_at=datetime.now(timezone.utc),
             )
             await session.execute(stmt)
 
-            # 🔥 CRITICAL CHANGER: Post-Commit Pipeline funksiyasi
+            # Redis sinxronizatsiyasi uchun asinxron pipeline funksiyasi
             async def sync_with_redis():
-                """ Baza muvaffaqiyatli COMMIT bo'lgandan keyingina Redisni yangilash mexanizmi """
                 if self.redis:
-                    redis_key = f"{{outbox}}:{aggregate}:{agg_id}"
-                    priority_queue_key = "{outbox}:priority_queue"
+                    try:
+                        redis_key = f"{{outbox}}:{aggregate}:{agg_id}"
+                        priority_queue_key = "{outbox}:priority_queue"
 
-                    pipe = self.redis.pipeline(transaction=False)
-                    pipe.set(redis_key, compressed_str, ex=3600)
-                    pipe.zadd(priority_queue_key, {event_id: priority})
-                    await pipe.execute()
-                    logger.info(f"🚀 Post-Commit: Outbox Redis sync completed [ID: {event_id}]")
+                        pipe = self.redis.pipeline(transaction=False)
+                        pipe.set(redis_key, compressed_bytes, ex=3600)
+                        pipe.zadd(priority_queue_key, {event_id: priority})
+                        await pipe.execute()
+                        logger.info(f"🚀 Post-Commit: Redis integratsiyasi bajarildi [ID: {event_id}]")
+                    except Exception as re:
+                        logger.error(f"⚠️ Redis post-commit sync error: {re}. Worker DB orqali qayta ishlaydi.")
 
-            # Agar foydalanuvchi shu zahoti tranzaksiyani yopishni (commit) so'ragan bo'lsa
+            # ✅ Jiddiy Xato 1 FIX: To'g'ri asinxron SQLAlchemy after_commit hodisasi ulandi!
             if commit:
                 await session.commit()
-                # Commit muvaffaqiyatli o'tdi, endi Redisni xavfsiz yangilaymiz
                 await sync_with_redis()
             else:
-                # 🔥 AGAR COMMIT TASHQI XIZMATDA BO'LSA:
-                # SQLAlchemyning joriy tranzaksiyasiga post-commit callback ulaymiz,
-                # bu orqali tashqi xizmat commit qilgan soniyada Redis avtomatik yangilanadi.
-                # Agar tashqi xizmat rollback qilsa, ushbu funksiya ishlamaydi va kesh toza qoladi!
-                session.sync_connection.run_override(
-                    lambda conn: conn.shared_connection.info.setdefault(
-                        "post_commit_hooks", []
-                    ).append(sync_with_redis)
-                )
-                # Eslatma: Agar frameworkingizda buyruqlar zanjiri murakkab bo'lsa, 
-                # tashqi xizmat commit qilganidan so'ng await sync_with_redis() ni qo'lda chaqirish ham mumkin.
+                # Tashqi tranzaksiya commit bo'lishini kutuvchi xavfsiz hodisa tinglovchisi
+                @event.listens_for(session.sync_session, "after_commit", once=True)
+                def after_commit_hook(target_session):
+                    # Asinxron fonda (Event Loopni bloklamay) Redisga yozish vazifasini topshiramiz
+                    asyncio.create_task(sync_with_redis())
 
             logger.info(f"📦 Outbox event staged in DB [ID: {event_id} | Priority: {priority}]")
             return event_id
 
         except Exception as e:
             logger.error(f"❌ Critical Outbox Service DB Failure: {e}")
-            await session.rollback()
-
-            # Baza qulaganda ma'lumot butkul yo'qolmasligi uchun uni DLQ-ga zaxiralaymiz
+            
+            # ✅ Jiddiy Xato 2 FIX: create_event ichida session.rollback() olib tashlandi.
+            # Tashqi biznes mantiqining tranzaksiyasiga daxl qilinmaydi, faqat raise tashlanadi!
+            
+            # Ma'lumot yo'qolmasligi uchun uni xavfsiz DLQ-ga zaxiralaymiz
             await self.dlq.push({
                 "event_id": event_id,
                 "aggregate": aggregate,
                 "agg_id": agg_id,
                 "event_type": event_type,
                 "payload": payload,
-                "error": f"DB_CRASH_OR_ROLLBACK: {str(e)}",
+                "error": f"OUTBOX_STAGE_ERROR: {str(e)}",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
             raise
@@ -226,12 +243,33 @@ class OutboxService:
         if not data:
             return None
 
-        data_str = data.decode("utf-8") if isinstance(data, bytes) else data
-        return EventCompressor.decompress(data_str)
+        # Ma'lumot to'g'ridan-to'g'ri bytes formatida keladi va decompress qilinadi
+        return EventCompressor.decompress(data)
 
-    # ================= PRIORITY FETCH =================
-    async def get_next_events(self, limit: int = 10) -> List[Any]:
+    # ================= ZERO-LOSS PRIORITY FETCH =================
+    async def get_next_events(self, limit: int = 10) -> List[Tuple[str, float]]:
+        """
+        🚀 ZERO-LOSS ACQUISITION ENGINE (At-Least-Once kafolati)
+        ✅ Kichik Muammo 2 Izoh: Agar Redis bo'sh bo'lsa yoki uzilsa, Worker o'z-o'zidan 
+        Baza (DB) dagi OutboxEvent jadvalidan `processed=False` va `priority` bo'yicha order qilib o'qiydi.
+        """
         if not self.redis:
             return []
-        # Eng yuqori ustuvorlikdagi va eng birinchi kirgan elementlarni oqilona o'qib olish
-        return await self.redis.zpopmax("{outbox}:priority_queue", count=limit)
+        
+        priority_queue_key = "{outbox}:priority_queue"
+        # Ustuvorlik bo'yicha o'qish (O'chirmasdan, distributed worker xavfsizligi uchun)
+        results = await self.redis.zrevrange(priority_queue_key, 0, limit - 1, withscores=True)
+        
+        formatted_results = []
+        for event_id_bytes, score in results:
+            ev_id = event_id_bytes.decode("utf-8") if isinstance(event_id_bytes, bytes) else event_id_bytes
+            formatted_results.append((ev_id, score))
+            
+        return formatted_results
+
+    async def acknowledge_event(self, event_id: str) -> bool:
+        """ Worker vazifani muvaffaqiyatli tugatgandan so'ng xabarni navbatdan to'liq o'chiradi """
+        if self.redis:
+            priority_queue_key = "{outbox}:priority_queue"
+            return await self.redis.zrem(priority_queue_key, event_id) > 0
+        return False
