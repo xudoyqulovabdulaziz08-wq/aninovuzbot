@@ -3,8 +3,8 @@ import logging
 import asyncio
 
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional
-from sqlalchemy import select, update, and_, delete
+from typing import List, Dict, Any, Optional, Tuple
+from sqlalchemy import select, update, and_, delete, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
@@ -18,6 +18,7 @@ logger = logging.getLogger("UserRepository")
 
 class UserRepository:
 
+    # ================= UTILS & HELPERS =================
     @staticmethod
     def _get_real_session(session: Any) -> Any:
         """ Middleware'dan kelayotgan SafeSession proxy ichidan haqiqiy sessiyani xavfsiz ajratib olish """
@@ -25,16 +26,51 @@ class UserRepository:
             return session._session
         return session
 
-    # ================= GET OR CREATE (UPSERT) =================
     @staticmethod
-    async def get_or_create(session: Any, tg_user: Any) -> Any:
-        """
-        🚀 Foydalanuvchini bazaga qo'shish yoki username o'zgargan bo'lsa yangilash (Upsert)
-        """
+    async def _prepare_session(session: Any) -> Any:
+        """ Sessiya tayyorligini ta'minlash va haqiqiy sessiyani qaytarish """
         if hasattr(session, "_ensure_session"):
             await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+        return UserRepository._get_real_session(session)
 
+    @staticmethod
+    def _to_dict(user: DBUser) -> dict:
+        """ SQLAlchemy modelini keshbop va xavfsiz dict holatiga keltirish """
+        return {
+            "user_id": user.user_id,
+            "username": user.username,
+            "status": user.status,
+            "points": user.points,
+            "referral_count": user.referral_count,
+            "referred_by": user.referred_by,
+            "vip_expire_date": user.vip_expire_date.isoformat() if user.vip_expire_date else None,
+            "health_mode": user.health_mode,
+            "joined_at": user.joined_at.isoformat() if user.joined_at else None
+        }
+
+    @staticmethod
+    async def _invalidate_cache(user_id: int, broadcast: bool = True):
+        """ 
+        🔥 UNIVERSAL KESH TOZALASH 
+        Kichik Muammo 3 FIX: broadcast boshqariladigan qilindi.
+        Kichik Muammo 4 FIX: Jadval nomi 'users' ekanligi aniqlashtirildi.
+        """
+        try:
+            await valkey.invalidate(table="users", obj_id=str(user_id), broadcast=broadcast)
+        except Exception as e:
+            logger.debug(f"❌ Cache invalidate error: {e}")
+
+    # ================= GET OR CREATE (UPSERT) =================
+    @staticmethod
+    async def get_or_create(session: Any, tg_user: Any) -> dict:
+        """
+        🚀 Foydalanuvchini bazaga qo'shish yoki username o'zgargan bo'lsa yangilash (Upsert)
+        Jiddiy Xato 4 FIX: Faqat xatolik aniq yuz bergandagina (xmax != 0) kesh tozalanadi.
+        Qaytish qiymati doim DICT.
+        """
+        real_session = await UserRepository._prepare_session(session)
+
+        # xmax != 0 sharti PostgreSQL-da satr yangilanganligini anglatadi (Yangi qo'shilsa xmax=0 bo'ladi)
         stmt = (
             insert(DBUser)
             .values(
@@ -48,34 +84,43 @@ class UserRepository:
                 index_elements=[DBUser.user_id],
                 set_={"username": tg_user.username}
             )
-            .returning(DBUser)
+            .returning(DBUser, literal_column("xmax != 0").label("is_updated"))
         )
         
         result = await real_session.execute(stmt)
-        user = result.scalar_one()
+        row = result.fetchone()
         
-        # Ma'lumot yangilangan bo'lishi mumkinligi sababli keshni tozalaymiz
-        await UserRepository._invalidate_cache(tg_user.id)
-        return user
+        if not row:
+            raise RuntimeError("❌ User upsert failed: No row returned.")
+            
+        user_model, is_updated = row[0], row[1]
+        user_dict = UserRepository._to_dict(user_model)
+
+        # Keshni faqat ma'lumot rostdan ham yangilangan bo'lsa tozalaymiz
+        if is_updated:
+            await UserRepository._invalidate_cache(tg_user.id, broadcast=True)
+            
+        return user_dict
 
     # ================= GET BY ID =================
     @staticmethod
-    async def get_by_id(session: Any, user_id: int) -> Optional[Any]:
+    async def get_by_id(session: Any, user_id: int) -> Optional[dict]:
         """
         🔍 Foydalanuvchini L1/L2 keshdan yoki bazadan qidirish
+        Jiddiy Xato 1 FIX: Har doim bir xil ma'lumot turi (dict) qaytaradi!
         """
         obj_key = str(user_id)
+        
+        # 1. Keshdan qidirish
         try:
-            # Dual-layer kesh: L1 hit bo'lsa 0ms da qaytadi
             cached_user = await valkey.get(table="users", obj_id=obj_key)
-            if cached_user:
+            if cached_user and isinstance(cached_user, dict):
                 return cached_user
         except Exception as cache_err:
             logger.warning(f"⚠️ get_by_id kesh o'qishda xatolik: {cache_err}")
 
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+        # 2. Agar keshda bo'lmasa, bazadan o'qish
+        real_session = await UserRepository._prepare_session(session)
 
         try:
             result = await real_session.execute(
@@ -84,201 +129,156 @@ class UserRepository:
             user = result.scalar_one_or_none()
             
             if user:
-                # SQLAlchemy modelini keshbop dict holatiga keltirish (Yoki serialize metodi)
-                user_dict = {
-                    "user_id": user.user_id,
-                    "username": user.username,
-                    "status": user.status,
-                    "points": user.points,
-                    "referral_count": user.referral_count,
-                    "referred_by": user.referred_by,
-                    "vip_expire_date": user.vip_expire_date.isoformat() if user.vip_expire_date else None
-                }
+                user_dict = UserRepository._to_dict(user)
                 try:
-                    await valkey.set(table="users", obj_id=obj_key, data=user_dict, ttl=1800) # 30 daqiqalik kesh
+                    await valkey.set(table="users", obj_id=obj_key, data=user_dict, ttl=1800)
                 except Exception as cache_err:
                     logger.error(f"⚠️ user keshga yozishda xato: {cache_err}")
-                return user
+                return user_dict
                 
             return None
         except Exception as e:
             logger.error(f"❌ get_by_id error: {e}")
-            return None
-
-    # ================= CACHE INVALIDATION =================
-    @staticmethod
-    async def _invalidate_cache(user_id: int):
-        """
-        🔥 UNIVERSAL KESH TOZALASH (L1 Local Memory + L2 Valkey Klaster sinxronizatsiyasi)
-        """
-        try:
-            # broadcast=True parametri orqali kesh barcha parallel bot node-larida (L1) ham bir vaqtda o'chadi
-            await valkey.invalidate(table="users", obj_id=str(user_id), broadcast=True)
-        except Exception as e:
-            logger.debug(f"❌ Cache invalidate error: {e}")
+            raise
 
     # ================= UPDATE POINTS =================
     @staticmethod
-    async def update_points(session: Any, user_id: int, points: int):
+    async def update_points(session: Any, user_id: int, points: int) -> bool:
         """
-        🔥 ATOMIC & CACHE SAFE POINTS UPDATE
+        🔥 ATOMIC POINTS UPDATE
+        Jiddiy Xato 2 FIX: .commit() olib tashlandi, tranzaksiya boshqaruvi chaqiruvchida.
         """
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+        real_session = await UserRepository._prepare_session(session)
 
-        try:
-            result = await real_session.execute(
-                update(DBUser)
-                .where(DBUser.user_id == user_id)
-                .values(points=DBUser.points + points)
-            )
+        result = await real_session.execute(
+            update(DBUser)
+            .where(DBUser.user_id == user_id)
+            .values(points=DBUser.points + points)
+        )
 
-            if result.rowcount == 0:
-                logger.warning(f"⚠️ update_points: user not found {user_id}")
-                return
+        if result.rowcount == 0:
+            logger.warning(f"⚠️ update_points: user not found {user_id}")
+            return False
 
-            await real_session.commit()
-            await UserRepository._invalidate_cache(user_id)
-
-        except Exception as e:
-            await real_session.rollback()
-            logger.error(f"❌ update_points error: {e}")
-            raise
+        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        return True
 
     # ================= SET VIP =================
     @staticmethod
-    async def set_vip(session: Any, user_id: int, days: int):
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+    async def set_vip(session: Any, user_id: int, days: int) -> bool:
+        """
+        👑 Foydalanuvchiga VIP maqomini berish
+        Jiddiy Xato 2 FIX: .commit() olib tashlandi.
+        """
+        real_session = await UserRepository._prepare_session(session)
+        expire_date = datetime.now(timezone.utc) + timedelta(days=days)
 
-        try:
-            expire_date = datetime.now(timezone.utc) + timedelta(days=days)
-
-            result = await real_session.execute(
-                update(DBUser)
-                .where(DBUser.user_id == user_id)
-                .values(
-                    status="vip",
-                    vip_expire_date=expire_date
-                )
+        result = await real_session.execute(
+            update(DBUser)
+            .where(DBUser.user_id == user_id)
+            .values(
+                status="vip",
+                vip_expire_date=expire_date
             )
+        )
 
-            if result.rowcount == 0:
-                logger.warning(f"⚠️ set_vip: user not found {user_id}")
-                return
+        if result.rowcount == 0:
+            logger.warning(f"⚠️ set_vip: user not found {user_id}")
+            return False
 
-            await real_session.commit()
-            await UserRepository._invalidate_cache(user_id)
-
-        except Exception as e:
-            await real_session.rollback()
-            logger.error(f"❌ set_vip error: {e}")
-            raise
+        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        return True
 
     # ================= REMOVE VIP =================
     @staticmethod
-    async def remove_vip(session: Any, user_id: int):
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+    async def remove_vip(session: Any, user_id: int) -> bool:
+        """
+        📉 VIP maqomini olib tashlash
+        Jiddiy Xato 2 FIX: .commit() olib tashlandi.
+        """
+        real_session = await UserRepository._prepare_session(session)
 
-        try:
-            result = await real_session.execute(
-                update(DBUser)
-                .where(DBUser.user_id == user_id)
-                .values(
-                    status="user",
-                    vip_expire_date=None
-                )
+        result = await real_session.execute(
+            update(DBUser)
+            .where(DBUser.user_id == user_id)
+            .values(
+                status="user",
+                vip_expire_date=None
             )
+        )
 
-            if result.rowcount == 0:
-                logger.warning(f"⚠️ remove_vip: user not found {user_id}")
-                return
+        if result.rowcount == 0:
+            logger.warning(f"⚠️ remove_vip: user not found {user_id}")
+            return False
 
-            await real_session.commit()
-            await UserRepository._invalidate_cache(user_id)
-
-        except Exception as e:
-            await real_session.rollback()
-            logger.error(f"❌ remove_vip error: {e}")
-            raise
+        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        return True
 
     # ================= ADD REFERRAL COUNT =================
     @staticmethod
-    async def add_referral(session: Any, user_id: int):
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+    async def add_referral(session: Any, user_id: int) -> bool:
+        """
+        ➕ Referallar sonini bittaga oshirish
+        Jiddiy Xato 2 FIX: .commit() olib tashlandi.
+        """
+        real_session = await UserRepository._prepare_session(session)
 
-        try:
-            result = await real_session.execute(
-                update(DBUser)
-                .where(DBUser.user_id == user_id)
-                .values(referral_count=DBUser.referral_count + 1)
-            )
+        result = await real_session.execute(
+            update(DBUser)
+            .where(DBUser.user_id == user_id)
+            .values(referral_count=DBUser.referral_count + 1)
+        )
 
-            if result.rowcount == 0:
-                logger.warning(f"⚠️ add_referral: user not found {user_id}")
-                return
+        if result.rowcount == 0:
+            logger.warning(f"⚠️ add_referral: user not found {user_id}")
+            return False
 
-            await real_session.commit()
-            await UserRepository._invalidate_cache(user_id)
-
-        except Exception as e:
-            await real_session.rollback()
-            logger.error(f"❌ add_referral error: {e}")
-            raise
+        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        return True
 
     # ================= SET REFERRER =================
     @staticmethod
-    async def set_referrer(session: Any, user_id: int, ref_id: int):
+    async def set_referrer(session: Any, user_id: int, ref_id: int) -> bool:
         """
         🔥 Yangi foydalanuvchiga taklif qilgan odamni xavfsiz biriktirish
+        Kichik Muammo 2 FIX: Muvaffaqiyatsiz bo'lsa (masalan allaqachon biriktirilgan bo'lsa) debug log qo'shildi.
         """
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+        real_session = await UserRepository._prepare_session(session)
 
-        try:
-            stmt = (
-                update(DBUser)
-                .where(and_(DBUser.user_id == user_id, DBUser.referred_by.is_(None)))
-                .values(referred_by=ref_id)
-            )
-            result = await real_session.execute(stmt)
+        stmt = (
+            update(DBUser)
+            .where(and_(DBUser.user_id == user_id, DBUser.referred_by.is_(None)))
+            .values(referred_by=ref_id)
+        )
+        result = await real_session.execute(stmt)
+        
+        if result.rowcount > 0:
+            await UserRepository._invalidate_cache(user_id, broadcast=True)
+            return True
             
-            if result.rowcount > 0:
-                await real_session.commit()
-                await UserRepository._invalidate_cache(user_id)
-                
-        except Exception as e:
-            await real_session.rollback()
-            logger.error(f"❌ set_referrer error: {e}")
-            raise
+        logger.debug(f"ℹ️ set_referrer: Referrer already set or user not found for {user_id}")
+        return False
 
     # ================= PROCESS REFERRAL REWARD =================
     @staticmethod
-    async def process_referral_reward(session: Any, user_id: int, amount: int = 10) -> tuple[bool, Optional[int]]:
+    async def process_referral_reward(session: Any, user_id: int, amount: int = 10) -> Tuple[bool, Optional[int]]:
         """
-        🎁 Referal mukofotini berish, bazani yangilash va kesh zanjirlarini tozalash
+        🎁 Referal mukofotini berish va kesh zanjirlarini tozalash.
+        Jiddiy Xato 2 FIX: .commit() va .rollback() olib tashlandi, bu ish handler zimmasida.
+        Jiddiy Xato 3 FIX: Exception holatida xato yutib yuborilmaydi (raise qilinadi).
         """
-        if hasattr(session, "_ensure_session"):
-            await session._ensure_session()
-        real_session = UserRepository._get_real_session(session)
+        real_session = await UserRepository._prepare_session(session)
 
         try:
-            # 1. Taklif qilingan foydalanuvchini va ref_id ni bitta so'rovda olish
-            stmt = select(DBUser.referred_by).where(DBUser.user_id == user_id)
+            # 1. Taklif qilingan foydalanuvchining referrer ID sini olish (Xavfsiz Race-condition oldini olish uchun FOR UPDATE bilan)
+            stmt = select(DBUser.referred_by).where(DBUser.user_id == user_id).with_for_update()
             result = await real_session.execute(stmt)
             ref_id = result.scalar_one_or_none()
 
             if not ref_id:
                 return False, None
 
-            # 2. Referrer (Taklif qilgan odam) ga ball va referal sonini qo'shish
+            # 2. Taklif qilgan odamga ball va referal sonini atomik qo'shish
             ref_update = await real_session.execute(
                 update(DBUser)
                 .where(DBUser.user_id == ref_id)
@@ -291,25 +291,20 @@ class UserRepository:
             if ref_update.rowcount == 0:
                 return False, None
 
-            # 3. Firbgarlik yoki qayta ball olmaslik uchun referred_by ni tozalash
+            # 3. Ikkinchi marta ball olmasligi uchun referred_by ustunini tozalash
             await real_session.execute(
                 update(DBUser).where(DBUser.user_id == user_id).values(referred_by=None)
             )
             
-            # Tranzaksiyani yakunlaymiz
-            await real_session.commit()
-            
-            # 🔥 Ikkala foydalanuvchining keshini ham klaster bo'ylab tozalaymiz
-            await UserRepository._invalidate_cache(user_id)
-            await UserRepository._invalidate_cache(ref_id)
+            # Keshni zanjirli tozalash
+            await UserRepository._invalidate_cache(user_id, broadcast=True)
+            await UserRepository._invalidate_cache(ref_id, broadcast=True)
             
             return True, ref_id
 
         except Exception as e:
-            await real_session.rollback()
             logger.error(f"❌ process_referral_reward error: {e}")
-            return False, None
-
+            raise  # Xato yuqoriga uzatiladi, tranzaksiyani boshqarayotgan tashqi kod o'zi rollback qiladi
 
 
 
