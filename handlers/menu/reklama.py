@@ -51,11 +51,8 @@ def get_adv_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMark
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
             types.InlineKeyboardButton(text="📩 Kage bilan bog'lanish", url=admin_url)
-        ],
-        [
-            # Cabinet handleringiz data="cabinet" ni tinglagani uchun shu data ulandi
-            types.InlineKeyboardButton(text="⛩ Ortga qaytish", callback_data="cabinet")
         ]
+        
     ])
 
     return text, kb
