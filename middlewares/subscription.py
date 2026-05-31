@@ -1,54 +1,64 @@
 # middlewares/subscription.py
 import asyncio
 import logging
+from typing import Any, Dict, Optional
+
 from aiogram import BaseMiddleware
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
+
 from database.repository import ChannelRepository
-from typing import Dict, Optional
-from typing import Any
+from database.cache import valkey
 
-
-
-logger = logging.getLogger("SubMiddleware")
-
-
-
-
-
+# Ikki xil logger takrorlangan edi, bittasi olib tashlandi.
 logger = logging.getLogger("CheckSubscriptionMiddleware")
 
 class CheckSubscriptionMiddleware(BaseMiddleware):
     
     async def __call__(self, handler: Any, event: Any, data: Dict[str, Any]) -> Any:
-        # Faqat xabarlar va callback query so'rovlarini tekshiramiz
+        # 1. Faqat xabarlar va callback query so'rovlarini tekshiramiz
         if not isinstance(event, (Message, CallbackQuery)):
+            return await handler(event, data)
+
+        # 2. 🚀 VIP, Admin va System so'rovlari uchun Bypass (Tekshirmay o'tkazish)
+        user_data = data.get("user", {})
+        if user_data.get("is_system") or user_data.get("is_vip") or user_data.get("status") in ["admin", "owner"]:
             return await handler(event, data)
 
         user_id = data["event_from_user"].id
         bot = data["bot"]
         
-        # 🚀 MIDDLEWARE INTEGRATSIYASI: 
-        # Qo'lda session_pool ochmaymiz, DbSessionMiddleware tomonidan tayyorlab berilgan 
-        # va kesh zanjiriga ulangan proxy sessiyani to'g'ridan-to'g'ri olamiz.
+        # "check_sub" tugmasi bosilganda biz keshni inobatga olmasdan bazani majburiy yangilaymiz
+        force_check = isinstance(event, CallbackQuery) and event.data == "check_sub"
+
+        # 3. 🚀 RATE LIMIT HIMOYASI (API ni qiynamaslik uchun 15 daqiqalik kesh)
+        if not force_check and valkey.is_alive:
+            try:
+                # Agar user yaqinda tekshirilgan va obunasi tasdiqlangan bo'lsa, API ga bormaymiz
+                is_subbed = await valkey.get(table="sub_status", obj_id=str(user_id))
+                if is_subbed == "ok":
+                    return await handler(event, data)
+            except Exception as e:
+                logger.debug(f"Sub cache get error: {e}")
+
+        # 4. DbSessionMiddleware taqdim etgan xavfsiz proxy sessiyani olish
         session = data.get("session")
         if not session:
             logger.warning("⚠️ DbSessionMiddleware sessiyasi topilmadi, tekshiruv o'tkazib yuborildi.")
             return await handler(event, data)
 
-        channels = []
+        # 5. Faol kanallarni L1/L2 kesh orqali (0ms da) yuklab olish
         try:
-            # get_all_active_channels yangi tizimda L1 (Local) keshdan 0ms ichida ma'lumot oladi
             channels = await ChannelRepository.get_all_active_channels(session)
         except Exception as e:
             logger.error(f"🚨 Middleware kanallarni olishda xato: {e}")
             return await handler(event, data)
 
-        # Agar majburiy kanallar o'chirilgan bo'lsa, handlerga o'tkazib yuboramiz
+        # Majburiy kanallar bazada yo'q bo'lsa, erkin o'tkazamiz
         if not channels:
             return await handler(event, data)
 
-        # 🚀 Parallel Telegram API orqali obunani tekshirish funksiyasi
+        # 6. Telegram API orqali parallel obunani tekshirish
         async def check_single(ch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             try:
                 chat_id = int(ch["channel_id"])
@@ -57,48 +67,68 @@ class CheckSubscriptionMiddleware(BaseMiddleware):
                 if member.status in ["left", "kicked"]:
                     return ch
             except Exception as api_err:
-                logger.error(f"❌ Telegram API xatosi (Kanal ID: {ch.get('channel_id')}): {api_err}")
-                # Tarmoq xatosi bo'lsa foydalanuvchini qiynamaslik uchun None qaytaramiz (yoki xohishga ko'ra ch)
+                logger.debug(f"⚠️ Telegram API xatosi (Kanal ID: {ch.get('channel_id')}): {api_err}")
+                # Tarmoq xatosi yoki bot kanalda admin bo'lmasa userni qiynamaslik uchun o'tkazamiz
                 return None
             return None
 
-        # Barcha kanallarni parallel va tezkor tekshirish
+        # Barcha kanallarni parallel tekshirish (Fast gather)
         results = await asyncio.gather(*(check_single(ch) for ch in channels))
         not_subscribed = [r for r in results if r is not None]
 
+        # ======================================================
         # 🛑 Agar foydalanuvchi obuna bo'lmagan kanallar aniqlansa:
+        # ======================================================
         if not_subscribed:
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=f"📢 {ch['title']}", url=ch['url'])] for ch in not_subscribed
-            ] + [[InlineKeyboardButton(text="🔄 Obunani Tekshirish", callback_data="check_sub")]])
+            ] + [[InlineKeyboardButton(text="🔄 Obunani tasdiqlash", callback_data="check_sub")]])
             
-            text = "⚠️ <b>Botdan foydalanish uchun quyidagi homiy kanallarga obuna bo'ling:</b>"
+            text = "⚠️ <b>Botdan to'liq foydalanish uchun quyidagi homiy kanallarga a'zo bo'ling:</b>"
             
             if isinstance(event, Message):
                 await event.answer(text=text, reply_markup=kb, parse_mode="HTML")
             elif isinstance(event, CallbackQuery):
                 try:
-                    # Faqat o'zgarish bo'lsagina markup yangilanadi (Flicker/Miltillash oldi olinadi)
+                    # Flicker/Miltillash oldini olish (FAQAT o'zgarsa edit qilinadi)
                     await event.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
                 except TelegramBadRequest as e:
                     if "message is not modified" not in str(e):
                         await event.message.answer(text=text, reply_markup=kb, parse_mode="HTML")
                 
-                await event.answer("⚠️ Hali hamma kanallarga obuna bo'lmagansiz!", show_alert=True)
+                await event.answer("⚠️ Hali barcha kanallarga a'zo bo'lmadingiz!", show_alert=True)
             
+            # Keshni bekor qilamiz (agar oldin obuna bo'lib, hozir chiqib ketgan bo'lsa)
+            if valkey.is_alive:
+                try:
+                    await valkey.invalidate(table="sub_status", obj_id=str(user_id), broadcast=False)
+                except Exception:
+                    pass
+
             return  # 🛑 Bot oqimi shu yerda uziladi, handler bajarilmaydi.
 
-        # 🟢 Agarda foydalanuvchi hamma kanalga obuna bo'lgan bo'lsa:
-        if isinstance(event, CallbackQuery) and event.data == "check_sub":
-            await event.answer("🎉 Rahmat, obuna tasdiqlandi!", show_alert=True)
+        # ======================================================
+        # 🟢 Agarda foydalanuvchi HAMMA kanalga obuna bo'lgan bo'lsa:
+        # ======================================================
+        
+        # Bot API ni qiynamasligi uchun foydalanuvchini 15 daqiqa (900 soniya) davomida keshlaymiz
+        if valkey.is_alive:
+            try:
+                await valkey.set(table="sub_status", obj_id=str(user_id), data="ok", ttl=900)
+            except Exception as e:
+                logger.debug(f"Sub cache set error: {e}")
+
+        # Agar bu holat "Obunani tekshirish" tugmasi bosilishidan kelib chiqqan bo'lsa:
+        if force_check:
+            await event.answer("🎉 Rahmat, obuna muvaffaqiyatli tasdiqlandi!", show_alert=True)
             try:
                 await event.message.delete()  # Eski ogohlantirish xabarini o'chiramiz
             except Exception:
                 pass
-            # 🔥 CRITICAL FIX: Foydalanuvchi 'check_sub'ni bosganda obuna to'liq tasdiqlansa,
-            # bot shunchaki qotib qolmasdan, uning asl so'rovini (masalan start komandasini yoki tugmasini)
-            # davom ettirib yuborishi uchun oqim handlerga uzatiladi!
+            
+            # Agar sizning routeringizda (handlerlar orasida) @dp.callback_query(F.data == "check_sub") 
+            # degan maxsus funksiya bo'lmasa, aiogram buni o'tkazib yuboradi va bot to'xtaydi.
             return await handler(event, data)
 
-        # Agar foydalanuvchi oddiy holatda yozayotgan bo'lsa va obunasi joyida bo'lsa
+        # Odatiy xabar yoki callback oqimini o'z holicha davom ettirish
         return await handler(event, data)
