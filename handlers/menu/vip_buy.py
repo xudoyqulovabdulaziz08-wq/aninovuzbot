@@ -1,131 +1,125 @@
 import logging
-from typing import Any
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from config import config
-from sqlalchemy.ext.asyncio import AsyncSession
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from urllib.parse import quote
 
-
-
 from config import config
-from database.repository import UserRepository
 from keyboards.inline import vip_buy_kb, buy_vip_med_kb
 
 router = Router()
 logger = logging.getLogger(__name__)
-CREATOR_ID = getattr(config, 'CREATOR_ID')
+CREATOR_ID = getattr(config, 'CREATOR_ID', 0)
 
 
-
-
-
-#==========================💎 VIP sotib olish=============================#
-#========================================================================#
+# ========================================================================
+# 💎 1. VIP SOTIB OLISH ASOSIY MENYUSI (MESSAGE & CALLBACK)
+# ========================================================================
 @router.message(F.text == "💎 VIP sotib olish")
 @router.callback_query(F.data == "buy_vip_menu")
 async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMContext, **data):
-    await state.clear()
+    if state:
+        await state.clear()
+        
     user = data.get("user") or {}
     user_id = user.get("user_id") or event.from_user.id
     user_status = user.get("status", "user")
     is_vip = user.get("is_vip", False)
-    
     points = user.get("points", 0)
 
-    # 1. Creator tekshiruvi (config dan)
+    # Anime rutbalari (Status tekshiruvi)
     if int(user_id) == int(CREATOR_ID):
-        status_info = "👑 <b>CREATOR</b>"
+        status_info = "👑 <b>KAGE (Yaratuvchi)</b>"
     elif user_status == "admin":
-        status_info = "🛡 <b>ADMIN</b>"
+        status_info = "🛡 <b>JONIN (Admin)</b>"
     elif is_vip:
-        status_info = "💎 <b>VIP</b>"
+        status_info = "💎 <b>ANBU (VIP Shinobi)</b>"
     else:
-        status_info = "👤 <b>USER</b>"
+        status_info = "👤 <b>GENIN (Oddiy foydalanuvchi)</b>"
     
     text = (
-        "💎 <b>VIP PREMIYUM</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"{status_info}\n"
-        f"💰 Balans: <b>{points} ball</b>\n\n"
-        "✨ <b>VIP imkoniyatlari:</b>\n"
-        "🚀 <b>Yuqori tezlik:</b> Cheksiz kirish\n"
-        "🚫 <b>Reklamasiz:</b> Toza kontent\n"
-        "👑 <b>Status:</b> Maxsus belgi\n\n"
-        "🏷 <b>Tarif:</b> <code>100 ball = 30 kun</code>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "👇 VIP faollashtirish uchun tugmani bosing:"
+        "╔═════════ ⛩ ═════════╗\n"
+        "   💎 <b>PREMIUM CHODIRI</b> 💎\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
+        f"Sizning darajangiz: {status_info}\n"
+        f"🔋 <b>Energiya (Ball):</b> <code>{points} ball</code>\n\n"
+        "✨ <b>VIP (Premium) afzalliklari:</b>\n"
+        "🚀 <b>Shunshin tezligi:</b> Cheklovlarsiz qidiruv\n"
+        "🚫 <b>Sof ko'zlar:</b> Reklamalarsiz toza muhit\n"
+        "👑 <b>Maxsus daraja:</b> VIP profili va ramkasi\n\n"
+        "🏷 <b>Bonus almashinuvi:</b> <code>100 energiya = 30 kun VIP</code>\n"
+        "═════════ ⛩ ═════════\n"
+        "👇 <i>O'z darajangizni oshirish uchun quyidagi tugmalardan birini tanlang:</i>"
     )
     
     kb = vip_buy_kb(is_vip=is_vip)
     
-    # 4. XAVFSIZ JAVOB BERISH
-    if isinstance(event, types.Message):
-        await event.answer(text, reply_markup=kb, parse_mode="HTML")
-    else:
-        # Callback holatida tugmani tahrirlash yoki yangi xabar yuborish
-        await event.answer()
-        await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    try:
+        if isinstance(event, types.Message):
+            await event.answer(text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ VIP menyu xatosi: {e}")
+    except Exception as e:
+        logger.error(f"❌ VIP menyu kutilmagan xatolik: {e}")
+    finally:
+        if isinstance(event, types.CallbackQuery):
+            await event.answer()
 
 
-
-
-
-
-#============================buy_vip_med=================================#
-#========================================================================#
+# ========================================================================
+# 💳 2. VIP NARXLAR VA TARIFLARNI KO'RISH
+# ========================================================================
 @router.callback_query(F.data == "buy_vip_med")
 async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear() # Har doim yaxshi amaliyot
+    if state:
+        await state.clear()
+        
     user_id = callback.from_user.id
+    
     VIP_PRICES = {
         "1m": "20,000",
         "3m": "55,000",
         "6m": "100,000",
         "12m": "180,000"
     }
-    kb = buy_vip_med_kb(user_id=callback.from_user.id)
+    
     text = (
-        f"💎 <b>VIP SOTIB OLISH</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        "╔═════════ ⛩ ═════════╗\n"
+        "   💳 <b>VIP SHARTNOMALARI</b>\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
         f"Salom, <b>{callback.from_user.full_name}</b>!\n"
-        f"Sizning 🆔: <code>{user_id}</code>\n\n"
-        f"VIP imkoniyatlarini ko'rib chiqing va o'zingizga mos tarifni tanlang.\n\n"
-        f"💵 <b>VIP tarif narxlari:</b>\n"
-        f"🚀 <b>1 oylik:</b> {VIP_PRICES['1m']} so'm\n"
-        f"🚀 <b>3 oylik:</b> {VIP_PRICES['3m']} so'm\n"
-        f"🚀 <b>6 oylik:</b> {VIP_PRICES['6m']} so'm\n"
-        f"🚀 <b>1 yillik:</b> {VIP_PRICES['12m']} so'm\n\n"
-        f"🏷 <b>Bonus:</b> <code>100 ball = 30 kun</code>\n"
-        f"👇 VIP faollashtirish uchun admin bilan bog'laning:"
+        f"Sizning Maxfiy 🆔: <code>{user_id}</code>\n\n"
+        f"O'zingizga mos keladigan shartnomani (tarifni) tanlang:\n\n"
+        f"💵 <b>Oltin tangalar (Narxlar):</b>\n"
+        f"🔹 <b>1 oylik:</b> {VIP_PRICES['1m']} so'm\n"
+        f"🔹 <b>3 oylik:</b> {VIP_PRICES['3m']} so'm\n"
+        f"🔹 <b>6 oylik:</b> {VIP_PRICES['6m']} so'm\n"
+        f"🔹 <b>1 yillik:</b> {VIP_PRICES['12m']} so'm\n\n"
+        f"👇 <i>Sotib olish jarayonini boshlash uchun tarifni tanlang:</i>"
     )
     
-    kb = buy_vip_med_kb(user_id=callback.from_user.id)
+    kb = buy_vip_med_kb(user_id=user_id)
     
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
-            logger.error(f"❌ VIP menyu xatosi: {e}")
-            
-    # Answer har doim chaqirilishi kerak
-    await callback.answer("💎 VIP sotib olish menyusi yuklandi")
+            logger.error(f"❌ VIP narxlar menyusi xatosi: {e}")
+    finally:
+        await callback.answer("💳 Shartnomalar varag'i ochildi")
 
 
-
-
-
-
-#====================vip_tariff_selection_handler========================#
-#========================================================================#
-@router.callback_query(F.data.startswith("buyer_vip_") )
+# ========================================================================
+# 🛒 3. TARIFNI TANLASH VA ADMINGA YAZISH
+# ========================================================================
+@router.callback_query(F.data.startswith("buyer_vip_"))
 async def vip_tariff_selection_handler(callback: types.CallbackQuery):
     tariff_code = callback.data.split("_")[2]
     
-    # Tariflar va narxlar birlashtirilgan lug'at
     tariffs = {
         "1m": {"name": "1 oylik", "price": "20,000"},
         "3m": {"name": "3 oylik", "price": "55,000"},
@@ -133,61 +127,55 @@ async def vip_tariff_selection_handler(callback: types.CallbackQuery):
         "12m": {"name": "1 yillik", "price": "180,000"}
     }
     
-    # Tanlangan tarifni olish (agar kod noto'g'ri bo'lsa default qiymat)
     data = tariffs.get(tariff_code, {"name": "Noma'lum", "price": "0"})
-    
     user_id = callback.from_user.id
     admin_username = "Khudoyqulov_pg"
     
-    # Admin uchun tayyor xabar
-    raw_msg = f"Assalomu alaykum, {data['name']} narxi:{data['price']} VIP sotib olmoqchiman. ID: {user_id}"
+    raw_msg = f"Assalomu alaykum! {data['name']} muddatga ({data['price']} so'm) VIP xarid qilmoqchiman. Maxfiy ID: {user_id}"
     admin_url = f"https://t.me/{admin_username}?text={quote(raw_msg)}"
     
     text = (
-        f"✅ <b>{data['name']} VIP</b> tanlandi!\n\n"
-        f"💰 <b>Narxi:</b> {data['price']} so'm\n\n"
-        f"To‘lovni amalga oshirish uchun admin bilan bog‘laning. "
-        f"Quyidagi tugmani bosing, admin sizga yozish uchun tayyor xabarni ochib beradi:"
+        f"✅ <b>{data['name']} VIP shartnomasi tanlandi!</b>\n\n"
+        f"💰 <b>Kerakli summa:</b> {data['price']} so'm\n\n"
+        f"Buyuk Kage (Admin) bilan bog'lanib to'lovni amalga oshiring. "
+        f"Quyidagi tugmani bossangiz, adminga yozish uchun tayyor xabar ochiladi 💬"
     )
     
     builder = InlineKeyboardBuilder()
-    builder.row(
-         types.InlineKeyboardButton(text="💬 Admin bilan bog'lanish", url=admin_url)
-        )
-    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_med"))
+    builder.row(types.InlineKeyboardButton(text="💬 Kage (Admin) bilan bog'lanish", url=admin_url))
+    builder.row(types.InlineKeyboardButton(text="⛩ Ortga qaytish", callback_data="buy_vip_med"))
     
     try:
         await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
-            logger.error(f"❌ VIP menyu xatosi: {e}")
-            
-    # Answer har doim chaqirilishi kerak
-    await callback.answer("💎 VIP tarif tanlandi")
+            logger.error(f"❌ VIP xarid menyusi xatosi: {e}")
+    finally:
+        await callback.answer(f"✅ {data['name']} tarifi tanlandi")
 
 
-
-
-
-
-#=======================buy_vip_bonus_handler============================#
-#========================================================================#
-@router.callback_query(F.data.startswith("buy_vip_bonus") )
+# ========================================================================
+# 🎁 4. VIP BONUS OLISH (TEZ ORADA)
+# ========================================================================
+@router.callback_query(F.data == "buy_vip_bonus")
 async def buy_vip_bonus_handler(callback: types.CallbackQuery):
     
     text = (
-        f"💎 <b>VIP Bonus olish</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Bu fuksiya tez orada qo'shiladi"
-        f"❗️ Hozircha bu bo'limda bonus ballarni VIP ga almashtirish imkoniyati mavjud emas, lekin tez orada qo'shiladi. Iltimos, yangilanishlarni kuting!"
-
+        "╔═════════ ⛩ ═════════╗\n"
+        "   🎁 <b>ENERGIYANI ALMASHTIRISH</b>\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
+        "Bu sehrli jutsu ustida hali ishlanmoqda! ⏳\n\n"
+        "❗️ Hozircha to'plagan energiyangizni (ballarni) VIP darajaga almashtirish imkoniyati yopiq. "
+        "Klan muhandislari bu tizimni tez orada yakunlashadi. Yangilanishlarni kuting! 🌸"
     )
+    
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="buy_vip_med"))
+    builder.row(types.InlineKeyboardButton(text="⛩ Ortga qaytish", callback_data="buy_vip_med"))
 
     try:
         await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
             logger.error(f"❌ VIP bonus xatosi: {e}")
-    await callback.answer("💎 VIP bonus bo'limi tez orada qo'shiladi")
+    finally:
+        await callback.answer("🎁 Bonus bo'limi tez orada ochiladi")
