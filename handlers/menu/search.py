@@ -1,11 +1,11 @@
 import logging
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from config import config
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
+from config import config
 # Kesh va boshqa modullar (o'zingizniki)
 from keyboards.inline import search_inline_kb 
 
@@ -18,144 +18,143 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-
-#==========================🔍 Anime qidirish=============================#
-#========================================================================#
-@router.message(F.text == "🔍 Anime qidirish")
-async def search_menu_handler(message: types.Message, state: FSMContext):
-    await state.clear()
-    user_id = message.from_user.id
+# ========================================================================
+# 🧩 QIDIRUV MENYUSI TARKIBINI SHAKLLANTIRUVCHI FUNKSIYA (DRY Prinsipi)
+# ========================================================================
+def get_search_menu_content(user_id: int) -> tuple[str, types.InlineKeyboardMarkup]:
+    """ 
+    Asosiy qidiruv menyusi matni va klaviaturasini qaytaruvchi yordamchi funksiya. 
+    Bu funksiya kodni takrorlanishdan asraydi (Message va Callback uchun umumiy).
+    """
     is_vip = False 
     is_privileged = is_vip or (user_id == config.CREATOR_ID)
     
     kb = search_inline_kb(is_privileged=is_privileged)
 
     text = (
-        "🔍 <b>ANIME QIDIRISH</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Anime nomi, ID raqami yoki janr bo'yicha qidiruv imkoniyatlari mavjud. "
-        "Kerakli bo'limni tanlang va qidiruvni boshlang."
+        "╔═════════ ⛩ ═════════╗\n"
+        "   🔍 <b>QIDIRUV HUDUDI</b> 🔍\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
+        "Barcha yashirin anime va qahramonlarni shu yerdan topishingiz mumkin. "
+        "Qidiruv turini tanlang, o'z hududingizni kengaytiring! 🌌\n\n"
+        "📝 <b>Nomi bo'yicha:</b> <i>Anime yoki qahramon ismini yozing</i>\n"
+        "🆔 <b>Maxfiy kod (ID):</b> <i>Aniqlik bilan topish uchun</i>\n"
+        "🎭 <b>Janr bo'yicha:</b> <i>O'zingizga yoqqan yo'nalishni tanlang</i>"
     )
-
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
-
+    return text, kb
 
 
+# ========================================================================
+# 🔍 ANIME QIDIRISH ASOSIY MENYUSI (MESSAGE)
+# ========================================================================
+@router.message(F.text == "🔍 Anime qidirish")
+async def search_menu_handler(message: types.Message, state: FSMContext):
+    if state:
+        await state.clear()
+        
+    text, kb = get_search_menu_content(message.from_user.id)
+
+    try:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"❌ Qidiruv menyusini yuborishda xatolik: {e}")
 
 
-
-#=========================back_to_search_menu============================#
-#========================================================================#
-# 🔥 TUZATISH: Dekorator qo'shildi va state.clear() await qilindi
+# ========================================================================
+# 🔄 ASOSIY MENYUGA QAYTISH (CALLBACK)
+# ========================================================================
 @router.callback_query(F.data == "back_to_search_menu")
-async def back_to_search_menu(callback_query: types.CallbackQuery, state: FSMContext):
-    await state.clear() 
-    await callback_query.answer()
+async def back_to_search_menu(callback: types.CallbackQuery, state: FSMContext):
+    if state:
+        await state.clear() 
     
-    # Menyu matnini qayta tiklash
-    user_id = callback_query.from_user.id
-    is_vip = False
-    is_privileged = is_vip or (user_id == config.CREATOR_ID)
-    kb = search_inline_kb(is_privileged=is_privileged)
+    text, kb = get_search_menu_content(callback.from_user.id)
     
-    await callback_query.message.edit_text(
-        "🔍 <b>ANIME QIDIRISH</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Anime nomi, ID raqami yoki janr bo'yicha qidiruv imkoniyatlari mavjud. "
-        "Kerakli bo'limni tanlang va qidiruvni boshlang.",
-        reply_markup=kb,
-        parse_mode="HTML"
-    )
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ Qidiruv menyusiga qaytishda xatolik: {e}")
+    finally:
+        await callback.answer()
 
 
-
-
-
-#============================search_by_name==============================#
-#========================================================================#
+# ========================================================================
+# 📝 1. NOMI BO'YICHA QIDIRISH
+# ========================================================================
 @router.callback_query(F.data == "search_by_name")
-async def search_by_name(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer("Nomi bo'yicha qidiruv tanlandi.")
+async def search_by_name(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(SearchState.waiting_for_name)
     
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(
-        text="🔙 Orqaga", 
-        callback_data="back_to_search_menu"
-    ))
+    builder.row(types.InlineKeyboardButton(text="⛩ Ortga qaytish", callback_data="back_to_search_menu"))
     
+    text = (
+        "╔═════════ ⛩ ═════════╗\n"
+        "   📝 <b>ISMLAR KITOBOYI</b>\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
+        "Siz qidirayotgan animening to'liq yoki qisqacha nomini kiriting. "
+        "<i>Masalan: Jujutsu Kaisen, Naruto, Toji...</i> ✍️"
+    )
+
     try:
-        await callback_query.message.edit_text(
-            "📝 <b>Iltimos, qidirilayotgan anime nomini kiriting:</b>",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            # Xabarni o'zgartirish shart emas, barchasi joyida
-            pass
-        else:
-            # Agar boshqa xatolik bo'lsa (masalan, xabar topilmadi), uni ko'taramiz
-            raise e
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ Nomi bo'yicha qidiruv xatoligi: {e}")
+    finally:
+        await callback.answer("Nomi bo'yicha qidiruv hududi faollashdi ⚡️")
 
 
-
-
-
-
-#=============================search_by_id===============================#
-#========================================================================#
+# ========================================================================
+# 🆔 2. ID BO'YICHA QIDIRISH
+# ========================================================================
 @router.callback_query(F.data == "search_by_id")
-async def search_by_id(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer("ID bo'yicha qidiruv tanlandi.")
+async def search_by_id(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(SearchState.waiting_for_id)
 
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(
-        text="🔙 Orqaga", 
-        callback_data="back_to_search_menu"
-    ))
+    builder.row(types.InlineKeyboardButton(text="⛩ Ortga qaytish", callback_data="back_to_search_menu"))
+
+    text = (
+        "╔═════════ ⛩ ═════════╗\n"
+        "   🆔 <b>MAXFIY KOD (ID)</b>\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
+        "Aniqlik - eng yaxshi qurol! 🎯\n"
+        "Iltimos, qidirilayotgan anime yoki seriyaning maxsus ID raqamini kiriting:"
+    )
 
     try:
-        await callback_query.message.edit_text(
-            "🆔 <b>Iltimos, qidirilayotgan anime ID raqamini kiriting:</b>",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            # Xabarni o'zgartirish shart emas, barchasi joyida
-            pass
-        else:
-            # Agar boshqa xatolik bo'lsa (masalan, xabar topilmadi), uni ko'taramiz
-            raise e
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ ID bo'yicha qidiruv xatoligi: {e}")
+    finally:
+        await callback.answer("Maxfiy kod tizimi faollashdi 🔐")
 
 
-
-
-#===========================search_by_genre==============================#
-#========================================================================#
+# ========================================================================
+# 🎭 3. JANR BO'YICHA QIDIRISH
+# ========================================================================
 @router.callback_query(F.data == "search_by_genre")
-async def search_by_genre(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer("Genre bo'yicha qidiruv tanlandi.")
+async def search_by_genre(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(SearchState.waiting_for_genre)
 
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(
-        text="🔙 Orqaga", 
-        callback_data="back_to_search_menu"
-    ))
+    builder.row(types.InlineKeyboardButton(text="⛩ Ortga qaytish", callback_data="back_to_search_menu"))
+
+    text = (
+        "╔═════════ ⛩ ═════════╗\n"
+        "   🎭 <b>JANRLAR OLAMI</b>\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
+        "Sizning didingizga nima mos keladi? 🔮\n"
+        "Iltimos, izlayotgan janringizni kiriting <i>(Masalan: Shounen, Isekai, Romantika)</i>:"
+    )
 
     try:
-        await callback_query.message.edit_text(
-            "🎭 <b>Iltimos, qidirilayotgan anime janrini kiriting:</b>",
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            # Xabarni o'zgartirish shart emas, barchasi joyida
-            pass
-        else:
-            # Agar boshqa xatolik bo'lsa (masalan, xabar topilmadi), uni ko'taramiz
-            raise e
+        if "message is not modified" not in str(e).lower():
+            logger.error(f"❌ Janr bo'yicha qidiruv xatoligi: {e}")
+    finally:
+        await callback.answer("Janr qidirish bo'limi ochildi 🎭")

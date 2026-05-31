@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
 # Loyihangizdagi rasm File ID'sini shu yerga qo'ying yoki config'dan oling
-ADVERTISEMENT_PHOTO_FILE_ID = "AgACAgIAAxkBAAFKl-xqFC9X-BM2FNEMYYfCOmreyecdUAACbhprG-q2oUjbbZLrFzFdJgEAAwIAA3cAAzsE"
+ADVERTISEMENT_PHOTO_FILE_ID = "AgACAgIAAxkBAAFKl-tqFC9XZppHrJDZTjAo4VWqkMpx7gAC2htrG851kUgFMwM8MnFuAwEAAwIAA3cAAzsE"
 
 router = Router()
 logger = logging.getLogger(__name__)
