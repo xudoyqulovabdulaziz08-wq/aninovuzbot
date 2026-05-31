@@ -204,15 +204,17 @@ class DbSessionMiddleware(BaseMiddleware):
             
             try:
                 async with asyncio.timeout(10.0):
-                    db_user = await UserRepository.get_or_create(db_real_session, user_obj)
+                    # 1. Bazadan lug'at (dict) ko'rinishida foydalanuvchini olamiz
+                    user_data = await UserRepository.get_or_create(db_real_session, user_obj)
 
-                # ✅ FIX 2: Baza muvaffaqiyatli ishladi, Circuit Breaker holatini to'liq tiklaymiz
+                # ✅ FIX 2: Baza muvaffaqiyatli ishladi, Circuit Breaker holatini tiklaymiz
                 await self._reset_circuit_breaker()
 
-                user_data = self._model_to_dict(db_user)
+                # 2. Endi user_data aniqlangan, bemalol keshga yozamiz
                 await state.l1_cache.set(user_id, user_data)
                 self._fire_and_forget_cache_update(user_data)
 
+                # 3. Data'ga nusxasini joylaymiz
                 data["user"] = copy.deepcopy(user_data)
                 
                 # SafeSession ichiga faol real sessiyani ulaymiz
@@ -277,19 +279,7 @@ class DbSessionMiddleware(BaseMiddleware):
             except Exception as e:
                 logger.error(f"❌ Cache queue push exception: {e}")
 
-    def _model_to_dict(self, db_user) -> Dict[str, Any]:
-        return {
-            "user_id": db_user.user_id,
-            "username": db_user.username,
-            "status": db_user.status,
-            "points": db_user.points,
-            "referral_count": db_user.referral_count,
-            "is_vip": db_user.is_vip,
-            "vip_expire_date": (
-                db_user.vip_expire_date.timestamp()
-                if db_user.vip_expire_date else None
-            )
-        }
+    
 
     def _emergency_user(self, user_obj: User) -> Dict[str, Any]:
         return {
