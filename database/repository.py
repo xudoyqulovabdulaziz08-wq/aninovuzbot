@@ -342,33 +342,21 @@ class ChannelRepository:
             "is_active": channel.is_active
         }
 
+   # ====================================================================
+    # 🧹 KESHNI KLASTER BO'YLAB TOZALASH (BROADCAST FIX)
+    # ====================================================================
     @staticmethod
     async def _invalidate_channel_caches(channel_id: Optional[int] = None):
         """ 
-        🧹 3 ta alohida Redis round-trip o'rniga Pipeline integratsiyasi.
-        L1 kesh ham universal tarzda yagona lock ichida urib tushiriladi.
+        🚀 ASOSIY FIX: Endi to'g'ridan-to'g'ri valkey.invalidate chaqiriladi.
+        Bu barcha serverlar (workerlar) dagi L1 lokal keshlarni sinxron tozalash 
+        uchun avtomatik ravishda XADD (broadcast) stream xabarini yuboradi!
         """
-        keys = [
-            valkey._key("channels", "all_list"),
-            valkey._key("channels", "active_list")
-        ]
-        if channel_id:
-            keys.append(valkey._key("channels", str(channel_id)))
-
         try:
-            # 1. Redis L2 Keshni Pipeline orqali bitta tarmoq so'rovida o'chirish
-            if valkey.redis:
-                async with valkey.redis.pipeline(transaction=True) as pipe:
-                    for key in keys:
-                        pipe.delete(key)
-                    await pipe.execute()
-
-            # 2. Local L1 Memory Keshni xavfsiz tarzda tozalash
-            async with valkey._l1_lock:
-                for key in keys:
-                    valkey._l1_cache.pop(key, None)
-                    
-            logger.debug(f"🧹 Channel keshlar klaster bo'ylab muvaffaqiyatli invalidate qilindi. Kalitlar: {keys}")
+            o_id = str(channel_id) if channel_id else None
+            # broadcast=True parametri barcha workerlar xotirasini tozalashni kafolatlaydi
+            await valkey.invalidate(table="channels", obj_id=o_id, broadcast=True)
+            logger.info(f"🧹 Kanal keshlari butun klaster bo'ylab tozalandi. (ID: {o_id})")
         except Exception as e:
             logger.error(f"❌ _invalidate_channel_caches xatolik: {e}")
 
@@ -489,6 +477,7 @@ class ChannelRepository:
     @staticmethod
     async def add_channel(session: Any, channel_id: int, title: str, url: str) -> Dict[str, Any]:
         real_session = await ChannelRepository._prepare_session(session)
+
         try:
             channel = Channel(channel_id=channel_id, title=title, url=url, is_active=True)
             real_session.add(channel)
@@ -496,31 +485,40 @@ class ChannelRepository:
             
             channel_dict = ChannelRepository._to_dict(channel)
             
-            # 🔥 FIX: Keshni commit bo'lgandan so'ng tozalash
+            # 🔥 FIX: Kesh tozalash commitdan so'ng (Lambda lock bilan)
             if hasattr(session, "on_commit"):
                 session.on_commit(lambda: ChannelRepository._invalidate_channel_caches())
             else:
                 await ChannelRepository._invalidate_channel_caches()
                 
             return channel_dict
+
         except IntegrityError as ie:
-            logger.warning(f"⚠️ Channel {channel_id} mavjud: {ie}")
+            logger.warning(f"⚠️ Channel {channel_id} allaqachon mavjud: {ie}")
             raise ValueError(f"Channel with ID {channel_id} already exists.")
+        except Exception as e:
+            logger.error(f"❌ add_channel kutilmagan xatolik: {e}")
+            raise
     
     # ================= TOGGLE CHANNEL STATUS =================
     @staticmethod
     async def toggle_channel_status(session: Any, channel_id: int, is_active: bool) -> bool:
         real_session = await ChannelRepository._prepare_session(session)
+
         try:
             result = await real_session.execute(
-                update(Channel).where(Channel.channel_id == channel_id).values(is_active=is_active)
+                update(Channel)
+                .where(Channel.channel_id == channel_id)
+                .values(is_active=is_active)
             )
+            
             if result.rowcount == 0:
+                logger.warning(f"⚠️ toggle_channel_status: Kanal topilmadi [{channel_id}]")
                 return False
             
-            # 🔥 FIX: Keshni commit bo'lgandan so'ng tozalash
+            # 🔥 FIX: Lambda lock yordamida channel_id xavfsiz o'tkaziladi
             if hasattr(session, "on_commit"):
-                session.on_commit(lambda: ChannelRepository._invalidate_channel_caches(channel_id=channel_id))
+                session.on_commit(lambda cid=channel_id: ChannelRepository._invalidate_channel_caches(channel_id=cid))
             else:
                 await ChannelRepository._invalidate_channel_caches(channel_id=channel_id)
                 
@@ -528,21 +526,25 @@ class ChannelRepository:
         except Exception as e:
             logger.error(f"❌ toggle_channel_status xatolik: {e}")
             raise
+
     # ================= DELETE CHANNEL BY ID =================
     @staticmethod
     async def delete_channel_by_id(session: Any, channel_id: int) -> bool:
         real_session = await ChannelRepository._prepare_session(session)
+
         try:
             result = await real_session.execute(
                 delete(Channel).where(Channel.channel_id == channel_id)
             )
+            
             if result.rowcount > 0:
-                # 🔥 FIX: Keshni commit bo'lgandan so'ng tozalash
+                # 🔥 FIX: Lambda lock bilan commit yakunlanishini kutish
                 if hasattr(session, "on_commit"):
-                    session.on_commit(lambda: ChannelRepository._invalidate_channel_caches(channel_id=channel_id))
+                    session.on_commit(lambda cid=channel_id: ChannelRepository._invalidate_channel_caches(channel_id=cid))
                 else:
                     await ChannelRepository._invalidate_channel_caches(channel_id=channel_id)
                 return True
+                
             return False
         except Exception as e:
             logger.error(f"❌ delete_channel_by_id xatolik: {e}")
