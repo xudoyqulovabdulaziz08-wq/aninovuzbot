@@ -29,6 +29,10 @@ from handlers.admin_panel.anime_main import(
     anime_add,
     anime_lists
 )
+from handlers.admin_panel.channel_main import(
+    add_channel
+)
+
 # Asosiy router
 main_router = Router()
 
