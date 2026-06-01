@@ -31,7 +31,8 @@ from handlers.admin_panel.anime_main import(
 )
 from handlers.admin_panel.channel_main import(
     
-    channel_added
+    channel_added,
+    channel_list_del
 )
 
 # Asosiy router
@@ -53,6 +54,7 @@ main_router.include_routers(
     user_control.router, #admin_panel/user_control router
     channel.router, #admin_panel/channel router
     channel_added.router,
+    channel_list_del.router,
 
     # 4. Anime  routerlari
     anime_add.router, #admin_panel/anime_main/anime_add router
