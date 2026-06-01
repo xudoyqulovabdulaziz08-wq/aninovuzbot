@@ -76,13 +76,3 @@ async def back_to_channels(callback: types.CallbackQuery, state: FSMContext):
     await state.clear() # Muhim: State ni tozalab, keyin menyuni ko'rsatamiz
     await admin_channels(callback, state) # Eski funksiyangizni chaqiramiz
 
-
-
-
-
-
-
-
-
-
-
