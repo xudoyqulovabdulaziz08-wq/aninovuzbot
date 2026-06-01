@@ -488,74 +488,65 @@ class ChannelRepository:
     # ================= ADD CHANNEL =================
     @staticmethod
     async def add_channel(session: Any, channel_id: int, title: str, url: str) -> Dict[str, Any]:
-        """
-        ➕ Yangi kanal qo'shish va global klaster keshlarni sinxron tozalash.
-        """
         real_session = await ChannelRepository._prepare_session(session)
-
         try:
             channel = Channel(channel_id=channel_id, title=title, url=url, is_active=True)
             real_session.add(channel)
             await real_session.flush()
             
             channel_dict = ChannelRepository._to_dict(channel)
-            await ChannelRepository._invalidate_channel_caches()
+            
+            # 🔥 FIX: Keshni commit bo'lgandan so'ng tozalash
+            if hasattr(session, "on_commit"):
+                session.on_commit(lambda: ChannelRepository._invalidate_channel_caches())
+            else:
+                await ChannelRepository._invalidate_channel_caches()
+                
             return channel_dict
-
         except IntegrityError as ie:
-            logger.warning(f"⚠️ Channel {channel_id} allaqachon mavjud (Unique Constraint): {ie}")
+            logger.warning(f"⚠️ Channel {channel_id} mavjud: {ie}")
             raise ValueError(f"Channel with ID {channel_id} already exists.")
-        except Exception as e:
-            logger.error(f"❌ add_channel kutilmagan xatolik: {e}")
-            raise
-
+    
     # ================= TOGGLE CHANNEL STATUS =================
     @staticmethod
     async def toggle_channel_status(session: Any, channel_id: int, is_active: bool) -> bool:
-        """
-        🔄 Kanal holatini (Active/Inactive) o'zgartirish va bog'liq barcha keshlarni o'chirish.
-        """
         real_session = await ChannelRepository._prepare_session(session)
-
         try:
             result = await real_session.execute(
-                update(Channel)
-                .where(Channel.channel_id == channel_id)
-                .values(is_active=is_active)
+                update(Channel).where(Channel.channel_id == channel_id).values(is_active=is_active)
             )
-            
             if result.rowcount == 0:
-                logger.warning(f"⚠️ toggle_channel_status: Kanal topilmadi [{channel_id}]")
                 return False
             
-            await ChannelRepository._invalidate_channel_caches(channel_id=channel_id)
-            logger.info(f"🧹 Kanal [{channel_id}] holati [{is_active}] ga o'zgardi.")
+            # 🔥 FIX: Keshni commit bo'lgandan so'ng tozalash
+            if hasattr(session, "on_commit"):
+                session.on_commit(lambda: ChannelRepository._invalidate_channel_caches(channel_id=channel_id))
+            else:
+                await ChannelRepository._invalidate_channel_caches(channel_id=channel_id)
+                
             return True
         except Exception as e:
             logger.error(f"❌ toggle_channel_status xatolik: {e}")
             raise
-
     # ================= DELETE CHANNEL BY ID =================
     @staticmethod
     async def delete_channel_by_id(session: Any, channel_id: int) -> bool:
-        """
-        🗑 Kanalni o'chirish va keshdan butunlay yo'q qilish (Pipeline + Broadcast).
-        """
         real_session = await ChannelRepository._prepare_session(session)
-
         try:
             result = await real_session.execute(
                 delete(Channel).where(Channel.channel_id == channel_id)
             )
-            
             if result.rowcount > 0:
-                await ChannelRepository._invalidate_channel_caches(channel_id=channel_id)
+                # 🔥 FIX: Keshni commit bo'lgandan so'ng tozalash
+                if hasattr(session, "on_commit"):
+                    session.on_commit(lambda: ChannelRepository._invalidate_channel_caches(channel_id=channel_id))
+                else:
+                    await ChannelRepository._invalidate_channel_caches(channel_id=channel_id)
                 return True
-                
             return False
         except Exception as e:
             logger.error(f"❌ delete_channel_by_id xatolik: {e}")
-            raise        
+            raise
 
 
 

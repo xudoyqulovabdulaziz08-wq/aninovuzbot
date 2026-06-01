@@ -67,20 +67,42 @@ if not hasattr(state, 'cb_recovery_time'): state.cb_recovery_time = 30.0
 # ======================================================
 class SafeSession:
     """
-    🧠 Aqlli Lazy Proxy: Kesh ishlaganda bazani yuklamaydi (None turadi).
-    Agar handler ichida kutilmaganda sessiya metodlari chaqirilsa,
-    o'sha zahoti hovuzdan (session_pool) haqiqiy sessiya olib, ishni davom ettiradi.
+    🧠 Aqlli Lazy Proxy + Post-Commit Hooks
     """
     def __init__(self, session=None, session_pool=None):
         self.__dict__["_session"] = session
         self.__dict__["_session_pool"] = session_pool
+        self.__dict__["_post_commit_hooks"] = []  # 👈 YANGLIK: Commitdan keyingi vazifalar
+
+    def on_commit(self, func):
+        """Tranzaksiya muvaffaqiyatli yakunlangach bajariladigan vazifani yozib qo'yadi"""
+        self._post_commit_hooks.append(func)
+
+    async def commit(self):
+        """Baza tasdiqlanadi va kesh tozalanadi"""
+        if self._session is not None:
+            await self._session.commit()
+            
+            # 🔥 Commit muvaffaqiyatli bo'lsa, barcha kutib turgan kesh tozalashlarni ishga tushiramiz
+            for hook in self._post_commit_hooks:
+                try:
+                    res = hook()
+                    if inspect.isawaitable(res):
+                        await res
+                except Exception as e:
+                    logger.error(f"Post-commit hook xatosi: {e}")
+        self._post_commit_hooks.clear()
+
+    async def rollback(self):
+        if self._session is not None:
+            await self._session.rollback()
+        self._post_commit_hooks.clear()
 
     async def _ensure_session(self):
-        """Metodlar chaqirilganda sessiya yo'q bo'lsa, uni dinamik yaratish"""
         if self._session is None:
             if self._session_pool is None:
-                raise RuntimeError("❌ DB session is None va session_pool berilmagan (Cache-only mode restriction).")
-            logger.info("⚡ Lazy Loading: Handler bazaga murojaat qildi, kesh rejimidan dinamik sessiya ochildi.")
+                raise RuntimeError("❌ DB session is None va session_pool berilmagan.")
+            logger.info("⚡ Lazy Loading: Dinamik sessiya ochildi.")
             self.__dict__["_session"] = self._session_pool()
         return self._session
 
@@ -93,23 +115,23 @@ class SafeSession:
             return await self._session.__aexit__(exc_type, exc_val, exc_tb)
 
     def __getattr__(self, item):
-        """ ✅ FIX 4: Asinxron va Sinxron metodlarni ajratib qaytaruvchi aqlli lazy_wrapper """
-        if self._session is None:
-            async def lazy_wrapper(*args, **kwargs):
-                session = await self._ensure_session()
-                func = getattr(session, item)
-                if inspect.iscoroutinefunction(func):
-                    return await func(*args, **kwargs)
-                return func(*args, **kwargs)
-            return lazy_wrapper
-            
-        return getattr(self._session, item)
+        """ ✅ Xavfsiz atribut wrapper """
+        if self._session is not None:
+            return getattr(self._session, item)
+
+        def lazy_wrapper(*args, **kwargs):
+            async def async_executor():
+                sess = await self._ensure_session()
+                attr = getattr(sess, item)
+                if inspect.iscoroutinefunction(attr):
+                    return await attr(*args, **kwargs)
+                return attr(*args, **kwargs) if callable(attr) else attr
+            return async_executor()
+        return lazy_wrapper
 
     async def close(self):
-        """Middleware finally qismida xavfsiz yopilishi uchun"""
         if self._session is not None:
             await self._session.close()
-
 
 # ======================================================
 # 🔥 MIDDLEWARE CORE
@@ -200,33 +222,39 @@ class DbSessionMiddleware(BaseMiddleware):
             # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
             # ======================================================
             # Faqat keshda topilmagandagina pooldan real sessiya ochamiz
+            # ======================================================
+            # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
+            # ======================================================
             db_real_session = self.session_pool()
             
             try:
                 async with asyncio.timeout(10.0):
-                    # 1. Bazadan lug'at (dict) ko'rinishida foydalanuvchini olamiz
                     user_data = await UserRepository.get_or_create(db_real_session, user_obj)
 
-                # ✅ FIX 2: Baza muvaffaqiyatli ishladi, Circuit Breaker holatini tiklaymiz
                 await self._reset_circuit_breaker()
 
-                # 2. Endi user_data aniqlangan, bemalol keshga yozamiz
                 await state.l1_cache.set(user_id, user_data)
                 self._fire_and_forget_cache_update(user_data)
 
-                # 3. Data'ga nusxasini joylaymiz
                 data["user"] = copy.deepcopy(user_data)
                 
                 # SafeSession ichiga faol real sessiyani ulaymiz
                 session_obj._session = db_real_session
                 
-                return await handler(event, data)
+                # Handlerni ishga tushiramiz
+                result = await handler(event, data)
+                
+                # 🔥 YANGLIK: Handler ishi muvaffaqiyatli tugasa, COMMIT qilamiz!
+                await session_obj.commit()
+                
+                return result
 
             except Exception as e:
+                # 🔥 YANGLIK: Xatolik yuz bersa, rollback qilamiz!
+                await session_obj.rollback()
                 await self._handle_db_failure(e)
                 logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
                 
-                # Xatolik yuz berganda xavfsiz foydalanuvchi rejimiga o'tish
                 data["user"] = self._emergency_user(user_obj)
                 return await handler(event, data)
 
