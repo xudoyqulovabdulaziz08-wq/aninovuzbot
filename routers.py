@@ -29,7 +29,7 @@ from handlers.admin_panel.anime_main import(
     anime_add,
     anime_lists
 )
-from handlers.admin_panel.channel_main import(
+from handlers.admin_panel.channel import(
     add_channel
 )
 
@@ -51,6 +51,7 @@ main_router.include_routers(
     vip_menu.router, #admin_panel/vip_menu router
     user_control.router, #admin_panel/user_control router
     channel.router, #admin_panel/channel router
+    add_channel.router,
 
     # 4. Anime  routerlari
     anime_add.router, #admin_panel/anime_main/anime_add router
