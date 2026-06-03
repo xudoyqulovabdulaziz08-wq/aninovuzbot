@@ -57,7 +57,7 @@ class AnimeMenuCallbacks:
 # ⛩ QADAM 1: Anime qo'shish boshlanishi (UI & UX PRO MAX)
 # =====================================================================
 # 🔥 JIDDIY FIX: String qobiqdan chiqarildi, endi filtr to'g'ri ishlaydi!
-@router.callback_query(F.data == "AnimeMenuCallbacks.ADD_ANIME" and AnimeMenuState.adding_anime_name)
+@router.callback_query(F.data == "AnimeMenuCallbacks.ADD_ANIME" )
 async def admin_add(callback: CallbackQuery, state: FSMContext):
     """ 🚀 Yangi anime qo'shish jarayonining start nuqtasi """
     
