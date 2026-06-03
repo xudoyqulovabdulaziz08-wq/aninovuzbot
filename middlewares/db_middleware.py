@@ -229,6 +229,7 @@ class DbSessionMiddleware(BaseMiddleware):
             
             try:
                 async with asyncio.timeout(10.0):
+                    db_real_session = await session_obj._ensure_session()
                     user_data = await UserRepository.get_or_create(db_real_session, user_obj)
 
                 await self._reset_circuit_breaker()
@@ -239,7 +240,7 @@ class DbSessionMiddleware(BaseMiddleware):
                 data["user"] = copy.deepcopy(user_data)
                 
                 # SafeSession ichiga faol real sessiyani ulaymiz
-                session_obj._session = db_real_session
+                
                 
                 # Handlerni ishga tushiramiz
                 result = await handler(event, data)

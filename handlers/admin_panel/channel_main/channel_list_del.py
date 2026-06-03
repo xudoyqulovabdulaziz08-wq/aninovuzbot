@@ -32,7 +32,7 @@ class ChannelDeleteCallback(CallbackData, prefix="ch_del"):
 # ========================================================================
 @router.callback_query(F.data == "list_channels")
 async def list_channels(callback: CallbackQuery, state: FSMContext, session: Any):
-    # 🔥 FIX: To'g'ridan-to'g'ri SafeSession'ni ishlatamiz (Lazy Loading o'zi ochadi)
+    # To'g'ridan-to'g'ri SafeSession'ni ishlatamiz (Lazy Loading o'zi ochadi)
     await _execute_channel_listing(callback, state, session, page=1)
 
 # ========================================================================
@@ -49,6 +49,7 @@ async def _execute_channel_listing(callback: CallbackQuery, state: FSMContext, s
     try:
         await callback.answer("📋 Kanallar ro'yxati yuklanmoqda...")
         
+        # Bazadan yoki Keshdan kanallarni olamiz
         activ_channels = await ChannelRepository.get_all_active_channels(session)
         channels = await ChannelRepository.get_all_channels(session)
         
@@ -72,13 +73,18 @@ async def _execute_channel_listing(callback: CallbackQuery, state: FSMContext, s
         builder = InlineKeyboardBuilder()
         
         for ch in page_channels:
-            status = "🟢" if ch.get("is_active", True) else "🔴" 
-            text = f"{status} {ch['title']}"
+            # Agar ma'lumotlar dict bo'lsa get(), SQLAlchemy modeli bo'lsa getattr ishlatiladi. Biz ikkalasiga ham moslaymiz:
+            is_active = ch.get("is_active", True) if isinstance(ch, dict) else getattr(ch, "is_active", True)
+            title = ch.get("title", "Noma'lum") if isinstance(ch, dict) else getattr(ch, "title", "Noma'lum")
+            ch_id = ch.get("channel_id") if isinstance(ch, dict) else getattr(ch, "channel_id")
+
+            status = "🟢" if is_active else "🔴" 
+            text = f"{status} {title}"
             
             builder.row(
                 types.InlineKeyboardButton(
                     text=text,
-                    callback_data=ChannelDetailCallback(channel_id=int(ch["channel_id"]), page=page).pack()
+                    callback_data=ChannelDetailCallback(channel_id=int(ch_id), page=page).pack()
                 )
             )
         
@@ -130,19 +136,24 @@ async def view_channel_detail(callback: CallbackQuery, callback_data: ChannelDet
             ).as_markup()
         )
     
-    status_text = "🟢 Faol (Majburiy obuna ochiq)" if channel.get("is_active", True) else "🔴 Noaktiv (Vaqtincha o'chirilgan)"
+    is_active = channel.get("is_active", True) if isinstance(channel, dict) else getattr(channel, "is_active", True)
+    title = channel.get("title") if isinstance(channel, dict) else getattr(channel, "title")
+    ch_id = channel.get("channel_id") if isinstance(channel, dict) else getattr(channel, "channel_id")
+    url = channel.get("url", "") if isinstance(channel, dict) else getattr(channel, "url", "")
+
+    status_text = "🟢 Faol (Majburiy obuna ochiq)" if is_active else "🔴 Noaktiv (Vaqtincha o'chirilgan)"
     text = (
         f"📢 <b>KANAL MA'LUMOTLARI</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>📌 Nomi:</b> {channel['title']}\n"
-        f"<b>🆔 ID:</b> <code>{channel['channel_id']}</code>\n"
+        f"<b>📌 Nomi:</b> {title}\n"
+        f"<b>🆔 ID:</b> <code>{ch_id}</code>\n"
         f"<b>⚙️ Holati:</b> {status_text}\n"
-        f"<b>🔗 Havola:</b> <a href='{channel['url']}'>Kanalga o'tish</a>\n\n"
+        f"<b>🔗 Havola:</b> <a href='{url}'>Kanalga o'tish</a>\n\n"
         f"<i>💡 Ushbu kanalni o'chirish yoki orqaga qaytishingiz mumkin.</i>"
     )
     
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🗑 Kanalni o'chirish", callback_data=ChannelDeleteCallback(action="ask", channel_id=channel['channel_id'], page=callback_data.page).pack()))
+    builder.row(types.InlineKeyboardButton(text="🗑 Kanalni o'chirish", callback_data=ChannelDeleteCallback(action="ask", channel_id=ch_id, page=callback_data.page).pack()))
     builder.row(types.InlineKeyboardButton(text="🔙 Ro'yxatga qaytish", callback_data=ChannelsPageCallback(page=callback_data.page).pack()))
     
     await callback.message.edit_text(text=text, parse_mode="HTML", reply_markup=builder.as_markup(), disable_web_page_preview=True)
@@ -172,14 +183,23 @@ async def execute_delete_channel(callback: CallbackQuery, callback_data: Channel
     
     await callback.answer("⏳ O'chirish jarayoni bajarilmoqda...")
     
-    # 🔥 FIX: Biz ayni shu yerda SafeSession proxy'ni Repository'ga beryapmiz. 
-    # U baza operatsiyasini bajarib, keshni faqatgina Middleware COMMIT bo'lgandan keyin o'chiradi.
-    success = await ChannelRepository.delete_channel_by_id(session, callback_data.channel_id)
-    
-    if success:
-        text = "🗑 <b>Kanal muvaffaqiyatli o'chirildi!</b>\n\nBarcha bog'liqliklar tozalab tashlandi. ✅"
-    else:
-        text = "❌ Xatolik: Kanal topilmadi yoki u allaqachon bazadan o'chirib yuborilgan."
+    try:
+        # 1. Bazadan kanalni o'chirish so'rovini yuborish
+        success = await ChannelRepository.delete_channel_by_id(session, callback_data.channel_id)
+        
+        if success:
+            # 🌟 ENGL MUHIM FIX: Tranzaksiyani bazaga jismonan yozamiz!
+            # Bu buyruq berilgandagina ma'lumot bazada o'chadi va SQL zanjiri to'liq yakunlanadi.
+            await session.commit()
+            text = "🗑 <b>Kanal muvaffaqiyatli o'chirildi!</b>\n\nBarcha bog'liqliklar va keshlar klaster bo'ylab tozalab tashlandi. ✅"
+        else:
+            text = "❌ Xatolik: Kanal topilmadi yoki u allaqachon bazadan o'chirib yuborilgan."
+
+    except Exception as db_err:
+        logger.error(f"Kanalni commit qilishda DB xatoligi: {db_err}")
+        # Agar xatolik bo'lsa, xavfsiz holatga qaytaramiz
+        await session.rollback()
+        text = "❌ Bazaga yozishda texnik xatolik yuz berdi. Amal bekor qilindi."
 
     try:
         await callback.message.edit_text(text=text, parse_mode="HTML", reply_markup=builder_back.as_markup())
