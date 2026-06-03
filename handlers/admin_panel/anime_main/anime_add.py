@@ -236,28 +236,54 @@ async def process_anime_photo(message: Message, state: FSMContext, **data):
 # ⛩ QADAM 4 (Asosiy): Tanlangan janrlarni tasdiqlash -> Yilni so'rash
 # =====================================================================
 @router.callback_query(AnimeMenuState.adding_genres, F.data == "confirm_genres_choice")
-async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext):
+async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, session: Any):
     """ 🏁 Admin janrlarni tanlab bo'lib 'Saqlash' tugmasini bosganda ishlaydi """
     
     current_data = await state.get_data()
-    selected_genres = current_data.get("selected_genres", [])
+    selected_genre_ids = current_data.get("selected_genres", [])
     
     # Jiddiy UX tekshiruvi: Agar admin birorta ham janr tanlamasdan saqlamoqchi bo'lsa
-    if not selected_genres:
+    if not selected_genre_ids:
         return await callback.answer(
             "⚠️ Kamida 1 ta janr tanlashingiz shart!", 
             show_alert=True
         )
-    
+        
+    await callback.answer("⚙️ Janrlar qayta ishlanmoqda...")
+
+    # 🔥 BAZADAN ID LAR ORQALI JANR NOMLARINI TORTIB OLAMIZ (XATOSIZ KO'RSATISH UCHUN)
+    genre_names = []
+    if selected_genre_ids:
+        # Ro'yxat elementlari int yoki string ekanligini tekshirib olamiz (xavfsizlik uchun)
+        try:
+            clean_ids = [int(g_id) for g_id in selected_genre_ids if str(g_id).isdigit()]
+            
+            if clean_ids:
+                stmt = select(Genre).where(Genre.id.in_(clean_ids))
+                result = await session.execute(stmt)
+                genres_objs = result.scalars().all()
+                # Xatoliklarni oldini olish uchun html.escape qilamiz
+                genre_names = [html.escape(g.name) for g in genres_objs]
+        except Exception:
+            # Agar FSMda eski stringlar qolib ketgan bo'lsa, zaxira filtri
+            genre_names = [html.escape(str(g)) for g in selected_genre_ids]
+
+    # Agar biron sabab bilan nomlar topilmasa, IDlarni o'zini chiqaramiz
+    if not genre_names:
+        genre_names = [str(g_id) for g_id in selected_genre_ids]
+
     # Keyingi bosqichga (Yilni so'rash) o'tkazamiz
     await state.set_state(AnimeMenuState.adding_year)
     
-    # Futuristik ramka ichida chiroyli yo'riqnoma
+    # 🔥 TUZATILGAN HTML FORMATLASH (Barcha teglar qat'iy yopilgan)
     text = (
-        f"🔮 <b>Tanlangan janrlar:</b> <code>{', '.join(selected_genres)}</code>\n"
+        "╔═══════════ ⛩ ═══════════╗\n"
+        "        <b>JANRLAR TASDIQLANDI</b>\n"
+        "╚═══════════ ⛩ ═══════════╝\n\n"
+        f"🔮 <b>Tanlangan janrlar:</b> <code>{', '.join(genre_names)}</code>\n"
         "───────────────────────\n\n"
         "📅 Endi animening <b>chiqarilgan yilini</b> kiriting:\n"
-        "<i>(Masalan: 2024, 2025 kabi faqat raqam kiriting)</i>"
+        "<i>(Masalan: 2024, 2025 kabi faqat yil raqamini yozing)</i>"
     )
     
     builder = InlineKeyboardBuilder()
@@ -268,13 +294,20 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext):
         )
     )
     
-    # Silliq animatsiya bilan xabarni yangilaymiz
-    await callback.message.edit_text(
-        text=text,
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
+    # Silliq tarzda xabarni yangilaymiz
+    try:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        # Agar edit_text'da muammo bo'lsa, javob xabari sifatida yuboramiz
+        await callback.message.answer(
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
 
 
 # =====================================================================
