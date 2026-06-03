@@ -173,12 +173,15 @@ async def _execute_channel_adding(message: Message, state: FSMContext, session: 
 
 # ============================= CONFIRM ADD ============================= #
 # ======================================================================= #
+# ============================= CONFIRM ADD (TUZATILDI) ============================= #
+# =================================================================================== #
 @router.callback_query(F.data == "confirm_add_channel")
 async def confirm_add(callback: CallbackQuery, state: FSMContext, **kwargs):
     safe_session = kwargs.get("session")
     session_pool = kwargs.get("session_pool")
     channel_data = await state.get_data()
     
+    # SafeSession proxy ichidan jonli sessiyani ajratamiz
     actual_session = getattr(safe_session, "_session", None)
     
     builder = InlineKeyboardBuilder()
@@ -189,30 +192,42 @@ async def confirm_add(callback: CallbackQuery, state: FSMContext, **kwargs):
         if not channel_data or 'channel_id' not in channel_data:
             raise ValueError("Kesh ma'lumotlari bo'sh yoki muddati eskirgan.")
 
+        # ID son ekanligini va BigInteger kuta olishini ta'minlash uchun int() ga o'giramiz
+        target_channel_id = int(channel_data['channel_id'])
+
         if actual_session is not None:
+            # 1-Ssenariy: Middleware sessiyasi mavjud.
+            # DIQQAT: Repository ichida session.commit() chaqirilmasligi kerak!
+            # Faqat session.add() va session.flush() yetarli. Commit'ni middleware o'zi qiladi.
             await ChannelRepository.add_channel(
                 session=actual_session, 
-                channel_id=channel_data['channel_id'], 
+                channel_id=target_channel_id, 
                 title=channel_data['title'], 
                 url=channel_data['url']
             )
+            # Agarda repository ichida commit bo'lmasa, o'zgarishlar middleware orqali yoziladi.
+            
         elif session_pool is not None:
+            # 2-Ssenariy: Middleware'dan tashqarida (Kesh rejimi)
             async with session_pool() as new_session:
                 await ChannelRepository.add_channel(
                     session=new_session, 
-                    channel_id=channel_data['channel_id'], 
+                    channel_id=target_channel_id, 
                     title=channel_data['title'], 
                     url=channel_data['url']
                 )
+                # Alvohida ochilgan sessiyada qo'lda commit qilamiz
+                await new_session.commit()
         else:
-            raise RuntimeError("Infratuzilmada ulanishlar hovuzi aniqlanmadi.")
+            raise RuntimeError("Infratuzilmada ulanishlar hovuzi (Session Pool) aniqlanmadi.")
 
-        # Outbox event emitter va Invalidation avtomatik ishlashi haqida bildirishnoma
+        # Muvaffaqiyatli xabar
         await callback.message.edit_text(
             "╔═════════ ⛩ ═════════╗\n"
             "     <b>MUVAFFAQIYAT</b>\n"
             "╚═════════ ⛩ ═════════╝\n\n"
-            "✅ <b>Kanal muvaffaqiyatli saqlandi!</b>\n\n"
+            f"✅ <b>Kanal muvaffaqiyatli saqlandi!</b>\n"
+            f"📡 <b>Kanal:</b> {channel_data['title']}\n\n"
             "⚙ <i>Infratuzilma yangilandi: Kesh invalidatsiya qilindi, "
             "tarqatish workerlari yangi obunani qabul qilishga tayyor.</i>", 
             reply_markup=back_markup,
@@ -220,21 +235,23 @@ async def confirm_add(callback: CallbackQuery, state: FSMContext, **kwargs):
         )
         
     except Exception as e:
-        logger.error(f"❌ Kanalni DB'ga yozishda tranzaksiya quladi: {e}")
+        # Xatoni logga to'liq traceback bilan yozamiz, shunda aniq sababi ko'rinadi
+        logger.error(f"❌ KANAL QO'SHISHDA TRANZAKSIYA QULADI: {e}", exc_info=True)
+        
         await callback.message.edit_text(
             "╔═════════ ⛩ ═════════╗\n"
             "    <b>TRANZAKSIYA XATOSI</b>\n"
             "╚═════════ ⛩ ═════════╝\n\n"
-            "❌ Ma'lumotlarni bazaga yozish jarayonida ichki xatolik yuz berdi.\n"
-            "Iltimos, tizim jurnallarini (logs) tekshiring yoki qaytadan urinib ko'ring.",
+            f"❌ Ma'lumotlarni bazaga yozishda ichki xatolik yuz berdi.\n\n"
+            f"⚠️ <b>Xatolik turi:</b> <code>{type(e).__name__}</code>\n"
+            "<i>Tizim jurnallarini (logs) tekshiring. Katta ehtimol bilan ChannelRepository ichidagi commit yoki OutboxEvent hashi to'qnashmoqda.</i>",
             reply_markup=back_markup,
             parse_mode="HTML"
         )
         
     finally:
-        # Har qanday holatda FSM keshini va holatni (State) to'liq tozalaymiz
+        # FSM holatni har qanday vaziyatda tozalaymiz
         await state.clear()
-
 
 # ======================== EXTRA UTILITY HANDLER ======================== #
 # FSM holatini xavfsiz tozalab keyin orqaga qaytaradigan maxsus tugma handler'i
