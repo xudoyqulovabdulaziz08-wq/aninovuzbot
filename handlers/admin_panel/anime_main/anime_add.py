@@ -432,8 +432,7 @@ async def process_anime_year(message: Message, state: FSMContext):
         f"📅 <b>Chiqarilgan yili saqlandi:</b> <code>{year_value}-yil</code>\n"
         "───────────────────────\n\n"
         "✍️ Endi ushbu anime uchun <b>batafsil tavsif (Description)</b> kiriting:\n\n"
-        "💡 <i>Tavsiya: Tavsif matni ichida Telegram teglari (<b>, <i>, <code>) "
-        "ishlatishingiz mumkin, ular animening umumiy sahifasida chiroyli aks etadi.</i>"
+        "<i>📌 Tavsifda animening mavzusi, asosiy qahramonlari, voqealar rivoji va boshqa muhim ma'lumotlarni kiriting. </i>"
     )
     
     builder = InlineKeyboardBuilder()
@@ -451,9 +450,7 @@ async def process_anime_year(message: Message, state: FSMContext):
         parse_mode="HTML"
     )
 
-# =====================================================================
-# QADAM 6: Tavsifni qabul qilish -> Tillarni so'rash
-# =====================================================================
+
 # =====================================================================
 # ⛩ QADAM 6: Tavsifni qabul qilish -> Tillarni so'rash
 # =====================================================================
