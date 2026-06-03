@@ -290,7 +290,7 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Jarayonni bekor qilish", 
-            callback_data="add_anime_main"
+            callback_data="add_anime"
         )
     )
     
