@@ -601,6 +601,7 @@ class OutboxEvent(Base):
 
     payload: Mapped[dict] = mapped_column(JSONB, default=dict, server_default='{}')
 
+    event_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     # 🌟 MANA SHU USTUNNI QO'SHASIZ:
