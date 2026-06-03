@@ -29,16 +29,18 @@ logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
 
 
+# =====================================================================
+# ⛩ STATE & CALLBACK DEFINITIONS (Imlo xatolari tuzatildi)
+# =====================================================================
 class AnimeMenuState(StatesGroup):
-    adding_anime_name = State() # 1 yangi anime qo'shish uchun nomini kiritish
-    adding_anime_photo = State() # 2 yangi anime qo'shish uchun rasmni kiritish
-    adding_genres = State() # 3 yangi anime qo'shish uchun janrlarni kiritish
-    adding_year = State() # 5 yangi anime qo'shish uchun chiqarilgan yilni kiritish
-    adding_description = State() # 6 yangi anime qo'shish uchun tavsifni kiritish
-    adding_laguages = State() # 7 yangi anime qo'shish uchun tillarni kiritish
-    adding_episode_video = State()
-    
-    updating_anime = State()
+    adding_anime_name = State()       # 1. Yangi anime nomi
+    adding_anime_photo = State()      # 2. Rasm / Poster
+    adding_genres = State()           # 3. Janrlar
+    adding_year = State()             # 4. Chiqarilgan yil
+    adding_description = State()      # 5. Tavsif
+    adding_languages = State()        # 6. Tillari (Imlo xatosi FIX)
+    adding_episode_video = State()    # 7. Epizod videosi
+    updating_anime = State()          # Yangilash holati
 
 class AnimeMenuCallbacks:
     ADD_ANIME = "add_anime"
@@ -51,171 +53,424 @@ class AnimeMenuCallbacks:
     UPDATE_ANIME = "update_anime"
 
 
-
-
 # =====================================================================
-# QADAM 1: Anime qo'shish boshlanishi
+# ⛩ QADAM 1: Anime qo'shish boshlanishi (UI & UX PRO MAX)
 # =====================================================================
-@router.callback_query(F.data == "AnimeMenuCallbacks.ADD_ANIME")
+# 🔥 JIDDIY FIX: String qobiqdan chiqarildi, endi filtr to'g'ri ishlaydi!
+@router.callback_query(F.data == "AnimeMenuCallbacks.ADD_ANIME" and AnimeMenuState.adding_anime_name)
 async def admin_add(callback: CallbackQuery, state: FSMContext):
-    # 1. Bir marta va aniq javob beramiz
-    await callback.answer("📌 Yangi anime qo'shish jarayoni boshlandi!")
+    """ 🚀 Yangi anime qo'shish jarayonining start nuqtasi """
     
-    # 2. Holatni (State) o'rnatamiz
+    # 1. Holatni (State) to'liq tozalab, yangi bosqichni o'rnatamiz
+    await state.clear()
     await state.set_state(AnimeMenuState.adding_anime_name)
     
-    # 3. Tugmalarni to'g'ri yig'amiz
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="add_anime_main"))
-    
-    # 4. Matndagi formatlashni HTML rejimiga moslaymiz
+    # 2. Vizual interfeys (Dark Mode va yapon anime minimalizmi uyg'unligi)
     text = (
-        "🎬 <b>Yangi anime qo'shish jarayoni</b>\n\n"
-        "📌 Iltimos, yangi anime nomini kiriting:"
+        "╔═══════════ ⛩ ═══════════╗\n"
+        "       <b>YANGI ANIME QO'SHISH</b>\n"
+        "╚═══════════ ⛩ ═══════════╝\n\n"
+        "🎬 Tizimga yangi anime kiritish jarayoni boshlandi.\n\n"
+        "📝 Iltimos, animening <b>rasmiy nomini</b> kiriting:\n"
+        "<i>(Masalan: Naruto, Attack on Titan, Solo Leveling)</i>"
+    )
+    
+    # 3. Premium ko'rinishdagi boshqaruv tugmasi
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🚫 Jarayonni bekor qilish", 
+            callback_data="add_anime_main"
+        )
     )
     
     try:
-        # 🔥 FIX: reply_markup uchun builder.as_markup() uzatiladi
+        # 4. Silliq vizual yangilash
         await callback.message.edit_text(
             text=text, 
             reply_markup=builder.as_markup(), 
             parse_mode="HTML"
         )
+        # Sarlavha xabarnomasini qisqa va chiroyli tarzda yuboramiz
+        await callback.answer("⚙️ Nom kiritish bosqichi...")
+        
     except TelegramBadRequest as e:
-        # Agar xabar o'zgarmagan bo'lsa xatolikni yutib yuboramiz, boshqalarini log qilamiz
         if "message is not modified" not in str(e).lower():
             logger.error(f"❌ Anime panel xatosi: {e}")
-
-
-
+            await callback.answer("⚠️ Texnik xatolik yuz berdi.", show_alert=True)
 
 # =====================================================================
-# QADAM 2: Nomni qabul qilish -> Rasm so'rash
+# ⛩ QADAM 2: Nomni qabul qilish -> Rasm (Poster) so'rash
 # =====================================================================
 @router.message(AnimeMenuState.adding_anime_name)
 async def process_anime_name(message: Message, state: FSMContext):
-    if not message.text:
-        await message.reply("❌ Iltimos, faqat matnli xabar yuboring. Yangi anime nomini kiriting:")
-        return
+    """ 📥 Admin yuborgan anime nomini qabul qilish va poster so'rash """
     
-    # 💡 Repozitoriyga to'g'ri borishi uchun 'title' kaliti bilan saqlaymiz
-    await state.update_data(title=message.text.strip())
+    # 1. Input Validation (Faqat matn ekanligini tekshirish)
+    if not message.text or message.text.startswith("/"):
+        return await message.answer(
+            "⚠️ <b>Xatolik:</b> Iltimos, faqat matnli havola yoki anime nomini kiriting!\n"
+            "📌 Yangi anime nomini qaytadan yuboring:"
+        )
     
+    anime_title = message.text.strip()
+    
+    # Validation: Juda qisqa yoki bema'ni nomlarni filtrlaymiz
+    if len(anime_title) < 2:
+        return await message.answer("❌ <b>Anime nomi juda qisqa!</b> Kamida 2 ta belgi bo'lishi shart:")
+
+    # 2. Ma'lumotni repozitoriy standartiga mos 'title' kaliti bilan FSMga yozamiz
+    await state.update_data(title=anime_title)
+    
+    # 3. Keyingi bosqichga (Rasm so'rash) o'tkazamiz
     await state.set_state(AnimeMenuState.adding_anime_photo)
 
-    builder = InlineKeyboardBuilder()
-    # ✨ To'g'rilandi: Qo'shtirnoqsiz va admin panelga xavfsiz qaytadigan qilindi
-    builder.row(types.InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="add_anime_main"))
+    # 4. Vizual interfeys (Futuristik va aniq yo'riqnoma bilan)
+    text = (
+        f"⛩ <b>Anime nomi saqlandi:</b> <code>{anime_title}</code>\n"
+        "───────────────────────\n\n"
+        "🖼 Endi ushbu anime uchun <b>Poster (Rasm)</b> yuboring.\n\n"
+        "💡 <i>Tavsiya: Rasmni siqilmagan holda (file) emas, oddiy rasm (photo) "
+        "shaklida yuboring yoki rasmning to'g'ridan-to'g'ri URL havolasini kiriting.</i>"
+    )
     
-    await message.reply(
-        "📌 Endi anime posterining **rasmini** yuboring:", 
-        reply_markup=builder.as_markup()
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🚫 Jarayonni bekor qilish", 
+            callback_data="add_anime_main"
+        )
+    )
+    
+    # 5. Xavfsiz va chiroyli tarzda yuborish (reply emas, answer)
+    await message.answer(
+        text=text, 
+        reply_markup=builder.as_markup(), 
+        parse_mode="HTML"
     )
 
 
 
+# =====================================================================
+# ⛩ QADAM 3: Rasmni qabul qilish -> Janrlarni dynamic ko'rsatish
+# =====================================================================
+# 🔥 FIX: Faqat F.photo emas, umumiy holatda qabul qilib, ichkarida tekshiramiz (Crash proof)
+@router.message(AnimeMenuState.adding_anime_photo)
+async def process_anime_photo(message: Message, state: FSMContext, **data):
+    """ 📥 Admin yuborgan rasmni (yoki URL) qabul qilib, janrlar klaviaturasini chiqarish """
+    
+    poster_id = None
+    
+    # 1. Agar rasm formatida kelgan bo'lsa
+    if message.photo:
+        poster_id = message.photo[-1].file_id
+    # 2. Agar siqilmagan fayl (Document) formatida rasm kelgan bo'lsa
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+        poster_id = message.document.file_id
+    # 3. Agar matnli URL havola yuborilgan bo'lsa
+    elif message.text and (message.text.startswith("http://") or message.text.startswith("https://")):
+        poster_id = message.text.strip()
+    else:
+        # Noto'g'ri format yuborilsa, FSM uzilib qolmaydi, qayta so'raydi
+        return await message.answer(
+            "⚠️ <b>Noto'g'ri format!</b>\n"
+            "Iltimos, animening rasmini yuboring yoki to'g'ri rasm URL havolasini kiriting:"
+        )
 
-# =====================================================================
-# QADAM 3: Rasmni qabul qilish -> Janrlarni so'rash
-# =====================================================================
-@router.message(AnimeMenuState.adding_anime_photo, F.photo)
-async def process_anime_photo(message: Message, state: FSMContext):
-    # Eng sifatli rasm file_id'si
-    photo_file_id = message.photo[-1].file_id
+    # FSM xotirasiga poster_id va kelajakda tanlanadigan janrlar uchun bo'sh ro'yxat ochamiz
+    await state.update_data(poster_id=poster_id, selected_genres=[])
     
-    await state.update_data(poster_id=photo_file_id)
-    
+    # Keyingi bosqichga o'tamiz
     await state.set_state(AnimeMenuState.adding_genres)
 
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="add_anime_main"))
+    # 4. 🔥 BAZADAN JANRLARNI DYNAMIC UKLASH (Zanjir uzilmasligi uchun)
+    safe_session = data.get("session")
+    actual_session = getattr(safe_session, "_session", safe_session)
     
-    # ✨ To'g'rilandi: reply_markup=builder.as_markup() qo'shildi, tugma ko'rinadi
-    await message.reply(
-        "📌 Endi anime **janrlarini** kiriting (masalan: Jangari, Komediya):",
-        reply_markup=builder.as_markup()
+    builder = InlineKeyboardBuilder()
+    try:
+        # Bazadagi barcha janrlarni alifbo tartibida olamiz
+        stmt = select(Genre).order_by(Genre.name.asc())
+        res = await actual_session.execute(stmt)
+        genres_list = res.scalars().all()
+        
+        # Har bir janr uchun dynamic tugma yaratamiz
+        for genre in genres_list:
+            builder.row(
+                types.InlineKeyboardButton(
+                    text=f"🔮 {genre.name}", 
+                    callback_data=f"toggle_g_{genre.name}"
+                )
+            )
+    except Exception as e:
+        logger.error(f"❌ Janrlarni yuklashda xatolik: {e}")
+        # Agar bazada hali janr bo'lmasa, fallback sifatida ogohlantiramiz
+        return await message.answer("❌ Tizimda janrlar topilmadi. Avval janrlar yarating!")
+
+    # Davom etish va Bekor qilish tugmalari
+    builder.row(
+        types.InlineKeyboardButton(text="🚀 Saqlash va Davom etish", callback_data="confirm_genres_choice")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="🚫 Jarayonni bekor qilish", callback_data="add_anime_main")
+    )
+
+    text = (
+        "🖼 <b>Poster muvaffaqiyatli qabul qilindi.</b>\n"
+        "───────────────────────\n\n"
+        "📁 Quyidagi ro'yxatdan anime <b>janrlarini</b> tanlang:\n"
+        "<i>(Tugmalarni bossangiz, yonida ✅ belgisi paydo bo'ladi. Bir nechta janr tanlash mumkin)</i>"
+    )
+
+    await message.answer(
+        text=text, 
+        reply_markup=builder.as_markup(), 
+        parse_mode="HTML"
     )
 
 
 
 
+
 # =====================================================================
-# QADAM 4: Janrlarni qabul qilish -> Yilni so'rash
+# ⛩ QADAM 4 (Asosiy): Tanlangan janrlarni tasdiqlash -> Yilni so'rash
+# =====================================================================
+@router.callback_query(AnimeMenuState.adding_genres, F.data == "confirm_genres_choice")
+async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext):
+    """ 🏁 Admin janrlarni tanlab bo'lib 'Saqlash' tugmasini bosganda ishlaydi """
+    
+    current_data = await state.get_data()
+    selected_genres = current_data.get("selected_genres", [])
+    
+    # Jiddiy UX tekshiruvi: Agar admin birorta ham janr tanlamasdan saqlamoqchi bo'lsa
+    if not selected_genres:
+        return await callback.answer(
+            "⚠️ Kamida 1 ta janr tanlashingiz shart!", 
+            show_alert=True
+        )
+    
+    # Keyingi bosqichga (Yilni so'rash) o'tkazamiz
+    await state.set_state(AnimeMenuState.adding_year)
+    
+    # Futuristik ramka ichida chiroyli yo'riqnoma
+    text = (
+        f"🔮 <b>Tanlangan janrlar:</b> <code>{', '.join(selected_genres)}</code>\n"
+        "───────────────────────\n\n"
+        "📅 Endi animening <b>chiqarilgan yilini</b> kiriting:\n"
+        "<i>(Masalan: 2024, 2025 kabi faqat raqam kiriting)</i>"
+    )
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🚫 Jarayonni bekor qilish", 
+            callback_data="add_anime_main"
+        )
+    )
+    
+    # Silliq animatsiya bilan xabarni yangilaymiz
+    await callback.message.edit_text(
+        text=text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# =====================================================================
+# ⛩ QADAM 5.5: Admin janrlarni matn ko'rinishida yozgandagi Fallback
 # =====================================================================
 @router.message(AnimeMenuState.adding_genres)
-async def process_anime_genres(message: Message, state: FSMContext):
-    if not message.text:
-        await message.reply("❌ Iltimos, faqat matnli xabar yuboring. Anime janrlarini kiriting:")
-        return
+async def fallback_anime_genres_message(message: Message, state: FSMContext, session: Any):
+    """ 🛡 Admin tugmalarni bosish o'rniga chatga matn yozganda ishlaydigan aqlli tizim """
     
-    # Janrlarni ro'yxatga ajratish
-    genres = [g.strip() for g in message.text.split(",") if g.strip()]
-    
-    # 💡 Kichik qo'shimcha: Agar admin to'g'ri janr kiritmagan bo'lsa (masalan: ", ,, ,")
-    if not genres:
-        await message.reply("⚠️ Janrlar aniqlanmadi. Iltimos, kamida bitta janr kiriting (masalan: _Jangari, Komediya_):")
-        return
-    
-    await state.update_data(genres=genres)
-    
-    await state.set_state(AnimeMenuState.adding_year)
+    # Buyruqlar (commands) kelib qolsa, o'tkazib yubormaslik uchun
+    if not message.text or message.text.startswith("/"):
+        return await message.answer("❌ Iltimos, faqat matn ko'rinishida yozing yoki yuqoridagi tugmalardan foydalaning.")
+        
+    # Matnni tozalaymiz va har bir janr nomini chiroyli formatlaymiz
+    input_genres = [g.strip().capitalize() for g in message.text.split(", ") if g.strip()]
+    if not input_genres:
+        # Agar shunchaki vergullar tashlab yuborilgan bo'lsa
+        input_genres = [g.strip().capitalize() for g in message.text.split(",") if g.strip()]
 
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="add_anime_main"))
-    
-    await message.reply(
-        "📌 Endi anime **chiqarilgan yilini** kiriting (masalan: _2024_):",
-        reply_markup=builder.as_markup()
-    )
+    if not input_genres:
+        return await message.answer(
+            "⚠️ <b>Janrlar aniqlanmadi!</b>\n"
+            "Iltimos, janr nomlarini vergul bilan ajratgan holda kiriting.\n"
+            "<i>(Masalan: Shounen, Isekai, Ekshen)</i>",
+            parse_mode="HTML"
+        )
+
+    loading_msg = await message.answer("⚙️ <code>Janrlar tekshirilmoqda va indekslanmoqda...</code>", parse_mode="HTML")
+
+    # 🔥 ARXITEKTURA FIX: String nomlarni bazadagi ID'lar bilan sinxronizatsiya qilamiz
+    final_genre_ids = []
+    processed_names = []
+
+    try:
+        for genre_name in input_genres:
+            # 1. Bazadan ushbu nomdagi janr bor-yo'qligini tekshiramiz
+            # Model nomingiz 'Genre' ekanligidan kelib chiqib:
+            stmt = select(Genre).where(Genre.name == genre_name)
+            result = await session.execute(stmt)
+            genre_obj = result.scalar_one_or_none()
+            
+            # 2. Agar janr bazada bo'lmasa, uni avtomat yaratamiz! (Aqlli tizim)
+            if not genre_obj:
+                genre_obj = Genre(name=genre_name)
+                session.add(genre_obj)
+                await session.flush() # Bazadan yangi ID olish uchun flush qilamiz (commit shart emas hali)
+            
+            final_genre_ids.append(genre_obj.id)
+            processed_names.append(genre_obj.name)
+
+        # 3. 🔥 ENGL MUHIM JOYI: FSM xotirasiga string emas, faqat ID ro'yxatini yozamiz!
+        # Loyihaning qolgan qismida 'selected_genres' aynan [1, 4, 7] ko'rinishida tutiladi
+        await state.update_data(selected_genres=final_genre_ids)
+        
+        # Holatni keyingi bosqichga (Yil kiritishga) o'tkazamiz
+        await state.set_state(AnimeMenuState.adding_year)
+        
+        # Premium Dark-Mode UI
+        text = (
+            "╔═══════════ ⛩ ═══════════╗\n"
+            "        <b>JANRLAR INDEKSLANDI</b>\n"
+            "╚═══════════ ⛩ ═══════════╝\n\n"
+            f"✍️ <b>Tizim qabul qilgan janrlar:</b>\n"
+            f"<code>{', '.join(processed_names)}</code>\n"
+            f"📊 <i>(Jami: {len(final_genre_ids)} ta janr muvaffaqiyatli bog'landi)</i>\n"
+            "───────────────────────\n\n"
+            "📅 Endi animening <b>chiqarilgan yilini</b> kiriting:\n"
+            "<i>(Masalan: 2024 yoki 2026)</i>"
+        )
+        
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🚫 Jarayonni bekor qilish", 
+                callback_data="add_anime_main"
+            )
+        )
+        
+        await loading_msg.edit_text(
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Janrlarni qayta ishlashda xatolik: {e}")
+        await loading_msg.edit_text("❌ Janrlarni indekslashda kutilmagan xatolik yuz berdi. Qaytadan urinib ko'ring.")
 
 
 
 # =====================================================================
-# QADAM 5: Yilni qabul qilish -> Tavsifni so'rash
+# ⛩ QADAM 5: Yilni qabul qilish -> Tavsifni so'rash
 # =====================================================================
 @router.message(AnimeMenuState.adding_year)
 async def process_anime_year(message: Message, state: FSMContext):
-    if not message.text or not message.text.isdigit():
-        await message.reply("❌ Iltimos, faqat butun son kiriting (Masalan: `2025`):")
-        return
+    """ 📅 Admin yuborgan chiqarilgan yilni qabul qilish va tavsif so'rash """
+    
+    # 1. Input Validation: Raqam ekanligini va buyruq emasligini tekshirish
+    if not message.text or not message.text.isdigit() or message.text.startswith("/"):
+        return await message.answer(
+            "⚠️ <b>Xatolik:</b> Iltimos, faqat butun son kiriting!\n"
+            "📌 Chiqarilgan yilni qaytadan kiriting (Masalan: <code>2025</code>):",
+            parse_mode="HTML"
+        )
     
     year_value = int(message.text.strip())
     
-    # 💡 Kichik reallik tekshiruvi (Masalan, 1950 va 2030 yillar oralig'i)
+    # 2. Reallik tekshiruvi (Business Logic Guard)
     if year_value < 1950 or year_value > 2030:
-        await message.reply("⚠️ Iltimos, real yilni kiriting (1950 - 2030 oralig'ida):")
-        return
+        return await message.answer(
+            f"⚠️ <b>Cheklov:</b> Siz kiritgan yil: <code>{year_value}</code>\n"
+            "Iltimos, real yilni kiriting (1950 - 2030 yillar oralig'ida):",
+            parse_mode="HTML"
+        )
         
+    # 3. Ma'lumotni FSM xotirasiga yozamiz va keyingi holatga o'tamiz
     await state.update_data(year=year_value)
     await state.set_state(AnimeMenuState.adding_description)
 
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="add_anime_main"))
-    
-    await message.reply(
-        "📌 Endi anime **tavsifini (Description)** kiriting:",
-        reply_markup=builder.as_markup()
+    # 4. Vizual interfeys (Premium ko'rinishda)
+    text = (
+        f"📅 <b>Chiqarilgan yili saqlandi:</b> <code>{year_value}-yil</code>\n"
+        "───────────────────────\n\n"
+        "✍️ Endi ushbu anime uchun <b>batafsil tavsif (Description)</b> kiriting:\n\n"
+        "💡 <i>Tavsiya: Tavsif matni ichida Telegram teglari (<b>, <i>, <code>) "
+        "ishlatishingiz mumkin, ular animening umumiy sahifasida chiroyli aks etadi.</i>"
     )
-
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🚫 Jarayonni bekor qilish", 
+            callback_data="add_anime_main"
+        )
+    )
+    
+    # 5. Silliq va toza yuborish (reply emas, answer)
+    await message.answer(
+        text=text, 
+        reply_markup=builder.as_markup(), 
+        parse_mode="HTML"
+    )
 
 # =====================================================================
 # QADAM 6: Tavsifni qabul qilish -> Tillarni so'rash
 # =====================================================================
+# =====================================================================
+# ⛩ QADAM 6: Tavsifni qabul qilish -> Tillarni so'rash
+# =====================================================================
 @router.message(AnimeMenuState.adding_description)
 async def process_anime_description(message: Message, state: FSMContext):
-    if not message.text:
-        await message.reply("❌ Iltimos, faqat matnli xabar yuboring. Anime tavsifini kiriting:")
-        return
+    """ ✍️ Admin yuborgan tavsifni qabul qilish va tillarni so'rash """
     
-    await state.update_data(description=message.text.strip())
-    await state.set_state(AnimeMenuState.adding_laguages)
+    # 1. Input Validation: Faqat matn ekanligini va buyruq (/start, /cancel) emasligini tekshiramiz
+    if not message.text or message.text.startswith("/"):
+        return await message.answer(
+            "⚠️ <b>Xatolik:</b> Iltimos, anime tavsifini matn ko'rinishida yuboring!\n"
+            "📌 Tavsifni qaytadan kiriting:"
+        )
+        
+    anime_description = message.text.strip()
+    
+    # Kichik biznes-loyiha cheklovi: Tavsif juda qisqa bo'lsa qaytaramiz
+    if len(anime_description) < 10:
+        return await message.answer(
+            "⚠️ <b>Tavsif juda qisqa!</b>\n"
+            "Foydalanuvchilarga tushunarli bo'lishi uchun kamida 10 ta belgidan iborat tavsif kiriting:"
+        )
+    
+    # 2. Ma'lumotni FSM xotirasiga yozamiz
+    await state.update_data(description=anime_description)
+    
+    # 🔥 FIX: 1-qadamda to'g'rilangan 'adding_languages' state'iga o'tkazamiz
+    await state.set_state(AnimeMenuState.adding_languages)
 
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="add_anime_main"))
+    # 3. Vizual interfeys (Premium Dark-Mode dizayni)
+    text = (
+        "✍️ <b>Anime tavsifi muvaffaqiyatli saqlandi.</b>\n"
+        "───────────────────────\n\n"
+        "🌐 Endi ushbu anime qaysi <b>tillarga (ovoz va subtitr)</b> ega ekanligini kiriting:\n"
+        "<i>(Masalan: O'zbekcha, Yaponcha, Ruscha kabi vergul bilan ajratib yozing)</i>"
+    )
     
-    await message.reply(
-        "📌 Endi anime **tillarini** kiriting (masalan: Yaponcha, Inglizcha):",
-        reply_markup=builder.as_markup()
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🚫 Jarayonni bekor qilish", 
+            callback_data="add_anime_main"
+        )
+    )
+    
+    # 4. Toza va chiroyli tarzda yuborish (reply emas, answer)
+    await message.answer(
+        text=text, 
+        reply_markup=builder.as_markup(), 
+        parse_mode="HTML"
     )
 
 
@@ -225,314 +480,510 @@ async def process_anime_description(message: Message, state: FSMContext):
 # =====================================================================
 # QADAM 7: Tillarni olish -> BAZAGA VA KESHGA YOZISH (YAKUN)
 # =====================================================================
-@router.message(AnimeMenuState.adding_laguages)
-async def process_anime_languages_and_save(message: Message, state: FSMContext, session_pool: async_sessionmaker):
-    if not message.text:
-        await message.reply("❌ Iltimos, matn kiriting:")
-        return
+# =====================================================================
+# ⛩ QADAM 7: Tillarni qabul qilish -> BAZAGA VA KESHGA YOZISH (YAKUN)
+# =====================================================================
+# 🔥 FIX 1: State nomi 'adding_languages' deb to'g'rilandi
+@router.message(AnimeMenuState.adding_languages)
+async def process_anime_languages_and_save(message: Message, state: FSMContext, session: Any):
+    """ 🌐 Admin yuborgan tillarni qabul qilish va ma'lumotlarni bazaga muhrlash """
+    
+    # 1. Input Validation: Faqat matn ekanligini tekshirish
+    if not message.text or message.text.startswith("/"):
+        return await message.answer(
+            "⚠️ <b>Xatolik:</b> Iltimos, anime tillarini matn ko'rinishida yuboring!\n"
+            "📌 Tillarni qaytadan kiriting (Masalan: <code>O'zbekcha, Ruscha</code>):"
+        )
 
-    await state.update_data(languages=message.text.strip())
+    # FSM xotirasidan barcha to'plangan ma'lumotlarni xavfsiz olamiz
     fsm_data = await state.get_data()
-    loading_msg = await message.answer("🚀 Bazaga saqlanmoqda...")
+    
+    # 🔥 FIX 2: 4-qadamdagi kalit bilan sinxronlashtirildi (KeyError oldini olish)
+    selected_genres = fsm_data.get("selected_genres", [])
+    if not selected_genres:
+        # Agarda zanjir kutilmaganda uzilgan bo'lsa fallback
+        return await message.answer("❌ Janrlar topilmadi. Iltimos, jarayonni qaytadan boshlang.")
 
-    async with session_pool() as session:
-        try:
-            # 1. Bazaga qo'shish
-            new_anime = await AnimeRepository.add_anime(
-                session=session,
-                title=fsm_data["title"],
-                poster_id=fsm_data["poster_id"],
-                year=fsm_data["year"],
-                is_completed=False,
-                genres=fsm_data["genres"],
-                description=fsm_data["description"],
-                languages=fsm_data["languages"],
-                episodes=[]
-            )
-            
-            # 2. Tugmachalar (Builder to'g'rilandi)
-            builder = InlineKeyboardBuilder()
-            builder.row(types.InlineKeyboardButton(
-                text="Qism qo'shishni boshlash", 
-                callback_data=f"add_ep_{new_anime.anime_id}") # .anime_id ga o'zgartirildi
-            )
-            builder.row(types.InlineKeyboardButton(
-                text="🔙 Admin Panelga qaytish", 
-                callback_data="add_anime_main")
-            )
-            
-            # 3. Muvaffaqiyatli yakunlash
-            await loading_msg.edit_text(
-                f"🎉 {new_anime.title} muvaffaqiyatli qo'shildi!", 
-                reply_markup=builder.as_markup()
-            )
-            
-        except Exception as e:
-            await session.rollback()
-            logger.error(f"❌ Xatolik: {e}")
-            await loading_msg.edit_text("❌ Bazada xatolik. Iltimos, keyinroq urinib ko'ring.")
+    # Tillarni chiroyli formatda tozalab olamiz
+    languages_list = message.text.strip()
+    
+    # Vizual yuklanish (Loading animation) xabari
+    loading_msg = await message.answer("⏳ <code>Tizim ma'lumotlarni bazaga yozmoqda, iltimos kuting...</code>", parse_mode="HTML")
+
+    try:
+        # 🔥 FIX 3: Middleware sessiyasi bilan to'g'ridan-to'g'ri xavfsiz ishlash
+        # AnimeRepository ichidagi _prepare_session avtomat ishga tushadi
+        new_anime = await AnimeRepository.add_anime(
+            session=session,
+            title=fsm_data["title"],
+            poster_id=fsm_data["poster_id"],
+            year=fsm_data["year"],
+            is_completed=False,
+            genres=selected_genres,  # To'g'rilangan kalit
+            description=fsm_data["description"],
+            languages=languages_list,
+            episodes=[]
+        )
         
-        finally:
-            await state.clear()
+        # 2. Dynamic va Premium ko'rinishdagi boshqaruv tugmalari
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🎬 Qism (Epizod) yuklashni boshlash", 
+                callback_data=f"add_ep_{new_anime.anime_id}"
+            )
+        )
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🔙 Admin Panelga qaytish", 
+                callback_data="add_anime_main"
+            )
+        )
+        
+        # Premium Final UI matni
+        success_text = (
+            "╔═══════════ ⛩ ═══════════╗\n"
+            "     🎉 MUVAFFAQIYATLI QO'SHILDI!\n"
+            "╚═══════════ ⛩ ═══════════╝\n\n"
+            f"🎬 <b>Anime nomi:</b> <code>{new_anime.title}</code>\n"
+            f"📅 <b>Yili:</b> <code>{new_anime.year}-yil</code>\n"
+            f"🔮 <b>Janrlar:</b> <code>{', '.join(selected_genres)}</code>\n"
+            f"🌐 <b>Tillari:</b> <code>{languages_list}</code>\n\n"
+            "───────────────────────\n"
+            "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi. "
+            "Endi unga video qismlarni (epizodlarni) biriktirishingiz mumkin.</i>"
+        )
+        
+        # 3. Muvaffaqiyatli yakunlash interfeysi va silliq yangilash
+        await loading_msg.edit_text(
+            text=success_text, 
+            reply_markup=builder.as_markup(), 
+            parse_mode="HTML"
+        )
+        
+        # 🔥 FIX 4: Faqat muvaffaqiyatli saqlangandagina xotirani tozalaymiz!
+        await state.clear()
+        
+    except Exception as e:
+        logger.error(f"❌ Anime qo'shishda jiddiy xatolik: {e}")
+        
+        # Xatolik yuz berganda xotira saqlanib qolinadi, admin bekor qilish tugmasini bosishi mumkin
+        error_builder = InlineKeyboardBuilder()
+        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="add_anime_main"))
+        
+        await loading_msg.edit_text(
+            text="❌ <b>Tizim xatoligi!</b>\n\n"
+                 "Ma'lumotlarni bazaga yozishda xatolik yuz berdi. "
+                 "Ma'lumotlar bazasi yoki kesh xizmatini tekshiring.",
+            reply_markup=error_builder.as_markup(),
+            parse_mode="HTML"
+        )
 
 # =====================================================================
-# QADAM 8: Qism qo'shish jarayoni (Video qabul qilish va bazaga saqlash)
+# ⛩ QADAM 8: Qism qo'shish jarayoni (Video qabul qilish va bazaga saqlash)
 # =====================================================================
 @router.callback_query(F.data.startswith("add_ep_"))
-async def start_add_episode(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    await callback.answer()
+async def start_add_episode(callback: CallbackQuery, state: FSMContext, session: Any):
+    """ 🎬 Admin qism qo'shish tugmasini bosganda navbatdagi qism raqamini aniqlash va video so'rash """
     
-    # callback_data dan anime_id ni olamiz ("add_ep_45" -> 45)
-    anime_id = int(callback.data.split("_")[2])
+    # callback_data dan anime_id ni dynamic ajratib olamiz ("add_ep_45" -> 45)
+    try:
+        anime_id = int(callback.data.split("_")[2])
+    except (IndexError, ValueError):
+        return await callback.answer("⚠️ Callback ma'lumotlarida xatolik!", show_alert=True)
     
-    # 1. Bazadan ushbu animening joriy qismlarini tekshiramiz
+    # 1. Bazadan yoki Keshdan ushbu animening joriy holatini tekshiramiz
     anime = await AnimeRepository.get_anime_by_id(session=session, anime_id=anime_id)
     if not anime:
-        await callback.message.answer("❌ Anime topilmadi.")
-        return
+        return await callback.message.edit_text(
+            text="❌ <b>Xatolik:</b> Ushbu anime tizimda topilmadi yoki o'chirilgan.",
+            parse_mode="HTML"
+        )
         
-    # 🔥 CRITICAL FIX: anime obyekti 'dict' yoki 'Model' ekanligini tekshirib, xavfsiz qismlar sonini aniqlaymiz
+    # Xavfsiz ma'lumotlarni ajratib olish (Dict yoki Model tekshiruvi)
     if isinstance(anime, dict):
-        # Agar dict kelsa, ichidan 'episodes' kalitini yoki 'title'ni dict ko'rinishida olamiz
         episodes_list = anime.get("episodes", [])
-        anime_title = anime.get("title", "Unknown")
+        anime_title = anime.get("title", "Noma'lum anime")
     else:
-        # Agar ORM Model bo'lsa, atribut sifatida olamiz
         episodes_list = getattr(anime, "episodes", []) or []
-        anime_title = getattr(anime, "title", "Unknown")
+        anime_title = getattr(anime, "title", "Noma'lum anime")
 
-    # Qismlar soniga qarab navbatdagi qism raqamini hisoblaymiz
+    # Mavjud qismlar soniga qarab navbatdagi qism raqamini 100% aniq hisoblaymiz
     next_episode_number = len(episodes_list) + 1 if episodes_list else 1
     
-    # 2. Ma'lumotlarni FSM xotirasiga saqlaymiz
+    # 2. Ma'lumotlarni keyingi qadamda ishlatish uchun FSM xotirasiga muhrlaymiz
     await state.update_data(anime_id=anime_id, episode_number=next_episode_number)
     
-    # 3. To'g'ridan-to'g'ri video/fayl qabul qilish holatiga o'tkazamiz
+    # 3. State-ni video/fayl qabul qilish holatiga o'tkazamiz
     await state.set_state(AnimeMenuState.adding_episode_video)
     
-    # UX FIX: Matn uslubini HTML formatga moslashtirdik
-    await callback.message.answer(
-        f"🎬 <b>Anime:</b> {anime_title}\n"
-        f"🔢 <b>Tizim aniqlagan qism:</b> {next_episode_number}-qism\n\n"
-        f"📌 Iltimos, ushbu qismning <b>videosini</b> yoki <b>faylini (document)</b> yuboring:",
-        parse_mode="HTML"
+    # Premium Dark-Mode UI Dizayni
+    text = (
+        "╔═══════════ ⛩ ═══════════╗\n"
+        "        <b>QISM YUKLASH PANEL</b>\n"
+        "╚═══════════ ⛩ ═══════════╝\n\n"
+        f"🎬 <b>Anime:</b> <code>{anime_title}</code>\n"
+        f"🔢 <b>Navbatdagi qism:</b> <code>{next_episode_number}-qism</code>\n"
+        "───────────────────────\n\n"
+        "📌 Iltimos, ushbu qism uchun <b>Video (mp4)</b> yoki siqilmagan <b>Fayl (document)</b> yuboring.\n\n"
+        
     )
-
-
-
-
-# =====================================================================
-# QADAM 9: Video yoki faylni qabul qilish -> Bazaga saqlash va keyingi qismni kutish
-# =====================================================================
-# ✅ F.video | F.document filtri orqali ikkala formatni ham ushlaymiz
-@router.message(AnimeMenuState.adding_episode_video, F.video | F.document)
-async def process_episode_video(message: Message, state: FSMContext, session: AsyncSession):
-    video_file_id = None
     
-    # 1. Video formatini tekshirish
+    # Boshqaruv tugmalari (Jarayonni xavfsiz to'xtatish imkoniyati bilan)
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="🚫 Yuklashni bekor qilish", 
+            callback_data="add_anime_main"
+        )
+    )
+    
+    try:
+        # Eski xabarni chiroyli tarzda yangilaymiz (Chat toza turishi uchun)
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        await callback.answer(f"⚙️ {next_episode_number}-qism kutilmoqda...")
+    except TelegramBadRequest:
+        # Agarda xabarni edit qilib bo'lmasa (masalan, eski xabar bo'lsa), yangi xabar yuboramiz
+        await callback.message.answer(
+            text=text,
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+
+
+# =====================================================================
+# ⛩ QADAM 9: Videolarni qabul qilish va Xotiraga (FSM) yig'ish
+# =====================================================================
+@router.message(AnimeMenuState.adding_episode_video, F.video | F.document)
+async def process_episode_video_bulk(message: Message, state: FSMContext):
+    """ 📥 Admin yuborgan videolarni bazaga yozmasdan, FSM xotirasiga ketma-ket yig'adi """
+    
+    video_file_id = None
+    video_unique_id = None
+    
+    # 1. Formatni aniqlash va file_id va file_unique_id olish
     if message.video:
         video_file_id = message.video.file_id
+        video_unique_id = message.video.file_unique_id
     elif message.document:
         mime = message.document.mime_type
         if mime and not mime.startswith("video/"):
-            await message.reply("⚠️ Iltimos, faqat video formatdagi fayl yuboring!")
-            return
+            return await message.answer("⚠️ Iltimos, faqat video formatdagi fayl yuboring!")
         video_file_id = message.document.file_id
+        video_unique_id = message.document.file_unique_id
 
-    if not video_file_id:
-        await message.reply("❌ Videoni aniqlab bo'lmadi, qaytadan yuboring:")
-        return
+    if not video_file_id or not video_unique_id:
+        return await message.answer("❌ Videoni aniqlab bo'lmadi, qaytadan yuboring:")
 
-    # FSM xotirasidan ma'lumotlarni olamiz
+    # FSM xotirasidan joriy to'plangan epizodlar ro'yxatini olamiz
     data = await state.get_data()
-    anime_id = data["anime_id"]
-    ep_number = data["episode_number"]
+    anime_id = data.get("anime_id")
+    # Agar xotirada ro'yxat hali bo'lmasa, yangi ochamiz
+    temp_episodes = data.get("temp_episodes", [])
     
-    loading_msg = await message.answer(f"🚀 {ep_number}-qism bazaga qo'shilmoqda...")
-
-    try:
-        # 2. Bazaga epizodni qo'shamiz
-        await AnimeRepository.add_anime_episode(
-            session=session,
-            anime_id=anime_id,
-            episode_num=ep_number,  # 🔥 MANA SHU YER FIX BOLDId: episode_number emas, episode_num bo'lishi shart!
-            file_id=video_file_id
-        )
+    # 🔥 UX GUARD: Albom qilib tashlanganda bir xil video ikki marta ro'yxatga kirmasligi uchun tekshiramiz
+    if any(ep["file_unique_id"] == video_unique_id for ep in temp_episodes):
+        return  # Dublikat bo'lsa shunchaki tashlab ketamiz
         
-        # 🔥 KEYINGI QISM UCHUN AVTOMATIK RAQAMNI OSHIRAMIZ (+1)
-        next_ep = ep_number + 1
-        await state.update_data(episode_number=next_ep)
-        
-        # 3. Tugmalarni yig'ish
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(
-            text="📢 Kanalga e'lon qilish va tugatish", 
-            callback_data=f"publish_anime_{anime_id}"
-        ))
-        builder.row(types.InlineKeyboardButton(
-            text="💾 Shunchaki saqlash va tugatish", 
-            callback_data="finish_anime_add"
-        ))
-
-        # UX FIX: <blockquote expandable> yordamida ko'p qismli yuklashni juda qulay qildik
-        await loading_msg.edit_text(
-            f"✅ <b>{ep_number}-qism muvaffaqiyatli saqlandi!</b>\n\n"
-            f"💡 <b>Navbatdagi bosqich:</b> Bot hozir avtomat ravishda <code>{next_ep}-qism</code>ni kutmoqda.\n"
-            f"<blockquote expandable>"
-            f"Yana seriyalar bo'lsa, hech narsani bosmasdan <b>to'g'ridan-to'g'ri video yuborishda davom eting</b>.\n"
-            f"Barcha qismlar tugagan bo'lsa, pastdagi yakunlovchi tugmalardan birini tanlang:"
-            f"</blockquote>",
-            parse_mode="HTML",
-            reply_markup=builder.as_markup()
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Qismni saqlashda xatolik: {e}")
-        await loading_msg.edit_text("❌ Xatolik yuz berdi. Qism bazaga saqlanmadi.")
-
-
-
-
-
-# =====================================================================
-# QADAM 10: Anime kanalga yuborish yoki shunchaki saqlash va yakunlash
-# =====================================================================
-@router.callback_query(F.data == "finish_anime_add")
-async def finish_anime_addition(callback: CallbackQuery, state: FSMContext):
-    await callback.answer("✅ Jarayon muvaffaqiyatli yakunlandi!")
+    # Navbatdagi qism raqami (xotiradagi bor qismlar + start_number)
+    current_queue_number = len(temp_episodes) + 1
     
-    # 1. FSM xotirasini butunlay tozalaymiz (Admin erkin holatga qaytadi)
-    await state.clear()
+    # Videoni vaqtincha xotiraga qo'shamiz (DB ga yozilmaydi!)
+    temp_episodes.append({
+        "episode_num": current_queue_number,
+        "file_id": video_file_id,
+        "file_unique_id": video_unique_id
+    })
     
-    # 2. Tugmani ixcham va toza tarzda yasaymiz
+    # Xotirani yangilaymiz
+    await state.update_data(temp_episodes=temp_episodes)
+    
+    # Admin uchun premium boshqaruv tugmalari (Faqat xabarni yakunlash uchun)
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="admin_anime_panel"))
-    panel_button = builder.as_markup()
-    
-    # Chiqadigan chiroyli matn shabloni (HTML formatida)
-    text_content = (
-        "🎉 <b>Barcha qismlar muvaffaqiyatli saqlandi!</b>\n\n"
-        "<i>Anime ma'lumotlar bazasida tayyor, lekin kanalga e'lon qilinmadi.</i>"
-    )
-    
-    # 3. Rasm ostidagi matnni (caption) yoki oddiy matnni xavfsiz yangilaymiz
-    try:
-        await callback.message.edit_caption(
-            caption=text_content,
-            parse_mode="HTML",  # 🔥 FIX: Matn chiroyli chiqishi uchun parse_mode qo'shildi
-            reply_markup=panel_button
-        )
-    except TelegramBadRequest as e:
-        # Agar oldingi xabar rasmsiz (toza matnli) bo'lsa, edit_text ishlaydi
-        if "message is not modified" not in str(e).lower():
-            try:
-                await callback.message.edit_text(
-                    text=text_content,
-                    parse_mode="HTML",  # 🔥 FIX: parse_mode qo'shildi
-                    reply_markup=panel_button
-                )
-            except TelegramBadRequest:
-                # Agar biron sabab bilan edit qilib bo'lmasa, yangi xabar yuboramiz
-                await callback.message.answer(
-                    text=text_content,
-                    parse_mode="HTML",
-                    reply_markup=panel_button
-                )
+    builder.row(types.InlineKeyboardButton(
+        text="📢 Kanalga e'lon qilish va saqlash", 
+        callback_data=f"bulk_save_publish_{anime_id}"
+    ))
+    builder.row(types.InlineKeyboardButton(
+        text="💾 Shunchaki bazaga yozish va tugatish", 
+        callback_data=f"bulk_save_only_{anime_id}"
+    ))
 
-
-# =====================================================================
-# QADAM 10: Anime kanalga yuborish yoki shunchaki saqlash va yakunlash
-# =====================================================================
-@router.callback_query(F.data.startswith("publish_anime_"))
-async def publish_anime_to_channel(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    await callback.answer("📢 Kanalga yuborilmoqda...")
-    
-    # Callback data ichidan xavfsiz ID ni ajratib olamiz
-    anime_id = int(callback.data.split("_")[2])
-    
-    # 1. Animeni barcha munosabatlari (janrlari) bilan birga bazadan bitta so'rovda olamiz
-    stmt = (
-        select(Anime)
-        .options(selectinload(Anime.genres))
-        .where(Anime.anime_id == anime_id)
-    )
-    result = await session.execute(stmt)
-    anime = result.scalar_one_or_none()
-    
-    # 2. Agar anime topilmasa, jarayonni to'xtatamiz
-    if not anime:
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
-        
-        try:
-            await callback.message.edit_caption(caption="❌ Kechirasiz, ushbu anime topilmadi.", reply_markup=builder.as_markup())
-        except TelegramBadRequest:
-            await callback.message.edit_text("❌ Kechirasiz, us'hbu anime topilmadi.", reply_markup=builder.as_markup())
-        return
-
-    # 3. Ma'lumotlarni xavfsiz formatlaymiz (Faqat baza obyektidan so'ng!)
-    genres_str = ", ".join([g.name for g in anime.genres]) if anime.genres else "Mavjud emas"
-    status_str = "🟢 Tugallangan" if anime.is_completed else "🔴 Davom etmoqda"
-    
-    safe_title = html.escape(anime.title)
-    safe_description = html.escape(anime.description or 'Description unavailable.')
-
-    # 4. 📢 KANALGA POST SHABLONI
-    caption = (
-        f"╔══════════════════╗\n"
-        f"       🎬 <b>{safe_title}</b>\n"
-        f"╚══════════════════╝\n\n"
-
-        f"📌 <b>Anime Info</b>\n"
-        f"╔══════════════════╗\n"
-        f"├ 🆔 ID: <code>#{anime.anime_id}</code>\n"  
-        f"├ 📅 Year: <b>{anime.year}</b>\n"
-        f"├ 🚦 Status: <b>{status_str}</b>\n"
-        f"├ 🌐 Lang: <b>{anime.languages or 'Unknown'}</b>\n"
-        f"╚══════════════════╝\n"
-        f"╔══════════════════╗\n"
-        f"└ 🎭 Genres: <b>{genres_str}</b>\n\n"
-        f"╚══════════════════╝\n\n"
-        f"📝 <b>Tavsif</b>\n"
+    # Real-vaqt rejimida admin uchun hisobot matni
+    text = (
+        "╔═══════════ ⛩ ═══════════╗\n"
+        "      📥 VIDEOLAR QABUL QILINMOQDA\n"
+        "╚═══════════ ⛩ ═══════════╝\n\n"
+        f"✅ <b>Yangi video zanjirga qo'shildi!</b>\n"
+        f"📊 Xotirada tayyor: <code>{len(temp_episodes)} ta qism</code>\n\n"
         f"<blockquote expandable>"
-        f"{safe_description}"
+        f"📌 Bot hozir avtomat rejimda keyingi qismlarni qabul qilaveradi. "
+        f"Yana qismlar bo'lsa, <b>to'g'ridan-to'g'ri tashlashda davom eting</b>.\n\n"
+        f"Hamma videolarni tashlab bo'lgan bo'lsangiz, pastdagi tugmalardan birini bosing. "
+        f"Shundagina barcha qismlar <b>bitta so'rovda</b> bazaga muhrlanadi!"
         f"</blockquote>"
     )
     
-    # Admin panelga qaytish tugmasi
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(
-        text="🔙 Admin Panelga qaytish", 
-        callback_data="admin_anime_panel"
-    ))
-    markup = builder.as_markup()
+    # Admin xabari ko'p marta qayta yuborilmasligi uchun oxirgi xabarni tahrirlashga urinamiz
+    # Albom yuborilganda xabarlar juda tez kelgani uchun answer ishlatish xavfsizroq
+    await message.answer(text=text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+# =====================================================================
+# ⛩ QADAM 10: Videolarni bazaga yozish va jarayonni yakunlash
+# =====================================================================
+@router.callback_query(F.data == "finish_anime_add")
+async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMContext, session: Any):
+    """ 🗄 Xotiradagi barcha epizodlarni bazaga yozadi, keshni yangilaydi va jarayonni yopadi """
+    
+    # FSM xotirasidan to'plangan ma'lumotlarni olamiz
+    fsm_data = await state.get_data()
+    anime_id = fsm_data.get("anime_id")
+    temp_episodes = fsm_data.get("temp_episodes", []) # 9-qadamda yig'ilgan videolar ro'yxati
+
+    # Xavfsizlik filtri: Agar ro'yxat bo'sh bo'lsa yoki admin adashib qayta bossa
+    if not temp_episodes:
+        await callback.answer("⚠️ Xotirada yangi qismlar topilmadi yoki allaqachon saqlangan!", show_alert=True)
+        await state.clear()
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+        try:
+            return await callback.message.edit_text("⛩ Jarayon yakunlangan yoki FSM xotirasi bo'sh.", reply_markup=builder.as_markup())
+        except TelegramBadRequest:
+            return
+
+    await callback.answer("⚙️ Ma'lumotlar bazaga muhrlanmoqda...")
+    
+    # Loading holati interfeysi
+    loading_text = f"⏳ <code>Xotiradagi {len(temp_episodes)} ta qism bazaga yozilmoqda. Iltimos kuting...</code>"
+    
+    # Rasmli xabar yoki oddiy matn ekanligiga qarab xavfsiz loading chiqarish
+    try:
+        current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
+    except TelegramBadRequest:
+        try:
+            current_msg = await callback.message.edit_caption(caption=loading_text, parse_mode="HTML")
+        except TelegramBadRequest:
+            current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
 
     try:
-        # 5. Kanalga rasm (Poster) va opisaniya yuboriladi
+        # 🚀 1. BAZAGA KETMA-KET (TRANZAKSIYANI OPTIMALLASHTIRIB) SAQLASH
+        # Siz aytgan episode_num kalitiga muvofiq bitta sessiyada yozamiz
+        for ep in temp_episodes:
+            await AnimeRepository.add_anime_episode(
+                session=session,
+                anime_id=anime_id,
+                episode_num=ep["episode_num"], # 🔥 FIX: To'g'ri kalit
+                file_id=ep["file_id"]          # Faqat file_id yuborilmoqda
+            )
+
+        # 2. Tugmalarni ixcham va professional tarzda yasaymiz
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🔙 Admin Panelga qaytish", 
+                callback_data="admin_anime_panel"
+            )
+        )
+        panel_button = builder.as_markup()
+
+        # Premium Final UI matni
+        success_text = (
+            "╔═══════════ ⛩ ═══════════╗\n"
+            "     🎉 BARCHA QISMLAR SAQLANDI!\n"
+            "╚═══════════ ⛩ ═══════════╝\n\n"
+            f"📦 <b>Muvaffaqiyatli yozildi:</b> <code>{len(temp_episodes)} ta qism</code>\n"
+            f"🎬 <b>Anime ID:</b> <code>{anime_id}</code>\n\n"
+            "───────────────────────\n"
+            "💾 <i>Anime qismlari asosiy bazaga muvaffaqiyatli yozildi va indekslandi. "
+            "FSM xotirasi tozalandi. (Kanalga e'lon qilinmadi)</i>"
+        )
+
+        # 3. Yakuniy natijani silliq va xavfsiz ko'rsatish
+        try:
+            await current_msg.edit_text(text=success_text, parse_mode="HTML", reply_markup=panel_button)
+        except TelegramBadRequest:
+            try:
+                await current_msg.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=panel_button)
+            except TelegramBadRequest:
+                await current_msg.answer(text=success_text, parse_mode="HTML", reply_markup=panel_button)
+
+        # 🔥 4. FAQAT MUVAFFAQIYATLI YOZILGANDAN KEYIN XOTIRANI TOZALAYMIZ
+        await state.clear()
+
+    except Exception as e:
+        logger.error(f"❌ Yakuniy saqlashda jiddiy xatolik: {e}")
+        
+        # Xatolik yuz berganda admin ma'lumotlari FSMda qoladi (adminga qulaylik)
+        error_builder = InlineKeyboardBuilder()
+        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="admin_anime_panel"))
+        
+        error_text = "❌ <b>Bazada xatolik!</b>\n\nQismlarni bazaga yozish muvaffaqiyatsiz tugadi. Aloqani tekshiring."
+        try:
+            await current_msg.edit_text(text=error_text, parse_mode="HTML", reply_markup=error_builder.as_markup())
+        except TelegramBadRequest:
+            await current_msg.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=error_builder.as_markup())
+
+# =====================================================================
+# QADAM 10: Anime kanalga yuborish yoki shunchaki saqlash va yakunlash
+# =====================================================================
+# =====================================================================
+# ⛩ QADAM 10: Xotiradagi qismlarni bazaga yozish -> Kanalga e'lon qilish
+# =====================================================================
+@router.callback_query(F.data.startswith("publish_anime_") | F.data.startswith("bulk_save_publish_"))
+async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMContext, session: Any):
+    """ 📢 Xotiradagi epizodlarni bazaga yozadi va postni deep-link tugmasi bilan kanalga e'lon qiladi """
+    
+    await callback.answer("📢 Kanalga e'lon qilish boshlandi...")
+    
+    # FSM xotirasidan ommaviy yuklangan qismlarni va anime_id ni olamiz
+    fsm_data = await state.get_data()
+    anime_id = fsm_data.get("anime_id")
+    temp_episodes = fsm_data.get("temp_episodes", []) # 9-qadamda yig'ilgan videolar
+
+    # Agar dynamic callback_data'dan anime_id ni olish kerak bo'lsa (Zaxira uchun)
+    if not anime_id:
+        try:
+            anime_id = int(callback.data.split("_")[2])
+        except (IndexError, ValueError):
+            return await callback.answer("❌ Anime ID aniqlanmadi!", show_alert=True)
+
+    loading_text = "⏳ <code>Ma'lumotlar bazaga muhrlanmoqda va kanalga tayyorlanmoqda...</code>"
+    
+    # Rasmli xabar yoki toza matnligiga qarab xavfsiz loading chiqarish
+    try:
+        current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
+    except TelegramBadRequest:
+        try:
+            current_msg = await callback.message.edit_caption(caption=loading_text, parse_mode="HTML")
+        except TelegramBadRequest:
+            current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
+
+    try:
+        # 🔥 1. AVVAL XOTIRADAGI EPIZODLARNI BAZAGA OMMAVIY (BULK) YOZAMIZ
+        if temp_episodes:
+            for ep in temp_episodes:
+                await AnimeRepository.add_anime_episode(
+                    session=session,
+                    anime_id=anime_id,
+                    episode_num=ep["episode_num"],
+                    file_id=ep["file_id"]
+                )
+        
+        # 🔥 2. ANIMENI BAZADAN TO'LIQ JANRLARI BILAN BIRGA BITTA SO'ROVDA OLAMIZ
+        stmt = (
+            select(Anime)
+            .options(
+                selectinload(Anime.genres),
+                selectinload(Anime.episodes)
+            )
+            .where(Anime.anime_id == anime_id)
+        )
+        result = await session.execute(stmt)
+        anime = result.scalar_one_or_none()
+        
+        if not anime:
+            builder = InlineKeyboardBuilder()
+            builder.row(InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+            await current_msg.edit_text("❌ Xatolik: Anime bazadan topilmadi.", reply_markup=builder.as_markup())
+            return
+
+        # 3. Ma'lumotlarni chiroyli va xavfsiz formatlaymiz
+        genres_str = ", ".join([g.name for g in anime.genres]) if anime.genres else "Mavjud emas"
+        status_str = "🟢 Tugallangan" if anime.is_completed else "🔴 Davom etmoqda"
+        
+        safe_title = html.escape(anime.title)
+        safe_description = html.escape(anime.description or "Tavsif mavjud emas.")
+        episodes_count = len(anime.episodes) if anime.episodes else 0
+        # 🔥 UX FIX: Agar xotirada (temp_episodes) hali bazaga yozilmagan yangi qismlar bo'lsa, ularni ham qo'shib yuboramiz
+        if temp_episodes:
+            episodes_count += len(temp_episodes)
+
+        # 4. 📢 KANALGA POST SHABLONI (To'g'rilangan HTML dizayn)
+        caption = (
+            f"╔══════════════════╗\n"
+            f"       🎬 <b>{safe_title}</b>\n"
+            f"╚══════════════════╝\n\n"
+            f"📌 <b>Anime haqida ma'lumot:</b>\n"
+            f"╔══════════════════╗\n"
+            f"├ 🆔 Kod: <code>#{anime.anime_id}</code>\n"  
+            f"├ 📅 Yil: <b>{anime.year}</b>\n"
+            f"├ ▶️ Qism: <b>{episodes_count}</b> \n"
+            f"├ 🚦 Status: <b>{status_str}</b>\n"
+            f"├ 🌐 Til: <b>{anime.languages or 'O\'zbekcha'}</b>\n"
+            f"╚══════════════════╝\n"
+            f"╔══════════════════╗\n"
+            f"  🔮 Janrlar: <i>{genres_str}</i>\n"
+            f"╚══════════════════╝\n\n"
+            f"📝 <b>Tavsif:</b>\n"
+            f"<blockquote expandable>"
+            f"{safe_description}"
+            f"</blockquote>"
+        )
+        
+        # 🔥 5. DYNAMIC DEEP-LINK TUGMASI (Kanal postining ostiga qo'yiladi)
+        bot_info = await callback.bot.get_me()
+        bot_username = bot_info.username
+        
+        # t.me/bot_name?start=anime_id ko'rinishidagi havola
+        channel_builder = InlineKeyboardBuilder()
+        channel_builder.row(
+            InlineKeyboardButton(
+                text="🎬 Animeni ko'rish", 
+                url=f"https://t.me/{bot_username}?start=anime_{anime.anime_id}"
+            )
+        )
+
+        # 6. Kanalga rasm (Poster), opisaniya va dynamic tugmani yuboramiz
         await callback.bot.send_photo(
             chat_id="@Aninovuz", 
             photo=anime.poster_id,
             caption=caption,
-            parse_mode="HTML"  # 🔥 FIX: Teglar ishlashi uchun parse_mode shart!
+            parse_mode="HTML",
+            reply_markup=channel_builder.as_markup()
         )
         
-        # Admin xabarini yangilaymiz
-        await callback.message.edit_caption(
-            caption="🚀 <b>Anime muvaffaqiyatli saqlandi va @Aninovuz kanaliga e'lon qilindi!</b>",
-            parse_mode="HTML",
-            reply_markup=markup
+        # Admin uchun yakuniy hisobot tugmasi
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="admin_anime_panel"))
+        
+        # Admin xabarini premium dizaynda yangilaymiz
+        success_admin_text = (
+            "╔═══════════ ⛩ ═══════════╗\n"
+            "     📢 KANALGA MUVAFFAQIYATLI CHIQTI!\n"
+            "╚═══════════ ⛩ ═══════════╝\n\n"
+            f"🎬 <b>Anime:</b> <code>{anime.title}</code>\n"
+            f"📦 <b>Yozilgan qismlar:</b> <code>{len(temp_episodes) if temp_episodes else 'Mavjudlari amalda'} ta qism</code>\n"
+            f"🚀 <b>Manzil:</b> @Aninovuz\n\n"
+            "───────────────────────\n"
+            "✅ <i>Barcha qismlar bazaga muhrlandi va kanal postiga dynamic ko'rish havolasi biriktirildi.</i>"
         )
+        
+        try:
+            await current_msg.edit_text(text=success_admin_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        except TelegramBadRequest:
+            await current_msg.edit_caption(caption=success_admin_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            
+        # 🔥 7. HAMMA ISH MUVAFFAQIYATLI BITGACH, FSM TOZALANADI
+        await state.clear()
         
     except Exception as e:
-        logger.error(f"❌ Kanalga yuborishda xato: {e}")
+        logger.error(f"❌ Kanalga e'lon qilishda jiddiy xato: {e}")
         
-        # Kanalga yuborishda muammo bo'lsa, adminni ogohlantiramiz, lekin bazada anime baribir qoladi
-        await callback.message.edit_caption(
-            caption="✅ <b>Bazaga saqlandi, lekin kanalga yuborishda xatolik bo'ldi!</b>\n"
-                    "(Bot kanalda admin ekanligini va ruxsatlari borligini tekshiring).",
-            parse_mode="HTML",
-            reply_markup=markup
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+        
+        error_text = (
+            f"⚠️ <b>Ma'lumot saqlandi, lekin kanalga ketmadi!</b>\n\n"
+            f"<b>Xatolik sababi:</b> <code>{html.escape(str(e))}</code>\n\n"
+            f"💡 <i>Tavsiya: Bot @Aninovuz kanalida administrator ekanligini va "
+            f"Rasm/Post yuborish huquqi borligini tekshiring!</i>"
         )
-    finally:
-        # 🔥 FSM tozalanadi va admin holati tiklanadi
-        await state.clear()
+        try:
+            await current_msg.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        except TelegramBadRequest:
+            await current_msg.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
