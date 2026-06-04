@@ -522,45 +522,54 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     if not message.text or message.text.startswith("/"):
         return await message.answer(
             "⚠️ <b>Xatolik:</b> Iltimos, anime tillarini matn ko'rinishida yuboring!\n"
-            "📌 Tillarni qaytadan kiriting (Masalan: <code>O'zbekcha, Ruscha</code>):"
+            "📌 Tillarni qaytadan kiriting (Masalan: <code>O'zbekcha, Ruscha</code>):",
+            parse_mode="HTML"
         )
 
     # FSM xotirasidan barcha to'plangan ma'lumotlarni xavfsiz olamiz
     fsm_data = await state.get_data()
     
-    # 🔥 FIX 2: 4-qadamdagi kalit bilan sinxronlashtirildi (KeyError oldini olish)
     selected_genres = fsm_data.get("selected_genres", [])
     if not selected_genres:
         # Agarda zanjir kutilmaganda uzilgan bo'lsa fallback
         return await message.answer("❌ Janrlar topilmadi. Iltimos, jarayonni qaytadan boshlang.")
 
-    # Tillarni chiroyli formatda tozalab olamiz
-    languages_list = message.text.strip()
+    # Tillarni chiroyli formatda tozalab va HTML crash bo'lmasligi uchun escape qilib olamiz
+    languages_list = html.escape(message.text.strip())
     
     # Vizual yuklanish (Loading animation) xabari
-    loading_msg = await message.answer("⏳ <code>Tizim ma'lumotlarni bazaga yozmoqda, iltimos kuting...</code>", parse_mode="HTML")
+    loading_msg = await message.answer(
+        text="⏳ <code>Tizim ma'lumotlarni bazaga yozmoqda, iltimos kuting...</code>", 
+        parse_mode="HTML"
+    )
 
     try:
-        # 🔥 FIX 3: Middleware sessiyasi bilan to'g'ridan-to'g'ri xavfsiz ishlash
-        # AnimeRepository ichidagi _prepare_session avtomat ishga tushadi
+        # AnimeRepository ma'lumotlarni muvaffaqiyatli saqlaydi va 'dict' qaytaradi
         new_anime = await AnimeRepository.add_anime(
             session=session,
-            title=fsm_data["title"],
-            poster_id=fsm_data["poster_id"],
-            year=fsm_data["year"],
-            is_completed=False,
-            genres=selected_genres,  # To'g'rilangan kalit
-            description=fsm_data["description"],
+            title=fsm_data.get("title"),
+            poster_id=fsm_data.get("poster_id"),
+            year=fsm_data.get("year"),
+            is_completed=fsm_data.get("is_completed", False),  # Dynamic holat kiritilgan bo'lsa
+            genres=selected_genres,
+            description=fsm_data.get("description"),
             languages=languages_list,
             episodes=[]
         )
+        
+        # 🔥 FIX: Nuqta (.) o'rniga lug'at kalitlari ['...'] ishlatilmoqda
+        anime_id = new_anime["anime_id"]
+        anime_title = html.escape(new_anime["title"])
+        anime_year = new_anime["year"]
+        # Repository o'zi bazadan janr nomlarini aniqlab string ro'yxat qaytaradi
+        anime_genres = [html.escape(g) for g in new_anime.get("genres", [])]
         
         # 2. Dynamic va Premium ko'rinishdagi boshqaruv tugmalari
         builder = InlineKeyboardBuilder()
         builder.row(
             types.InlineKeyboardButton(
                 text="🎬 Qism (Epizod) yuklashni boshlash", 
-                callback_data=f"add_ep_{new_anime.anime_id}"
+                callback_data=f"add_ep_{anime_id}"  # To'g'rilandi
             )
         )
         builder.row(
@@ -570,14 +579,15 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             )
         )
         
-        # Premium Final UI matni
+        # Premium Final UI matni (Barcha teglar xavfsiz va yopilgan)
         success_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
             "     🎉 MUVAFFAQIYATLI QO'SHILDI!\n"
             "╚═══════════ ⛩ ═══════════╝\n\n"
-            f"🎬 <b>Anime nomi:</b> <code>{new_anime.title}</code>\n"
-            f"📅 <b>Yili:</b> <code>{new_anime.year}-yil</code>\n"
-            f"🔮 <b>Janrlar:</b> <code>{', '.join(selected_genres)}</code>\n"
+            f"🆔 <b>Anime ID:</b> <code>{anime_id}</code>\n"
+            f"🎬 <b>Anime nomi:</b> <code>{anime_title}</code>\n"
+            f"📅 <b>Yili:</b> <code>{anime_year}-yil</code>\n"
+            f"🔮 <b>Janrlar:</b> <code>{', '.join(anime_genres) if anime_genres else 'Kiritilmagan'}</code>\n"
             f"🌐 <b>Tillari:</b> <code>{languages_list}</code>\n\n"
             "───────────────────────\n"
             "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi. "
@@ -603,8 +613,8 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
         
         await loading_msg.edit_text(
             text="❌ <b>Tizim xatoligi!</b>\n\n"
-                 "Ma'lumotlarni bazaga yozishda xatolik yuz berdi. "
-                 "Ma'lumotlar bazasi yoki kesh xizmatini tekshiring.",
+                 "Ma'lumotlarni bazaga yozishda texnik xatolik yuz berdi. "
+                 "Iltimos, server jurnallarini (logs) tekshiring.",
             reply_markup=error_builder.as_markup(),
             parse_mode="HTML"
         )
