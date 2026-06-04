@@ -10,25 +10,12 @@ from aiogram.exceptions import TelegramBadRequest
 from typing import Any, Optional
 from aiogram.filters.callback_data import CallbackData
 
-
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
-
 from database.repository import AnimeRepository
 from database.connection import AsyncSession, async_sessionmaker
-
-from config import config
-from keyboards.inline import anime_menu_kb
-from database.repository import AnimeRepository
-from database.connection import AsyncSession
-from database.models import Anime, Genre
-
 
 router = Router()
 logger = logging.getLogger(__name__)
 CREATOR_ID = getattr(config, 'CREATOR_ID')
-
-
 
 
 class AnimePageCallback(CallbackData, prefix="anime_page"):
@@ -39,9 +26,6 @@ class AnimeDetailCallback(CallbackData, prefix="anime_detail"):
     page: int
 
 
-
-
-
 # =====================================================================
 # ANIMELAR RO'YXATI VA SAHIFALASH (PAGINATION) HANDLERI
 # =====================================================================
@@ -49,40 +33,36 @@ class AnimeDetailCallback(CallbackData, prefix="anime_detail"):
 @router.callback_query(F.data == "list_anime")     # Admin paneldan birinchi marta kirganda
 async def list_anime(
     callback: CallbackQuery, 
-    callback_data: Optional[AnimePageCallback] = None,  # 💡 TUZATISH: callback_data ni ixtiyoriy argument sifatida qo'shdik
+    callback_data: Optional[AnimePageCallback] = None,
     session: AsyncSession = None, 
     session_pool: async_sessionmaker = None
 ):
     await callback.answer("📋 Yuklanmoqda...")
     
-    # 💡 AGAR MIDDLEWARE'DAN SESSION 'NONE' KELSA, POOLDAN YANGI SESSYA OCHAMIZ
+    # Session yoki Pooldan xavfsiz foydalanish
     if session is None and session_pool is not None:
         async with session_pool() as new_session:
             anime_list = await AnimeRepository.list_anime(session=new_session)
     else:
-        # Oddiy holatda uzatilgan sessiyadan foydalanamiz
         anime_list = await AnimeRepository.list_anime(session=session)
 
     if not anime_list:
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel"))
         await callback.message.edit_text(
-            "📭 Hozircha tizimda birorta ham anime qo'shilmagan.", 
+            text="📭 Hozircha tizimda birorta ham anime qo'shilmagan.", 
             reply_markup=builder.as_markup()
         )
         return
     
-    # 💡 TUZATISH: Sahifa raqamini xavfsiz aniqlash
-    # Agar callback_data bo'lsa (ya'ni sahifa tugmasi bosilgan bo'lsa), o'sha sahifani oladi.
-    # Agar birinchi marta kirayotgan bo'lsa (callback_data yo'q), default 1-sahifa bo'ladi.
+    # Sahifa raqamini xavfsiz aniqlash
     page = callback_data.page if callback_data else 1
     
-    # 3. Pagination sozlamalari (Har bir sahifada 5 tadan anime)
+    # Pagination sozlamalari (Har bir sahifada 5 tadan anime)
     PER_PAGE = 5
     total_anime = len(anime_list)
     total_pages = (total_anime + PER_PAGE - 1) // PER_PAGE
     
-    # Sahifa chegaradan chiqib ketmasligi tekshiruvi (Endi xavfsiz ishlaydi!)
     page = max(1, min(page, total_pages))
     
     # Joriy sahifaga tegishli animelarni kesib olish (Slice)
@@ -90,25 +70,30 @@ async def list_anime(
     end_idx = start_idx + PER_PAGE
     page_anime = anime_list[start_idx:end_idx]
     
-    # 4. Tugmalarni yig'ish (InlineKeyboardBuilder)
+    # Tugmalarni yig'ish (InlineKeyboardBuilder)
     builder = InlineKeyboardBuilder()
     
     for anime in page_anime:
-        status = "🟢" if anime.is_completed else "🔴" 
-        text = f"{status} {anime.title} ({anime.year})"
+        # 🔥 FIX: Nuqta (.) o'rniga dict elementlari ['...'] ishlatilmoqda
+        is_completed = anime.get("is_completed", False)
+        anime_title = html.escape(anime.get("title", "Nomsiz"))
+        anime_year = anime.get("year", "Unknown")
+        anime_id = anime.get("anime_id")
         
-        # Har bir animeni alohida qator qilib tugma sifatida qo'shamiz
+        status = "🟢" if is_completed else "🔴" 
+        text = f"{status} {anime_title} ({anime_year})"
+        
         builder.row(
             types.InlineKeyboardButton(
                 text=text,
                 callback_data=AnimeDetailCallback(
-                    anime_id=int(anime.anime_id), 
+                    anime_id=int(anime_id), 
                     page=page
                 ).pack()
             )
         )
     
-    # 5. Navigatsiya (Orqaga/Oldinga) tugmalari
+    # Navigatsiya (Orqaga/Oldinga) tugmalari
     nav_buttons = []
     
     # Oldingi sahifa tugmasi
@@ -143,7 +128,6 @@ async def list_anime(
         
     builder.row(*nav_buttons)
     
-    # 6. Eng pastdagi doimiy "Orqaga" tugmasi (Admin panelga qaytish)
     builder.row(types.InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_anime_panel"))
     
     text_content = (
@@ -153,15 +137,12 @@ async def list_anime(
     markup_content = builder.as_markup()
 
     try:
-        # Agar oldingi xabar oddiy matnli bo'lsa, silliqqina edit qiladi
         await callback.message.edit_text(
             text=text_content,
             parse_mode="HTML",
             reply_markup=markup_content
         )
     except TelegramBadRequest as e:
-        # Agar oldingi xabar rasmli bo'lsa (ya'ni edit_text xato bersa), 
-        # eski rasmli xabarni o'chirib, o'rniga toza matnli ro'yxatni yuboramiz.
         if "there is no text in the message" in str(e).lower() or "message to edit not found" in str(e).lower():
             try:
                 await callback.message.delete()
@@ -174,35 +155,23 @@ async def list_anime(
                 reply_markup=markup_content
             )
         else:
-            # Boshqa kutilmagan Telegram xatoliklari bo'lsa (masalan, message is not modified)
             if "message is not modified" not in str(e).lower():
                 raise e
 
 
-
-
-
-
-
-
-
-
-
+# =====================================================================
+# ANIME DETALLARI (CHOSEN ANIME VIEW) HANDLERI
+# =====================================================================
 @router.callback_query(AnimeDetailCallback.filter())
 async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetailCallback, session: AsyncSession):
     await callback.answer("📖 Ma'lumotlar yuklanmoqda...")
     
     anime_id = callback_data.anime_id
-    current_page = callback_data.page  # Orqaga qaytganimizda aynan o'sha sahifaga qaytish uchun
+    current_page = callback_data.page  # Orqaga qaytganda eslab qolish uchun
     
-    # 1. Animeni barcha munosabatlari (janrlari) bilan birga bazadan olamiz
-    stmt = (
-        select(Anime)
-        .options(selectinload(Anime.genres))
-        .where(Anime.anime_id == anime_id)
-    )
-    result = await session.execute(stmt)
-    anime = result.scalar_one_or_none()
+    # 🔥 FIX: Og'ir SELECT query o'rniga, repository'ning kesh himoyasiga ega funksiyasidan foydalanamiz
+    # Bu funksiya o'zi avtomat ichidagi janrlarni ham serialize qilib tayyor dict qaytaradi
+    anime = await AnimeRepository.get_anime_by_id(session=session, anime_id=anime_id)
     
     if not anime:
         try:
@@ -211,26 +180,33 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
             await callback.message.answer("❌ Kechirasiz, ushbu anime topilmadi.")
         return
 
-    # 2. Janrlarni va statusni formatlaymiz
-    genres_str = ", ".join([g.name for g in anime.genres]) if anime.genres else "Mavjud emas"
-    status_str = "🟢 Tugallangan" if anime.is_completed else "🔴 Davom etmoqda"
-    safe_title = html.escape(anime.title)
-    safe_description = html.escape(anime.description or 'Description unavailable.')
-    # 3. Anime haqida to'liq ma'lumot matni (HTML chiroyli formatda)
-    text =(
+    # 🔥 FIX: Ma'lumotlarni dict ko'rinishida kalitlar orqali xavfsiz o'qiymiz
+    genres_list = anime.get("genres", [])
+    genres_str = ", ".join([html.escape(g) for g in genres_list]) if genres_list else "Mavjud emas"
+    
+    status_str = "🟢 Tugallangan" if anime.get("is_completed") else "🔴 Davom etmoqda"
+    safe_title = html.escape(anime.get("title", "Nomsiz"))
+    safe_description = html.escape(anime.get("description") or 'Tavsif kiritilmagan.')
+    poster_id = anime.get("poster_id")
+    languages = html.escape(anime.get("languages") or 'Noma\'lum')
+    episodes_count = anime.get("episode", "Noma'lum")
+    episodes_list = anime.get("episodes", [])
+    episodes_count = len(episodes_list) if isinstance(episodes_list, list) else 0
+    # HTML dizayndagi teglarni to'g'rilab, chiroyli ko'rinishga keltiramiz
+    text = (
         f"╔══════════════════╗\n"
         f"       🎬 <b>{safe_title}</b>\n"
         f"╚══════════════════╝\n\n"
-
         f"📌 <b>Anime Info</b>\n"
         f"╔══════════════════╗\n"
-        f"├ 🆔 ID: <code>#{anime.anime_id}</code>\n"  
-        f"├ 📅 Year: <b>{anime.year}</b>\n"
+        f"├ 🆔 ID: <code>#{anime_id}</code>\n"  
+        f"├ 📅 Year: <b>{anime.get('year', 'Unknown')}</b>\n"
+        f"├ ▶️ Episodes: <b>{episodes_count} ta</b>\n"
         f"├ 🚦 Status: <b>{status_str}</b>\n"
-        f"├ 🌐 Lang: <b>{anime.languages or 'Unknown'}</b>\n"
+        f"├ 🌐 Lang: <b>{languages}</b>\n"
         f"╚══════════════════╝\n"
         f"╔══════════════════╗\n"
-        f"└ 🎭 Genres: <b>{genres_str}</b>\n\n"
+        f"└ 🎭 Genres: <b>{genres_str}</b>\n"
         f"╚══════════════════╝\n\n"
         f"📝 <b>Tavsif</b>\n"
         f"<blockquote expandable>"
@@ -238,18 +214,18 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
         f"</blockquote>"
     )
 
-    # 4. Inline tugmalarni yig'ish
+    # Inline tugmalarni yig'ish
     builder = InlineKeyboardBuilder()
     
     # Qism qo'shish tugmasi
     builder.row(
         InlineKeyboardButton(
             text="➕ Ushbu animega qism qo'shish", 
-            callback_data=f"add_ep_{anime.anime_id}"
+            callback_data=f"add_ep_{anime_id}"
         )
     )
     
-    # 🔙 Orqaga qaytish tugmasi (Aynan kelgan sahifasiga pagination xavfsiz qaytadi)
+    # Orqaga qaytish tugmasi (Aynan o'zi kelgan sahifaga qaytadi)
     builder.row(
         InlineKeyboardButton(
             text="🔙 Ro'yxatga qaytish", 
@@ -259,28 +235,24 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
 
     markup = builder.as_markup()
 
-    # 5. Xabarni foydalanuvchiga ko'rsatish (Rasm bor yoki yo'qligiga qarab)
-    if anime.poster_id:
+    # Xabarni foydalanuvchiga ko'rsatish (Rasm bor yoki yo'qligiga qarab)
+    if poster_id:
         try:
-            # 🔥 UX FIX: Eski matnli xabarni o'chirganda keladigan "Message to delete not found" 
-            # xatosini try-except orqali silliq ushlab qolamiz.
             await callback.message.delete()
         except TelegramBadRequest:
-            pass  # Agar xabar allaqachon o'chirilgan bo'lsa, xatolik bermaydi
+            pass
         
         try:
             await callback.message.answer_photo(
-                photo=anime.poster_id,
+                photo=poster_id,
                 caption=text,
                 parse_mode="HTML",
                 reply_markup=markup
             )
         except TelegramBadRequest as e:
-            logger.error(f"Poster yuborishda xatolik (Balki file_id eskirgan): {e}")
-            # Agar rasm yuborishda muammo bo'lsa (masalan file_id noto'g'ri), matn ko'rinishida yuboramiz
+            logger.error(f"Poster yuborishda xatolik (file_id eskirgan yoki xato): {e}")
             await callback.message.answer(text=text, parse_mode="HTML", reply_markup=markup)
     else:
-        # Agar poster bo'lmasa xabarni shunchaki tahrirlaymiz
         try:
             await callback.message.edit_text(text=text, parse_mode="HTML", reply_markup=markup)
         except TelegramBadRequest as e:
