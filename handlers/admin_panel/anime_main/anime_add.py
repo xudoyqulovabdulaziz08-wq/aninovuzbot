@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from database.repository import AnimeRepository
 from database.connection import AsyncSession, async_sessionmaker
-
+from database.cache import valkey
 from config import config
 from keyboards.inline import anime_menu_kb
 from database.repository import AnimeRepository
@@ -544,32 +544,30 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     )
 
     try:
-        # AnimeRepository ma'lumotlarni muvaffaqiyatli saqlaydi va 'dict' qaytaradi
+        # AnimeRepository ma'lumotlarni muvaffaqiyatli saqlaydi (ichkarida flush() bajariladi)
         new_anime = await AnimeRepository.add_anime(
             session=session,
             title=fsm_data.get("title"),
             poster_id=fsm_data.get("poster_id"),
             year=fsm_data.get("year"),
-            is_completed=fsm_data.get("is_completed", False),  # Dynamic holat kiritilgan bo'lsa
+            is_completed=fsm_data.get("is_completed", False),
             genres=selected_genres,
             description=fsm_data.get("description"),
             languages=languages_list,
             episodes=[]
         )
         
-        # 🔥 FIX: Nuqta (.) o'rniga lug'at kalitlari ['...'] ishlatilmoqda
         anime_id = new_anime["anime_id"]
         anime_title = html.escape(new_anime["title"])
         anime_year = new_anime["year"]
-        # Repository o'zi bazadan janr nomlarini aniqlab string ro'yxat qaytaradi
         anime_genres = [html.escape(g) for g in new_anime.get("genres", [])]
         
-        # 2. Dynamic va Premium ko'rinishdagi boshqaruv tugmalari
+        # Dynamic va Premium ko'rinishdagi boshqaruv tugmalari
         builder = InlineKeyboardBuilder()
         builder.row(
             types.InlineKeyboardButton(
                 text="🎬 Qism (Epizod) yuklashni boshlash", 
-                callback_data=f"add_ep_{anime_id}"  # To'g'rilandi
+                callback_data=f"add_ep_{anime_id}"
             )
         )
         builder.row(
@@ -593,16 +591,39 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi. "
             "Endi unga video qismlarni (epizodlarni) biriktirishingiz mumkin.</i>"
         )
-        
-        # 3. Muvaffaqiyatli yakunlash interfeysi va silliq yangilash
-        await loading_msg.edit_text(
-            text=success_text, 
-            reply_markup=builder.as_markup(), 
-            parse_mode="HTML"
-        )
-        
-        # 🔥 FIX 4: Faqat muvaffaqiyatli saqlangandagina xotirani tozalaymiz!
-        await state.clear()
+
+        # =====================================================================
+        # 🔥 ENG ASOSIY INTEGRATSIYA: SAFE POST-COMMIT HOOK
+        # =====================================================================
+        # Ushbu funksiya faqatgina middleware tranzaksiyani haqiqiy commit qilgandan keyin ishga tushadi
+        async def refresh_search_cache_after_commit():
+            try:
+                logger.info(f"🚀 Middleware tranzaksiyani muvaffaqiyatli commit qildi. Anime #{anime_id} keshga yozilmoqda...")
+                # Global qidiruv xaritasiga klaster bo'ylab qo'shish (Valkey/Redis)
+                await valkey.update_single_anime_in_search_map(
+                    anime_id=anime_id,
+                    title=new_anime.get("title"),
+                    year=new_anime.get("year")
+                )
+                
+                # Kesh muvaffaqiyatli yangilangandan keyin UI interfeysini foydalanuvchiga ko'rsatamiz
+                await loading_msg.edit_text(
+                    text=success_text, 
+                    reply_markup=builder.as_markup(), 
+                    parse_mode="HTML"
+                )
+                # Faqat muvaffaqiyatli saqlangandagina xotirani tozalaymiz!
+                await state.clear()
+            except Exception as cache_err:
+                logger.error(f"❌ Post-commit kesh yangilashda xatolik: {cache_err}")
+
+        # Middleware taqdim etgan SafeSession proxy obyektining hook tizimidan foydalanamiz
+        if hasattr(session, "on_commit"):
+            session.on_commit(refresh_search_cache_after_commit)
+        else:
+            # Agar session oddiy obyekt bo'lsa (Fallback / Test rejimlari uchun)
+            await refresh_search_cache_after_commit()
+        # =====================================================================
         
     except Exception as e:
         logger.error(f"❌ Anime qo'shishda jiddiy xatolik: {e}")
