@@ -602,28 +602,44 @@ class AnimeRepository:
         }
 
     # ================= ADD ANIME =================
+    # ================= ADD ANIME (FIXED) =================
     @staticmethod
     async def add_anime(session: Any, title: str, poster_id: str, year: int, is_completed: bool, 
-                        genres: List[str], description: str, languages: str, episodes: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        genres: List[Any], description: str, languages: str, episodes: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         ➕ Yangi anime qo'shish va qidiruv xaritasini klaster bo'ylab yangilash
-        JIDDIY FIX: commit() va rollback() olib tashlandi, natija model emas Dict shaklida qaytadi
+        JIDDIY FIX: Kiruvchi 'genres' ID yoki Name ekanligini dynamic aniqlaydi va PostgreSQL xatosini tuzatadi.
         """
         real_session = await AnimeRepository._prepare_session(session)
 
         try:
-            # 1. Janrlarni olish yoki yaratish
-            existing_res = await real_session.execute(select(Genre).where(Genre.name.in_(genres)))
-            existing_genres = {g.name: g for g in existing_res.scalars().all()}
-            
             anime_genres = []
-            for g_name in genres:
-                if g_name in existing_genres:
-                    anime_genres.append(existing_genres[g_name])
-                else:
-                    new_genre = Genre(name=g_name)
-                    anime_genres.append(new_genre)
             
+            # 1. Dynamic Janrlarni qayta ishlash filtri
+            if genres:
+                # Kiruvchi elementlar raqam (ID) yoki matn (Name) ekanligini ajratamiz
+                is_ids = all(str(g).isdigit() for g in genres)
+                
+                if is_ids:
+                    # ✅ AGAR ELEMENTLAR ID BO'LSA: Genre.id ustuni bo'yicha qidiramiz
+                    genre_ids = [int(g) for g in genres]
+                    stmt = select(Genre).where(Genre.id.in_(genre_ids))
+                    res = await real_session.execute(stmt)
+                    anime_genres = list(res.scalars().all())
+                else:
+                    # ✅ AGAR ELEMENTLAR NOMI (STR) BO'LSA: Eski mantiq bo'yicha Genre.name dan qidiramiz
+                    genre_names = [str(g).strip() for g in genres]
+                    existing_res = await real_session.execute(select(Genre).where(Genre.name.in_(genre_names)))
+                    existing_genres = {g.name: g for g in existing_res.scalars().all()}
+                    
+                    for g_name in genre_names:
+                        if g_name in existing_genres:
+                            anime_genres.append(existing_genres[g_name])
+                        else:
+                            # Agar yangi janr nomi bo'lsa, bazaga qo'shish uchun yaratamiz
+                            new_genre = Genre(name=g_name)
+                            anime_genres.append(new_genre)
+
             # 2. Anime obyektini yaratish
             anime = Anime(
                 title=title, poster_id=poster_id, year=year, 
@@ -635,7 +651,7 @@ class AnimeRepository:
             # Avto-generatsiya bo'ladigan anime_id ni olish uchun flush
             await real_session.flush() 
             
-            # 3. Refresh qilib N+1 oldini olib yuklash (agar epizod qo'shilsa ularni ham inobatga oladi)
+            # 3. Refresh qilib N+1 oldini olib yuklash
             stmt = (select(Anime)
                     .options(selectinload(Anime.genres), selectinload(Anime.episodes))
                     .where(Anime.anime_id == anime.anime_id))
