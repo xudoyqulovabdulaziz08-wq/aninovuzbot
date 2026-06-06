@@ -271,6 +271,42 @@ class CacheManager:
             metrics.errors += 1
             logger.error(f"❌ SET EPISODE FILE ID ERROR: {e}")
 
+    # ================= 🔥 INVALIDATE ANIME CACHE (EPISODE FIX) =================
+    async def invalidate_anime_cache(self, anime_id: int):
+        """
+        🎬 Yangi epizod qo'shilganda yoki o'chirilganda ushbu animening keshini 
+        L1 (Local Memory) va L2 (Redis) darajasida butkul tozalaydi.
+        Kanal interfeyslaridagi va Admin paneldagi sonlar real vaqtda to'g'rilanadi.
+        """
+        try:
+            # 1. Animening ob'ekt kalitini generatsiya qilamiz
+            anime_key = self._key("anime_list", anime_id)
+            
+            # 2. Local L1 keshdan o'chirib tashlaymiz
+            async with self._l1_lock:
+                if anime_key in self._l1_cache:
+                    self._l1_cache.pop(anime_key, None)
+            
+            # 3. Redis (L2) keshdan o'chiramiz va klasterdagi boshqa node'larga xabar beramiz
+            if self.redis:
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.delete(anime_key)
+                    
+                    # Cluster ichidagi boshqa serverlarga L1 keshni o'chirish buyrug'ini tarqatamiz
+                    payload = {"key": anime_key, "sender": self.node_id, "action": "DEL"}
+                    pipe.xadd(
+                        self._stream_name, 
+                        {"data": orjson.dumps(payload)}, 
+                        maxlen=self._main_stream_maxlen, 
+                        approximate=True
+                    )
+                    await pipe.execute()
+            
+            logger.info(f"🧹 CacheManager: Anime #{anime_id} keshi tozalandi (Yangi epizod hodisasi).")
+        except Exception as e:
+            metrics.errors += 1
+            logger.error(f"❌ INVALIDATE ANIME CACHE ERROR: {e}")  
+
     async def get_episode_file_id(self, anime_id: int, episode: int) -> Optional[str]:
         table = "anime_episodes"
         obj_id = f"{anime_id}_{episode}"

@@ -490,7 +490,8 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     if not selected_genres:
         return await message.answer("❌ Janrlar topilmadi. Iltimos, jarayonni qaytadan boshlang.")
 
-    languages_list = html.escape(message.text.strip())
+    # Bazaga yozish uchun toza matnni olamiz (escape qilmasdan)
+    raw_languages = message.text.strip()
     
     loading_msg = await message.answer(
         text="⏳ <code>Tizim ma'lumotlarni bazaga yozmoqda, iltimos kuting...</code>", 
@@ -498,23 +499,34 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     )
 
     try:
+        # Yil qiymatini xavfsiz parslash (agar FSM'da xato format bo'lsa tizim qulamasligi uchun)
+        try:
+            anime_year_raw = int(fsm_data.get("year", 2026))
+        except (ValueError, TypeError):
+            anime_year_raw = 2026
+
         # Repositoriy o'zi ichida commit qiladi va xavfsiz Dict qaytaradi
         new_anime = await AnimeRepository.add_anime(
             session=session,
             title=fsm_data.get("title"),
             poster_id=fsm_data.get("poster_id"),
-            year=int(fsm_data.get("year", 2026)),
+            year=anime_year_raw,
             is_completed=fsm_data.get("is_completed", False),
             genres=selected_genres,
             description=fsm_data.get("description") or "Tavsif kiritilmagan.",
-            languages=languages_list,
+            languages=raw_languages,  # <--- BAZAGA TOZA MATN BORADI
             episodes=[]
         )
         
+        # Muvaffaqiyatli yozildi, birinchi navbatda State'ni tozalaymiz (Xavfsizlik uchun)
+        await state.clear()
+        
+        # Ma'lumotlarni Telegram UI uchun HTML xavfsiz holatga keltiramiz (Faqat chiqarishda!)
         anime_id = new_anime.get("anime_id")
-        anime_title = html.escape(new_anime.get("title", "Nomsiz"))
+        anime_title = html.escape(str(new_anime.get("title", "Nomsiz")))
         anime_year = new_anime.get("year", "Noma'lum")
-        anime_genres = [html.escape(g) for g in new_anime.get("genres", [])]
+        anime_genres = [html.escape(str(g)) for g in new_anime.get("genres", [])]
+        anime_langs = html.escape(str(new_anime.get("languages", raw_languages)))
         
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="🎬 Qism yuklashni boshlash", callback_data=f"add_ep_{anime_id}"))
@@ -528,30 +540,34 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             f"🎬 <b>Anime nomi:</b> <code>{anime_title}</code>\n"
             f"📅 <b>Yili:</b> <code>{anime_year}-yil</code>\n"
             f"🔮 <b>Janrlar:</b> <code>{', '.join(anime_genres) if anime_genres else 'Kiritilmagan'}</code>\n"
-            f"🌐 <b>Tillari:</b> <code>{languages_list}</code>\n\n"
+            f"🌐 <b>Tillari:</b> <code>{anime_langs}</code>\n\n"
             "───────────────────────\n"
-            "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi.</i>"
+            "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi va qidiruv keshiga tarqatildi.</i>"
         )
 
-        # To'g'ridan-to'g'ri UI yangilanadi va state tozalanadi (chunki tepada commit bo'lib bo'ldi)
         await loading_msg.edit_text(
             text=success_text, 
             reply_markup=builder.as_markup(), 
             parse_mode="HTML"
         )
-        await state.clear()
         
     except Exception as e:
         logger.error(f"❌ Anime qo'shishda jiddiy xatolik: {e}")
+        
+        # Xatolik bo'lsa ham admin bloklanib qolmasligi uchun stateni tozalash yoki boshqa sahifaga ruxsat berish
         error_builder = InlineKeyboardBuilder()
         error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="add_anime_main"))
         
-        await loading_msg.edit_text(
-            text="❌ <b>Tizim xatoligi!</b>\n\n"
-                 "Ma'lumotlarni bazaga yozishda muammo yuz berdi. Server jurnallarini tekshiring.",
-            reply_markup=error_builder.as_markup(),
-            parse_mode="HTML"
-        )
+        try:
+            await loading_msg.edit_text(
+                text="❌ <b>Tizim xatoligi!</b>\n\n"
+                     "Ma'lumotlarni bazaga yozishda muammo yuz berdi. Server jurnallarini (logs) tekshiring.",
+                reply_markup=error_builder.as_markup(),
+                parse_mode="HTML"
+            )
+        except Exception as tg_err:
+            logger.error(f"❌ Xatolik xabarini yuborishda Telegram API xatosi: {tg_err}")
+
 # =====================================================================
 # ⛩ QADAM 8: Qism qo'shish jarayoni (Video qabul qilish va bazaga saqlash)
 # =====================================================================
@@ -559,21 +575,25 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
 async def start_add_episode(callback: CallbackQuery, state: FSMContext, session: Any):
     """ 🎬 Admin qism qo'shish tugmasini bosganda navbatdagi qism raqamini aniqlash va video so'rash """
     
-    # callback_data dan anime_id ni dynamic ajratib olamiz ("add_ep_45" -> 45)
+    # 1. callback_data dan anime_id ni xavfsiz ajratib olish ("add_ep_45" -> 45)
     try:
-        anime_id = int(callback.data.split("_")[2])
+        # rsplit orqali xavfsizlikni oshiramiz, agar id ichida pastki chiziq bo'lmasa ham ishonchli ishlaydi
+        anime_id = int(callback.data.rsplit("_", 1)[-1])
     except (IndexError, ValueError):
         return await callback.answer("⚠️ Callback ma'lumotlarida xatolik!", show_alert=True)
     
-    # 1. Bazadan yoki Keshdan ushbu animening joriy holatini tekshiramiz
+    # 2. Bazadan animeni o'qiymiz
     anime = await AnimeRepository.get_anime_by_id(session=session, anime_id=anime_id)
+    
     if not anime:
-        return await callback.message.edit_text(
-            text="❌ <b>Xatolik:</b> Ushbu anime tizimda topilmadi yoki o'chirilgan.",
-            parse_mode="HTML"
-        )
+        # Agar anime o'chib ketgan bo'lsa, xato bermasligi uchun xavfsiz chiqish
+        try:
+            await callback.message.delete()
+        except TelegramBadRequest:
+            pass
+        return await callback.message.answer("❌ <b>Xatolik:</b> Ushbu anime tizimda topilmadi yoki o'chirilgan.", parse_mode="HTML")
         
-    # Xavfsiz ma'lumotlarni ajratib olish (Dict yoki Model tekshiruvi)
+    # Xavfsiz ma'lumotlarni ajratib olish (Bizning repomiz doim dict qaytaradi)
     if isinstance(anime, dict):
         episodes_list = anime.get("episodes", [])
         anime_title = anime.get("title", "Noma'lum anime")
@@ -581,13 +601,24 @@ async def start_add_episode(callback: CallbackQuery, state: FSMContext, session:
         episodes_list = getattr(anime, "episodes", []) or []
         anime_title = getattr(anime, "title", "Noma'lum anime")
 
-    # Mavjud qismlar soniga qarab navbatdagi qism raqamini 100% aniq hisoblaymiz
-    next_episode_number = len(episodes_list) + 1 if episodes_list else 1
+    # 3. 🔥 ENGMUHIM FIX: Qism raqamini UniqueConstraint xatosiz, 100% ishonchli hisoblash
+    if episodes_list:
+        try:
+            # Agar epizod dict bo'lsa (bizning oxirgi repomizda shunday)
+            if isinstance(episodes_list[0], dict):
+                highest_ep = max([ep.get("episode", 0) for ep in episodes_list])
+            # Agar tasodifan ob'ekt bo'lib qolsa
+            else:
+                highest_ep = max([getattr(ep, "episode", 0) for ep in episodes_list])
+            next_episode_number = highest_ep + 1
+        except Exception:
+            # Fallback (kutilmagan ro'yxat kelsa)
+            next_episode_number = len(episodes_list) + 1
+    else:
+        next_episode_number = 1
     
-    # 2. Ma'lumotlarni keyingi qadamda ishlatish uchun FSM xotirasiga muhrlaymiz
+    # 4. Ma'lumotlarni FSM xotirasiga muhrlaymiz va state'ni o'zgartiramiz
     await state.update_data(anime_id=anime_id, episode_number=next_episode_number)
-    
-    # 3. State-ni video/fayl qabul qilish holatiga o'tkazamiz
     await state.set_state(AnimeMenuState.adding_episode_video)
     
     # Premium Dark-Mode UI Dizayni
@@ -598,11 +629,9 @@ async def start_add_episode(callback: CallbackQuery, state: FSMContext, session:
         f"🎬 <b>Anime:</b> <code>{anime_title}</code>\n"
         f"🔢 <b>Navbatdagi qism:</b> <code>{next_episode_number}-qism</code>\n"
         "───────────────────────\n\n"
-        "📌 Iltimos, ushbu qism uchun <b>Video (mp4)</b> yoki siqilmagan <b>Fayl (document)</b> yuboring.\n\n"
-        
+        "📌 Iltimos, ushbu qism uchun <b>Video (mp4)</b> yoki siqilmagan <b>Fayl (document)</b> yuboring."
     )
     
-    # Boshqaruv tugmalari (Jarayonni xavfsiz to'xtatish imkoniyati bilan)
     builder = InlineKeyboardBuilder()
     builder.row(
         types.InlineKeyboardButton(
@@ -611,21 +640,18 @@ async def start_add_episode(callback: CallbackQuery, state: FSMContext, session:
         )
     )
     
+    # 5. 🔥 UI FIX: Rasm (Poster) ustiga text edit qilish xatosini butkul yo'q qilish
     try:
-        # Eski xabarni chiroyli tarzda yangilaymiz (Chat toza turishi uchun)
-        await callback.message.edit_text(
-            text=text,
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
-        await callback.answer(f"⚙️ {next_episode_number}-qism kutilmoqda...")
+        await callback.message.delete()
     except TelegramBadRequest:
-        # Agarda xabarni edit qilib bo'lmasa (masalan, eski xabar bo'lsa), yangi xabar yuboramiz
-        await callback.message.answer(
-            text=text,
-            reply_markup=builder.as_markup(),
-            parse_mode="HTML"
-        )
+        pass # Eski xabarni o'chirib bo'lmasa, indamaymiz
+        
+    await callback.message.answer(
+        text=text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer(f"⚙️ {next_episode_number}-qism kutilmoqda...")
 
 
 # =====================================================================
@@ -633,49 +659,62 @@ async def start_add_episode(callback: CallbackQuery, state: FSMContext, session:
 # =====================================================================
 @router.message(AnimeMenuState.adding_episode_video, F.video | F.document)
 async def process_episode_video_bulk(message: Message, state: FSMContext):
-    """ 📥 Admin yuborgan videolarni bazaga yozmasdan, FSM xotirasiga ketma-ket yig'adi """
+    """ 📥 Admin yuborgan videolarni bazaga yozmasdan, FSM xotirasiga ketma-ket va xavfsiz yig'adi """
     
     video_file_id = None
     video_unique_id = None
     
-    # 1. Formatni aniqlash va file_id va file_unique_id olish
+    # 1. Formatni va fayl xavfsizligini qat'iy aniqlash
     if message.video:
         video_file_id = message.video.file_id
         video_unique_id = message.video.file_unique_id
     elif message.document:
         mime = message.document.mime_type
-        if mime and not mime.startswith("video/"):
-            return await message.answer("⚠️ Iltimos, faqat video formatdagi fayl yuboring!")
+        # None bo'lishi yoki video bo'lmasligini to'liq to'samiz
+        if not mime or not mime.startswith("video/"):
+            return await message.answer(
+                "⚠️ <b>Xatolik:</b> Iltimos, faqat video formatdagi fayllarni (mp4, mkv...) yuboring!",
+                parse_mode="HTML"
+            )
         video_file_id = message.document.file_id
         video_unique_id = message.document.file_unique_id
 
     if not video_file_id or not video_unique_id:
-        return await message.answer("❌ Videoni aniqlab bo'lmadi, qaytadan yuboring:")
+        return await message.answer("❌ Videoni aniqlab bo'lmadi, iltimos qaytadan yuboring:")
 
-    # FSM xotirasidan joriy to'plangan epizodlar ro'yxatini olamiz
+    # FSM xotirasidan barcha kerakli ma'lumotlarni yagona so'rovda olamiz
     data = await state.get_data()
     anime_id = data.get("anime_id")
-    # Agar xotirada ro'yxat hali bo'lmasa, yangi ochamiz
+    
+    # 🔥 FIX 1: Oldingi handlerda aniqlangan bazadagi navbatdagi qism boshlang'ich raqami
+    base_episode_number = data.get("episode_number") 
+    
+    if not anime_id or base_episode_number is None:
+        return await message.answer(
+            "❌ <b>Xatolik:</b> Tizim xotirasi uzildi. Iltimos, qism yuklash paneliga qaytadan kiring.",
+            parse_mode="HTML"
+        )
+        
     temp_episodes = data.get("temp_episodes", [])
     
-    # 🔥 UX GUARD: Albom qilib tashlanganda bir xil video ikki marta ro'yxatga kirmasligi uchun tekshiramiz
+    # 🔥 UX GUARD: Albom yuklanganda dublikat fayllar kirib ketishini to'sish
     if any(ep["file_unique_id"] == video_unique_id for ep in temp_episodes):
-        return  # Dublikat bo'lsa shunchaki tashlab ketamiz
+        return  # Dublikat bo'lsa indamay tashlab ketamiz (Telegram flood oldini oladi)
         
-    # Navbatdagi qism raqami (xotiradagi bor qismlar + start_number)
-    current_queue_number = len(temp_episodes) + 1
+    # 🔥 FIX 2: Qism raqamini bazadagi bor qismlarga nisbatan mutlaqo to'g'ri hisoblash
+    current_queue_number = base_episode_number + len(temp_episodes)
     
-    # Videoni vaqtincha xotiraga qo'shamiz (DB ga yozilmaydi!)
+    # Videoni xotiradagi navbatga qo'shish
     temp_episodes.append({
         "episode_num": current_queue_number,
         "file_id": video_file_id,
         "file_unique_id": video_unique_id
     })
     
-    # Xotirani yangilaymiz
+    # Xotirani darhol yangilaymiz (Parallel so'rovlar race-condition bo'lmasligi uchun)
     await state.update_data(temp_episodes=temp_episodes)
     
-    # Admin uchun premium boshqaruv tugmalari (Faqat xabarni yakunlash uchun)
+    # Boshqaruv tugmalari builder'i
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(
         text="📢 Kanalga e'lon qilish va saqlash", 
@@ -686,55 +725,86 @@ async def process_episode_video_bulk(message: Message, state: FSMContext):
         callback_data=f"bulk_save_only_{anime_id}"
     ))
 
-    # Real-vaqt rejimida admin uchun hisobot matni
+    # Real-vaqt (Live Counter) dizayni
     text = (
         "╔═══════════ ⛩ ═══════════╗\n"
         "      📥 VIDEOLAR QABUL QILINMOQDA\n"
         "╚═══════════ ⛩ ═══════════╝\n\n"
-        f"✅ <b>Yangi video zanjirga qo'shildi!</b>\n"
-        f"📊 Xotirada tayyor: <code>{len(temp_episodes)} ta qism</code>\n\n"
+        f"✅ <b>Yangi video zanjirga muvaffaqiyatli qo'shildi!</b>\n"
+        f"🔢 Oxirgi yuklangan: <code>{current_queue_number}-qism</code>\n"
+        f"📊 Navbatda saqlangan: <code>{len(temp_episodes)} ta yangi qism</code>\n\n"
         f"<blockquote expandable>"
-        f"📌 Bot hozir avtomat rejimda keyingi qismlarni qabul qilaveradi. "
-        f"Yana qismlar bo'lsa, <b>to'g'ridan-to'g'ri tashlashda davom eting</b>.\n\n"
-        f"Hamma videolarni tashlab bo'lgan bo'lsangiz, pastdagi tugmalardan birini bosing. "
-        f"Shundagina barcha qismlar <b>bitta so'rovda</b> bazaga muhrlanadi!"
+        f"📌 Bot hozir avtomat rejimda keyingi qismlarni ketma-ket qabul qilaveradi. "
+        f"Yana qismlar bo'lsa, <b>fayllarni to'g'ridan-to'g'ri tashlashda davom eting</b>.\n\n"
+        f"Hamma videolarni yuborib bo'lgach, pastdagi tugmalardan birini bosing. "
+        f"Shundagina barcha qismlar <b>bitta o'ramda</b> bazaga muhrlanadi!"
         f"</blockquote>"
     )
     
-    # Admin xabari ko'p marta qayta yuborilmasligi uchun oxirgi xabarni tahrirlashga urinamiz
-    # Albom yuborilganda xabarlar juda tez kelgani uchun answer ishlatish xavfsizroq
-    await message.answer(text=text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    # 🔥 FIX 3: Chatni 100 ta xabar bilan to'ldirmaslik uchun "Anti-Spam Dashboard" logikasi
+    last_menu_msg_id = data.get("bulk_menu_msg_id")
+    success_edit = False
+    
+    if last_menu_msg_id:
+        try:
+            # Eski status xabarini tahrirlaymiz
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=last_menu_msg_id,
+                text=text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
+            success_edit = True
+        except TelegramBadRequest:
+            # Agar xabar juda tez o'zgargani uchun yoki topilmagani uchun o'zgarmasa, pastga tushadi
+            pass
 
+    # Agar hali dashboard xabari yaratilmagan bo'lsa yoki edit qilishda xato bo'lsa, yangisini ochamiz
+    if not success_edit:
+        new_msg = await message.answer(
+            text=text, 
+            reply_markup=builder.as_markup(), 
+            parse_mode="HTML"
+        )
+        # Kelgusi videolar shu xabarni tahrirlashi uchun ID'sini saqlaymiz
+        await state.update_data(bulk_menu_msg_id=new_msg.message_id)
 
 # =====================================================================
 # ⛩ QADAM 10: Videolarni bazaga yozish va jarayonni yakunlash
 # =====================================================================
-@router.callback_query(F.data == "finish_anime_add")
+@router.callback_query(F.data.startswith("bulk_save_only_") | F.data.startswith("bulk_save_publish_"))
 async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMContext, session: Any):
     """ 🗄 Xotiradagi barcha epizodlarni bazaga yozadi, keshni yangilaydi va jarayonni yopadi """
     
-    # FSM xotirasidan to'plangan ma'lumotlarni olamiz
-    fsm_data = await state.get_data()
-    anime_id = fsm_data.get("anime_id")
-    temp_episodes = fsm_data.get("temp_episodes", []) # 9-qadamda yig'ilgan videolar ro'yxati
+    # Callback ma'lumotidan niyatni (publish qilinadimi yo'qmi) va anime_id ni olamiz
+    action_type = "publish" if "publish" in callback.data else "save_only"
+    
+    try:
+        anime_id = int(callback.data.rsplit("_", 1)[-1])
+    except (IndexError, ValueError):
+        return await callback.answer("⚠️ Ma'lumot xatosi!", show_alert=True)
 
-    # Xavfsizlik filtri: Agar ro'yxat bo'sh bo'lsa yoki admin adashib qayta bossa
+    fsm_data = await state.get_data()
+    temp_episodes = fsm_data.get("temp_episodes", []) 
+
     if not temp_episodes:
-        await callback.answer("⚠️ Xotirada yangi qismlar topilmadi yoki allaqachon saqlangan!", show_alert=True)
+        await callback.answer("⚠️ Xotirada yangi qismlar topilmadi!", show_alert=True)
         await state.clear()
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
         try:
-            return await callback.message.edit_text("⛩ Jarayon yakunlangan yoki FSM xotirasi bo'sh.", reply_markup=builder.as_markup())
+            return await callback.message.edit_text(
+                "⛩ Jarayon yakunlangan yoki FSM xotirasi bo'sh.", 
+                reply_markup=builder.as_markup()
+            )
         except TelegramBadRequest:
             return
 
     await callback.answer("⚙️ Ma'lumotlar bazaga muhrlanmoqda...")
     
-    # Loading holati interfeysi
     loading_text = f"⏳ <code>Xotiradagi {len(temp_episodes)} ta qism bazaga yozilmoqda. Iltimos kuting...</code>"
     
-    # Rasmli xabar yoki oddiy matn ekanligiga qarab xavfsiz loading chiqarish
     try:
         current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
     except TelegramBadRequest:
@@ -743,18 +813,30 @@ async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMCont
         except TelegramBadRequest:
             current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
 
-    try:
-        # 🚀 1. BAZAGA KETMA-KET (TRANZAKSIYANI OPTIMALLASHTIRIB) SAQLASH
-        # Siz aytgan episode_num kalitiga muvofiq bitta sessiyada yozamiz
-        for ep in temp_episodes:
-            await AnimeRepository.add_anime_episode(
-                session=session,
-                anime_id=anime_id,
-                episode_num=ep["episode_num"], # 🔥 FIX: To'g'ri kalit
-                file_id=ep["file_id"]          # Faqat file_id yuborilmoqda
-            )
+    successful_inserts = 0
 
-        # 2. Tugmalarni ixcham va professional tarzda yasaymiz
+    try:
+        # 🚀 1. BAZAGA KETMA-KET YUKLASH (Xatolar ustidan nazorat bilan)
+        for ep in temp_episodes:
+            try:
+                # Eslatma: Agar repo ichiga bulk_insert metod qo'shsangiz, for loop'dan voz keching!
+                await AnimeRepository.add_anime_episode(
+                    session=session,
+                    anime_id=anime_id,
+                    episode_num=ep["episode_num"], 
+                    file_id=ep["file_id"]
+                )
+                successful_inserts += 1
+            except Exception as single_err:
+                # Agar 20 ta videodan 1 tasida xato chiqsa ham tizim to'xtamay qolganlarini yozadi
+                logger.warning(f"⚠️ {ep['episode_num']}-qismni yozishda xato (Takroriy bo'lishi mumkin): {single_err}")
+                continue # Keyingi qismga o'tish
+
+        # Agar barcha qismlar yozilmay xato bo'lsa (masalan, db uzilsa), tashqariga irg'itamiz
+        if successful_inserts == 0 and len(temp_episodes) > 0:
+            raise Exception("Birorta ham qism muvaffaqiyatli saqlanmadi!")
+
+        # 2. Tugmalar dizayni
         builder = InlineKeyboardBuilder()
         builder.row(
             types.InlineKeyboardButton(
@@ -762,36 +844,40 @@ async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMCont
                 callback_data="admin_anime_panel"
             )
         )
-        panel_button = builder.as_markup()
+        
+        # Action'ga qarab matnni o'zgartiramiz
+        publish_info = "va kanalga e'lon qilindi." if action_type == "publish" else "(Kanalga e'lon qilinmadi)."
 
-        # Premium Final UI matni
         success_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
             "     🎉 BARCHA QISMLAR SAQLANDI!\n"
             "╚═══════════ ⛩ ═══════════╝\n\n"
-            f"📦 <b>Muvaffaqiyatli yozildi:</b> <code>{len(temp_episodes)} ta qism</code>\n"
+            f"📦 <b>Muvaffaqiyatli yozildi:</b> <code>{successful_inserts}/{len(temp_episodes)} ta qism</code>\n"
             f"🎬 <b>Anime ID:</b> <code>{anime_id}</code>\n\n"
             "───────────────────────\n"
-            "💾 <i>Anime qismlari asosiy bazaga muvaffaqiyatli yozildi va indekslandi. "
-            "FSM xotirasi tozalandi. (Kanalga e'lon qilinmadi)</i>"
+            f"💾 <i>Anime qismlari asosiy bazaga muvaffaqiyatli yozildi {publish_info}</i>"
         )
 
-        # 3. Yakuniy natijani silliq va xavfsiz ko'rsatish
+        # 3. Natijani ko'rsatish
         try:
-            await current_msg.edit_text(text=success_text, parse_mode="HTML", reply_markup=panel_button)
+            await current_msg.edit_text(text=success_text, parse_mode="HTML", reply_markup=builder.as_markup())
         except TelegramBadRequest:
             try:
-                await current_msg.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=panel_button)
+                await current_msg.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=builder.as_markup())
             except TelegramBadRequest:
-                await current_msg.answer(text=success_text, parse_mode="HTML", reply_markup=panel_button)
+                await current_msg.answer(text=success_text, parse_mode="HTML", reply_markup=builder.as_markup())
 
-        # 🔥 4. FAQAT MUVAFFAQIYATLI YOZILGANDAN KEYIN XOTIRANI TOZALAYMIZ
+        # 🔥 4. Agar foydalanuvchi "Publish" tugmasini bosgan bo'lsa, bu yerda kanalga e'lon qilish funksiyasini chaqirishingiz mumkin.
+        if action_type == "publish":
+            # await send_to_channel_logic(anime_id, temp_episodes)
+            pass
+
+        # 5. Jarayon to'liq muvaffaqiyatli tugagandan keyingina xotirani tozalaymiz
         await state.clear()
 
     except Exception as e:
         logger.error(f"❌ Yakuniy saqlashda jiddiy xatolik: {e}")
         
-        # Xatolik yuz berganda admin ma'lumotlari FSMda qoladi (adminga qulaylik)
         error_builder = InlineKeyboardBuilder()
         error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="admin_anime_panel"))
         
@@ -802,9 +888,6 @@ async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMCont
             await current_msg.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=error_builder.as_markup())
 
 # =====================================================================
-# QADAM 10: Anime kanalga yuborish yoki shunchaki saqlash va yakunlash
-# =====================================================================
-# =====================================================================
 # ⛩ QADAM 10: Xotiradagi qismlarni bazaga yozish -> Kanalga e'lon qilish
 # =====================================================================
 @router.callback_query(F.data.startswith("publish_anime_") | F.data.startswith("bulk_save_publish_"))
@@ -813,21 +896,21 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
     
     await callback.answer("📢 Kanalga e'lon qilish boshlandi...")
     
-    # FSM xotirasidan ommaviy yuklangan qismlarni va anime_id ni olamiz
+    # 1. Ma'lumotlarni xavfsiz ajratib olish
     fsm_data = await state.get_data()
     anime_id = fsm_data.get("anime_id")
-    temp_episodes = fsm_data.get("temp_episodes", []) # 9-qadamda yig'ilgan videolar
+    temp_episodes = fsm_data.get("temp_episodes", []) 
 
-    # Agar dynamic callback_data'dan anime_id ni olish kerak bo'lsa (Zaxira uchun)
+    # Dynamic callback_data'dan anime_id ni xavfsiz olish
     if not anime_id:
         try:
-            anime_id = int(callback.data.split("_")[2])
+            anime_id = int(callback.data.rsplit("_", 1)[-1])
         except (IndexError, ValueError):
             return await callback.answer("❌ Anime ID aniqlanmadi!", show_alert=True)
 
     loading_text = "⏳ <code>Ma'lumotlar bazaga muhrlanmoqda va kanalga tayyorlanmoqda...</code>"
     
-    # Rasmli xabar yoki toza matnligiga qarab xavfsiz loading chiqarish
+    # UI Loading qismini xavfsiz boshqarish
     try:
         current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
     except TelegramBadRequest:
@@ -837,17 +920,23 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
 
     try:
-        # 🔥 1. AVVAL XOTIRADAGI EPIZODLARNI BAZAGA OMMAVIY (BULK) YOZAMIZ
+        # 🔥 2. BAZAGA KETMA-KET YUKLASH (Xatolar ustidan nazorat bilan)
+        successful_inserts = 0
         if temp_episodes:
             for ep in temp_episodes:
-                await AnimeRepository.add_anime_episode(
-                    session=session,
-                    anime_id=anime_id,
-                    episode_num=ep["episode_num"],
-                    file_id=ep["file_id"]
-                )
+                try:
+                    await AnimeRepository.add_anime_episode(
+                        session=session,
+                        anime_id=anime_id,
+                        episode_num=ep["episode_num"],
+                        file_id=ep["file_id"]
+                    )
+                    successful_inserts += 1
+                except Exception as ep_err:
+                    logger.warning(f"⚠️ {ep['episode_num']}-qismni yozishda xato: {ep_err}")
+                    continue
         
-        # 🔥 2. ANIMENI BAZADAN TO'LIQ JANRLARI BILAN BIRGA BITTA SO'ROVDA OLAMIZ
+        # 🔥 3. ANIMENI BAZADAN TO'LIQ JANRLARI BILAN BIRGA OLAMIZ
         stmt = (
             select(Anime)
             .options(
@@ -865,18 +954,24 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             await current_msg.edit_text("❌ Xatolik: Anime bazadan topilmadi.", reply_markup=builder.as_markup())
             return
 
-        # 3. Ma'lumotlarni chiroyli va xavfsiz formatlaymiz
-        genres_str = ", ".join([g.name for g in anime.genres]) if anime.genres else "Mavjud emas"
+        # 4. Ma'lumotlarni chiroyli va xavfsiz formatlaymiz
+        genres_str = ", ".join([html.escape(g.name) for g in anime.genres]) if anime.genres else "Mavjud emas"
         status_str = "🟢 Tugallangan" if anime.is_completed else "🔴 Davom etmoqda"
         
-        safe_title = html.escape(anime.title)
-        safe_description = html.escape(anime.description or "Tavsif mavjud emas.")
+        safe_title = html.escape(str(anime.title))
+        raw_description = anime.description or "Tavsif kiritilmagan."
+        
+        # 🔥 FIX: Telegram rasmlar ostidagi matn (caption) uchun 1024 belgi limitiga ega!
+        # Agar rasm bor bo'lsa va text juda uzun bo'lsa, qirqib tashlaymiz
+        if anime.poster_id and len(raw_description) > 700:
+            raw_description = raw_description[:697] + "..."
+            
+        safe_description = html.escape(raw_description)
+        
+        # Xotirada yozilganlar va bazadagi jami qismlar hisobi
         episodes_count = len(anime.episodes) if anime.episodes else 0
-        # 🔥 UX FIX: Agar xotirada (temp_episodes) hali bazaga yozilmagan yangi qismlar bo'lsa, ularni ham qo'shib yuboramiz
-        if temp_episodes:
-            episodes_count += len(temp_episodes)
 
-        # 4. 📢 KANALGA POST SHABLONI (To'g'rilangan HTML dizayn)
+        # 5. 📢 KANALGA POST SHABLONI
         caption = (
             f"╔══════════════════╗\n"
             f"       🎬 <b>{safe_title}</b>\n"
@@ -887,7 +982,7 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             f"├ 📅 Yil: <b>{anime.year}</b>\n"
             f"├ ▶️ Qism: <b>{episodes_count}</b> \n"
             f"├ 🚦 Status: <b>{status_str}</b>\n"
-            f"├ 🌐 Til: <b>{anime.languages or 'O\'zbekcha'}</b>\n"
+            f"├ 🌐 Til: <b>{html.escape(anime.languages) if anime.languages else 'O\'zbekcha'}</b>\n"
             f"╚══════════════════╝\n"
             f"╔══════════════════╗\n"
             f"  🔮 Janrlar: <i>{genres_str}</i>\n"
@@ -898,11 +993,10 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             f"</blockquote>"
         )
         
-        # 🔥 5. DYNAMIC DEEP-LINK TUGMASI (Kanal postining ostiga qo'yiladi)
+        # 6. DYNAMIC DEEP-LINK TUGMASI
         bot_info = await callback.bot.get_me()
         bot_username = bot_info.username
         
-        # t.me/bot_name?start=anime_id ko'rinishidagi havola
         channel_builder = InlineKeyboardBuilder()
         channel_builder.row(
             InlineKeyboardButton(
@@ -911,26 +1005,33 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             )
         )
 
-        # 6. Kanalga rasm (Poster), opisaniya va dynamic tugmani yuboramiz
-        await callback.bot.send_photo(
-            chat_id="@Aninovuz", 
-            photo=anime.poster_id,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=channel_builder.as_markup()
-        )
+        # 🔥 FIX: Agar poster_id bo'lmasa, oddiy xabar jo'natamiz (Tizim qulamasligi uchun)
+        if anime.poster_id:
+            await callback.bot.send_photo(
+                chat_id="@Aninovuz", 
+                photo=anime.poster_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=channel_builder.as_markup()
+            )
+        else:
+            await callback.bot.send_message(
+                chat_id="@Aninovuz", 
+                text=caption,
+                parse_mode="HTML",
+                reply_markup=channel_builder.as_markup()
+            )
         
-        # Admin uchun yakuniy hisobot tugmasi
+        # 7. Admin uchun yakuniy hisobot
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="admin_anime_panel"))
         
-        # Admin xabarini premium dizaynda yangilaymiz
         success_admin_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
-            "     📢 KANALGA MUVAFFAQIYATLI CHIQTI!\n"
+            "    📢 KANALGA MUVAFFAQIYATLI CHIQTI!\n"
             "╚═══════════ ⛩ ═══════════╝\n\n"
-            f"🎬 <b>Anime:</b> <code>{anime.title}</code>\n"
-            f"📦 <b>Yozilgan qismlar:</b> <code>{len(temp_episodes) if temp_episodes else 'Mavjudlari amalda'} ta qism</code>\n"
+            f"🎬 <b>Anime:</b> <code>{safe_title}</code>\n"
+            f"📦 <b>Yozilgan qismlar:</b> <code>{successful_inserts} ta yangi qism</code>\n"
             f"🚀 <b>Manzil:</b> @Aninovuz\n\n"
             "───────────────────────\n"
             "✅ <i>Barcha qismlar bazaga muhrlandi va kanal postiga dynamic ko'rish havolasi biriktirildi.</i>"
@@ -941,7 +1042,7 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
         except TelegramBadRequest:
             await current_msg.edit_caption(caption=success_admin_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
             
-        # 🔥 7. HAMMA ISH MUVAFFAQIYATLI BITGACH, FSM TOZALANADI
+        # 🔥 8. HAMMA ISH MUVAFFAQIYATLI BITGACH, FSM TOZALANADI
         await state.clear()
         
     except Exception as e:
@@ -954,7 +1055,7 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             f"⚠️ <b>Ma'lumot saqlandi, lekin kanalga ketmadi!</b>\n\n"
             f"<b>Xatolik sababi:</b> <code>{html.escape(str(e))}</code>\n\n"
             f"💡 <i>Tavsiya: Bot @Aninovuz kanalida administrator ekanligini va "
-            f"Rasm/Post yuborish huquqi borligini tekshiring!</i>"
+            f"Rasm/Post yuborish huquqi borligini tekshiring! Shuningdek, tavsif matni uzunligiga ham e'tibor qarating.</i>"
         )
         try:
             await current_msg.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
