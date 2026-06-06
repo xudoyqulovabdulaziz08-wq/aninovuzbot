@@ -24,14 +24,13 @@ class L1Cache:
     def __init__(self, max_size: int = 5000):
         self.max_size = max_size
         self._cache = OrderedDict()
-        self._lock = asyncio.Lock()  # Konkurent so'rovlar uchun xavfsizlik balansi
+        self._lock = asyncio.Lock()  
 
     async def get(self, key) -> Optional[Dict[str, Any]]:
         async with self._lock:
             if key not in self._cache:
                 return None
             self._cache.move_to_end(key)
-            # Keshdan olingan ma'lumotni mutatsiyadan asrash uchun nusxasini qaytaramiz
             return copy.deepcopy(self._cache[key])
 
     async def set(self, key, value):
@@ -39,7 +38,6 @@ class L1Cache:
             if key in self._cache:
                 self._cache.move_to_end(key)
             
-            # Ichki xotiradagi ma'lumot faqat toza nusxa bo'lishi shart
             self._cache[key] = copy.deepcopy(value)
 
             if len(self._cache) > self.max_size:
@@ -53,7 +51,7 @@ class L1Cache:
 # Global L1 keshni xavfsiz ishga tushirish
 state.l1_cache = L1Cache(max_size=5000)
 
-# Circuit Breaker boshlang'ich holatlarini xavfsiz tekshirish/yuklash
+# Circuit Breaker boshlang'ich holatlarini tekshirish
 if not hasattr(state, 'db_status'): state.db_status = True
 if not hasattr(state, 'db_fail_count'): state.db_fail_count = 0
 if not hasattr(state, 'db_last_retry'): state.db_last_retry = 0.0
@@ -72,18 +70,17 @@ class SafeSession:
     def __init__(self, session=None, session_pool=None):
         self.__dict__["_session"] = session
         self.__dict__["_session_pool"] = session_pool
-        self.__dict__["_post_commit_hooks"] = []  # 👈 YANGLIK: Commitdan keyingi vazifalar
+        self.__dict__["_post_commit_hooks"] = []  
 
     def on_commit(self, func):
-        """Tranzaksiya muvaffaqiyatli yakunlangach bajariladigan vazifani yozib qo'yadi"""
         self._post_commit_hooks.append(func)
 
     async def commit(self):
         """Baza tasdiqlanadi va kesh tozalanadi"""
         if self._session is not None:
             await self._session.commit()
+            logger.debug("💾 [DB PROXY] Global commit muvaffaqiyatli bajarildi.")
             
-            # 🔥 Commit muvaffaqiyatli bo'lsa, barcha kutib turgan kesh tozalashlarni ishga tushiramiz
             for hook in self._post_commit_hooks:
                 try:
                     res = hook()
@@ -96,6 +93,7 @@ class SafeSession:
     async def rollback(self):
         if self._session is not None:
             await self._session.rollback()
+            logger.warning("🔄 [DB PROXY] Rollback bajarildi.")
         self._post_commit_hooks.clear()
 
     async def _ensure_session(self):
@@ -132,6 +130,8 @@ class SafeSession:
     async def close(self):
         if self._session is not None:
             await self._session.close()
+            self.__dict__["_session"] = None
+
 
 # ======================================================
 # 🔥 MIDDLEWARE CORE
@@ -140,7 +140,6 @@ class DbSessionMiddleware(BaseMiddleware):
 
     def __init__(self, session_pool: async_sessionmaker):
         self.session_pool = session_pool
-        # GC urib yubormasligi uchun fondagi vazifalarni vaqtincha saqlash to'plami
         self._background_tasks = set()
         super().__init__()
 
@@ -148,15 +147,12 @@ class DbSessionMiddleware(BaseMiddleware):
         data["session_pool"] = self.session_pool
         user_obj: Optional[User] = data.get("event_from_user")
         
-        # Butun oqim uchun faqat bitta boshqaruvchi proxy obyekt yaratamiz
+        # Butun oqim uchun yagona boshqaruvchi proxy obyekt yaratamiz
         session_obj = SafeSession(session=None, session_pool=self.session_pool)
         data["session"] = session_obj
         
-        # LEVEL 3 (Database) uchun qo'lda ochiladigan real sessiya o'zgaruvchisi
-        db_real_session = None
-        
         try:
-            # 1. System/Channel/Chat uchun fallback (Foydalanuvchisiz kelgan so'rovlar)
+            # 1. System/Channel/Chat uchun fallback
             if not user_obj:
                 data["user"] = {
                     "user_id": 0, "username": "System", "status": "system",
@@ -165,7 +161,6 @@ class DbSessionMiddleware(BaseMiddleware):
                 }
                 return await handler(event, data)
             
-            # Haqiqiy foydalanuvchi ID si
             user_id = user_obj.id
 
             # ======================================================
@@ -186,7 +181,6 @@ class DbSessionMiddleware(BaseMiddleware):
             # ======================================================
             if valkey.is_alive:
                 try:
-                    # Key pattern loyiha standartiga moslashtirildi `{db_users}`
                     cached_l2 = await valkey.get("{db_users}", user_id)
                     if cached_l2:
                         cached_l2 = dict(cached_l2)
@@ -204,11 +198,10 @@ class DbSessionMiddleware(BaseMiddleware):
                     logger.exception(f"❌ L2 CACHE FAILURE user_id={user_id}: {e}")
 
             # ======================================================
-            # 🔥 CIRCUIT BREAKER CHECK & HALF-OPEN STATE (FIXED)
+            # 🔥 CIRCUIT BREAKER CHECK & HALF-OPEN STATE
             # ======================================================
             async with state.db_lock:
                 if not state.db_status:
-                    # ✅ FIX 3: Tiklanish vaqti o'tgan bo'lsa, Half-Open (sinab ko'rish) rejimini yoqamiz
                     if time.time() - state.db_last_retry < state.cb_recovery_time:
                         logger.warning(f"🚫 DB blocked (circuit open). Emergency mode for user_id={user_id}")
                         data["user"] = self._emergency_user(user_obj)
@@ -221,16 +214,11 @@ class DbSessionMiddleware(BaseMiddleware):
             # ======================================================
             # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
             # ======================================================
-            # Faqat keshda topilmagandagina pooldan real sessiya ochamiz
-            # ======================================================
-            # 🔥 LEVEL 3: DATABASE ACCESS (SLOW PATH)
-            # ======================================================
-            db_real_session = self.session_pool()
-            
             try:
                 async with asyncio.timeout(10.0):
-                    db_real_session = await session_obj._ensure_session()
-                    user_data = await UserRepository.get_or_create(db_real_session, user_obj)
+                    # 🔥 FIX: Sessiyani proxy orqali to'g'ri ochamiz va uning daxlsizligini saqlaymiz
+                    real_session = await session_obj._ensure_session()
+                    user_data = await UserRepository.get_or_create(real_session, user_obj)
 
                 await self._reset_circuit_breaker()
 
@@ -239,59 +227,37 @@ class DbSessionMiddleware(BaseMiddleware):
 
                 data["user"] = copy.deepcopy(user_data)
                 
-                # SafeSession ichiga faol real sessiyani ulaymiz
-                
-                
                 # Handlerni ishga tushiramiz
                 result = await handler(event, data)
                 
-                # 🔥 YANGLIK: Handler ishi muvaffaqiyatli tugasa, COMMIT qilamiz!
+                # 🔥 CRITICAL COMMIT: Handler muvaffaqiyatli tugasa, o'zgarishlarni bazaga yozamiz
                 await session_obj.commit()
-                
                 return result
 
             except Exception as e:
-                # 🔥 YANGLIK: Xatolik yuz bersa, rollback qilamiz!
+                # Muammo bo'lsa darhol orqaga qaytaramiz (Rollback)
                 await session_obj.rollback()
                 await self._handle_db_failure(e)
-                logger.exception(f"❌ DB CORE ERROR user_id={user_id}")
+                logger.exception(f"❌ DB CORE ERROR user_id={user_id}: {e}")
                 
                 data["user"] = self._emergency_user(user_obj)
                 return await handler(event, data)
 
         finally:
             # ======================================================
-            # 🛡️ GLOBAL CLEANUP LAYER (MANDATORY CLOSURES)
+            # 🛡️ GLOBAL CLEANUP LAYER (NO MEMORY LEAKS)
             # ======================================================
-            # ✅ FIX 1: Double Close oldini olish zanjiri. 
-            # Agar proxy ichida (lazy) sessiya ochilib ketgan bo'lsa va db_real_session None bo'lsa, uni nazoratga olamiz.
-            if session_obj._session is not None and db_real_session is None:
-                db_real_session = session_obj._session
-
-            # SafeSession proxy daxlsizligini buzmaslik uchun uning ichki bog'lanishini tozalaymiz
-            if db_real_session:
-                session_obj.__dict__["_session"] = None  # Proxy'dan uzish
-                try:
-                    await db_real_session.close()
-                except Exception as e:
-                    logger.debug(f"Real DB session close error (ignored): {e}")
-
-            # Proxy obyektining o'zini yopish (agar ulanish qolgan bo'lsa)
-            if isinstance(session_obj, SafeSession):
-                try:
-                    await session_obj.close()
-                except Exception as e:
-                    logger.debug(f"SafeSession proxy close error (ignored): {e}")
+            # ✅ MUTLAQ FIX: Proxy ichidagi real sessiyani yopish va tozalash zanjiri
+            try:
+                await session_obj.close()
+            except Exception as e:
+                logger.debug(f"SafeSession proxy close error (ignored): {e}")
             
-            # Request ma'lumotlarini tozalaymiz (Memory leak oldini olish)
+            # Request ma'lumotlarini tozalaymiz (Xotirani bo'shatish)
             data.pop("session", None)
             data.pop("session_pool", None)
 
-    # ======================================================
-    # 🔥 SAFE FIRE-AND-FORGET GARBAGE COLLECTOR PROOF
-    # ======================================================
     def _fire_and_forget_cache_update(self, user_data: Dict[str, Any]):
-        """GC urib yubormasligi kafolatlangan fondagi kesh yangilash taski"""
         task = asyncio.create_task(self._enqueue_cache_update(copy.deepcopy(user_data)))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
@@ -301,14 +267,11 @@ class DbSessionMiddleware(BaseMiddleware):
             state.cache_queue.put_nowait(user_data)
         except asyncio.QueueFull:
             try:
-                # Navbat to'lsa eng eski elementni olib tashlab, yangisini qo'shamiz
                 dropped = state.cache_queue.get_nowait()
                 logger.warning(f"⚠️ Cache queue overflow, dropped oldest update for user_id={dropped.get('user_id', 'unknown')}")
                 state.cache_queue.put_nowait(user_data)
             except Exception as e:
                 logger.error(f"❌ Cache queue push exception: {e}")
-
-    
 
     def _emergency_user(self, user_obj: User) -> Dict[str, Any]:
         return {
@@ -322,7 +285,6 @@ class DbSessionMiddleware(BaseMiddleware):
             "is_emergency": True
         }
 
-    # ✅ FIX 2 (Yordamchi metod): Circuit Breaker holatini muvaffaqiyatli so'rovdan keyin tiklash
     async def _reset_circuit_breaker(self):
         async with state.db_lock:
             if not state.db_status or state.db_fail_count > 0:
