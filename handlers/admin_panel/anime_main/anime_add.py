@@ -503,20 +503,23 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     )
 
     try:
-        # 2-FIX: Repositoriy metodimiz kutayotgan aniq parametrlarga moslab chaqiramiz
+        # 🔥 FIX: Repositoriyingiz kutayotgan parametr nomlari va tartibiga 100% moslash
         new_anime = await AnimeRepository.add_anime(
             session=session,
             title=fsm_data.get("title"),
-            year=int(fsm_data.get("year", 2026)), # xavfsiz int casting
             poster_id=fsm_data.get("poster_id"),
-            description=fsm_data.get("description"),
+            year=int(fsm_data.get("year", 2026)),  # xavfsiz casting
+            is_completed=fsm_data.get("is_completed", False),  # 👈 Repositoriyingiz kutayotgan argument
+            genres=selected_genres,  # 👈 'genre_names' o'rniga aniq 'genres' kaliti berildi!
+            description=fsm_data.get("description") or "Tavsif kiritilmagan.",
             languages=languages_list,
-            genre_names=selected_genres  # 👈 Biz yozgan repositoriy parametr nomi (genre_names)
+            episodes=[]  # 👈 default list
         )
         
-        anime_id = new_anime["anime_id"]
-        anime_title = html.escape(new_anime["title"])
-        anime_year = new_anime["year"]
+        # Repositoriy endi _serialize_anime orqali DICT qaytaradi. Uni xavfsiz o'qiymiz:
+        anime_id = new_anime.get("anime_id")
+        anime_title = html.escape(new_anime.get("title", "Nomsiz"))
+        anime_year = new_anime.get("year", "Noma'lum")
         anime_genres = [html.escape(g) for g in new_anime.get("genres", [])]
         
         builder = InlineKeyboardBuilder()
@@ -550,7 +553,7 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             except Exception as ui_err:
                 logger.error(f"❌ UI post-commit xatolik: {ui_err}")
 
-        # 3-FIX: Xavfsiz lambda closure orqali taskni backgroundga topshiramiz
+        # Xavfsiz lambda closure orqali taskni backgroundga topshiramiz
         if hasattr(session, "on_commit"):
             session.on_commit(lambda step=ui_final_commit_step: asyncio.create_task(step()))
         else:
