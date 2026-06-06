@@ -575,9 +575,7 @@ class AnimeRepository:
 
     @staticmethod
     async def _prepare_session(session: Any) -> Any:
-        """ 
-        Barcha metodlar uchun takrorlanuvchi sessiya tayyorlash logikasi.
-        """
+        """ Barcha metodlar uchun takrorlanuvchi sessiya tayyorlash logikasi. """
         if hasattr(session, "_ensure_session"):
             await session._ensure_session()
         return AnimeRepository._get_real_session(session)
@@ -601,33 +599,26 @@ class AnimeRepository:
             ] if anime.episodes else []
         }
 
-    # ================= ADD ANIME =================
-    # ================= ADD ANIME (FIXED) =================
+    # ================= ADD ANIME (FIXED WITH ON_COMMIT) =================
     @staticmethod
     async def add_anime(session: Any, title: str, poster_id: str, year: int, is_completed: bool, 
                         genres: List[Any], description: str, languages: str, episodes: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         ➕ Yangi anime qo'shish va qidiruv xaritasini klaster bo'ylab yangilash
-        JIDDIY FIX: Kiruvchi 'genres' ID yoki Name ekanligini dynamic aniqlaydi va PostgreSQL xatosini tuzatadi.
+        🔥 BROADCAST FIX: Keshni yangilash faqatgina middleware DB commit qilgandan keyin fonda bajariladi.
         """
         real_session = await AnimeRepository._prepare_session(session)
 
         try:
             anime_genres = []
-            
-            # 1. Dynamic Janrlarni qayta ishlash filtri
             if genres:
-                # Kiruvchi elementlar raqam (ID) yoki matn (Name) ekanligini ajratamiz
                 is_ids = all(str(g).isdigit() for g in genres)
-                
                 if is_ids:
-                    # ✅ AGAR ELEMENTLAR ID BO'LSA: Genre.id ustuni bo'yicha qidiramiz
                     genre_ids = [int(g) for g in genres]
                     stmt = select(Genre).where(Genre.id.in_(genre_ids))
                     res = await real_session.execute(stmt)
                     anime_genres = list(res.scalars().all())
                 else:
-                    # ✅ AGAR ELEMENTLAR NOMI (STR) BO'LSA: Eski mantiq bo'yicha Genre.name dan qidiramiz
                     genre_names = [str(g).strip() for g in genres]
                     existing_res = await real_session.execute(select(Genre).where(Genre.name.in_(genre_names)))
                     existing_genres = {g.name: g for g in existing_res.scalars().all()}
@@ -636,11 +627,9 @@ class AnimeRepository:
                         if g_name in existing_genres:
                             anime_genres.append(existing_genres[g_name])
                         else:
-                            # Agar yangi janr nomi bo'lsa, bazaga qo'shish uchun yaratamiz
                             new_genre = Genre(name=g_name)
                             anime_genres.append(new_genre)
 
-            # 2. Anime obyektini yaratish
             anime = Anime(
                 title=title, poster_id=poster_id, year=year, 
                 is_completed=is_completed, description=description, 
@@ -648,36 +637,45 @@ class AnimeRepository:
             )
             
             real_session.add(anime)
-            # Avto-generatsiya bo'ladigan anime_id ni olish uchun flush
             await real_session.flush() 
             
-            # 3. Refresh qilib N+1 oldini olib yuklash
             stmt = (select(Anime)
                     .options(selectinload(Anime.genres), selectinload(Anime.episodes))
                     .where(Anime.anime_id == anime.anime_id))
             result = await real_session.execute(stmt)
             loaded_anime = result.scalar_one()
             
-            # 4. Yangi anime qo'shilganda qidiruv xaritasiga klaster bo'ylab qo'shamiz
-            await valkey.update_single_anime_in_search_map(
-                anime_id=loaded_anime.anime_id,
-                title=loaded_anime.title,
-                year=loaded_anime.year
-            )
+            # Parametrlarni leksik qulflash (lambda scope lock)
+            a_id = loaded_anime.anime_id
+            a_title = loaded_anime.title
+            a_year = loaded_anime.year
+
+            # Post-commit kesh yangilash wrapper funksiyasi
+            async def _post_commit_add_cache():
+                try:
+                    await valkey.update_single_anime_in_search_map(anime_id=a_id, title=a_title, year=a_year)
+                    logger.info(f"🚀 [Post-Commit] Anime #{a_id} qidiruv keshiga qo'shildi.")
+                except Exception as cache_err:
+                    logger.error(f"❌ Qidiruv keshini yangilashda xatolik (add_anime): {cache_err}")
+
+            # SafeSession'ning on_commit hook'iga asinxron vazifa sifatida topshirish
+            if hasattr(session, "on_commit"):
+                session.on_commit(lambda: asyncio.create_task(_post_commit_add_cache()))
+            else:
+                await _post_commit_add_cache()
             
-            # Har doim standart Dict qaytaramiz
             return AnimeRepository._serialize_anime(loaded_anime)
             
         except Exception as e:
             logger.error(f"❌ add_anime xatolik: {e}")
             raise
 
-    # ================= ADD ANIME EPISODE =================
+    # ================= ADD ANIME EPISODE (FIXED WITH ON_COMMIT) =================
     @staticmethod
     async def add_anime_episode(session: Any, anime_id: int, episode_num: int, file_id: str) -> Dict[str, Any]:
         """
         ➕ Yangi epizod qo'shish, joriy anime keshini va klaster L1 keshlarini xavfsiz tozalash
-        JIDDIY FIX: commit() olib tashlandi.
+        🔥 BROADCAST FIX: Keshlar faqat DB tranzaksiyasi muvaffaqiyatli tugagach tozalanadi va keshga yoziladi.
         """
         real_session = await AnimeRepository._prepare_session(session)
 
@@ -686,32 +684,38 @@ class AnimeRepository:
             real_session.add(episode)
             await real_session.flush()
             
-            # 1. Standart anime keshini tozalaymiz (L1 va L2)
-            await valkey.invalidate(table="anime_list", obj_id=f"id_{anime_id}", broadcast=True)
+            # Parametrlarni leksik qulflash
+            aid = anime_id
+            ep_num = episode_num
+            fid = file_id
+
+            async def _post_commit_episode_cache():
+                try:
+                    # 1. Standart anime keshini tozalaymiz (L1 va L2)
+                    await valkey.invalidate(table="anime_list", obj_id=f"id_{aid}", broadcast=True)
+                    # 2. Epizod file_id-sini L1 va L2 keshga yozamiz
+                    await valkey.set_episode_file_id(anime_id=aid, episode=ep_num, file_id=fid, ttl=86400 * 3)
+                    logger.info(f"🚀 [Post-Commit] Anime [{aid}] ga {ep_num}-qism keshga kiritildi va eski ro'yxat tozalandi.")
+                except Exception as cache_err:
+                    logger.error(f"❌ Epizod keshini sinxronlashda xatolik: {cache_err}")
+
+            if hasattr(session, "on_commit"):
+                session.on_commit(lambda: asyncio.create_task(_post_commit_episode_cache()))
+            else:
+                await _post_commit_episode_cache()
             
-            # 2. Epizod file_id-sini 3 kunga L1 va L2 keshga yozamiz
-            await valkey.set_episode_file_id(
-                anime_id=anime_id,
-                episode=episode_num,
-                file_id=file_id,
-                ttl=86400 * 3
-            )
-            
-            logger.info(f"✅ Anime [{anime_id}] ga {episode_num}-qism qo'shildi, kesh tozalandi.")
-            
-            # Oddiy lug'at (dict) shaklida ma'lumot qaytariladi
             return {"anime_id": anime_id, "episode": episode_num, "file_id": file_id}
             
         except Exception as e:
             logger.error(f"❌ add_anime_episode ichida xatolik: {e}")
             raise
 
-    # ================= UPDATE ANIME =================
+    # ================= UPDATE ANIME (FIXED WITH ON_COMMIT) =================
     @staticmethod
     async def update_anime(session: Any, anime_id: int, **kwargs) -> Optional[Dict[str, Any]]:
         """
         🔄 Anime ma'lumotlarini yangilash, keshni tozalash va qidiruv xaritasini sinxronlash
-        JIDDIY FIX: commit() olib tashlandi, Dict qaytaradi.
+        🔥 BROADCAST FIX: Ghost data yo'qolishi uchun kesh operatsiyalari tranzaksiya tasdiqlangandan so'ng bajariladi.
         """
         real_session = await AnimeRepository._prepare_session(session)
 
@@ -721,24 +725,35 @@ class AnimeRepository:
             updated_anime = result.scalar_one_or_none()
             
             if updated_anime:
-                # 1. Anime ma'lumotlari keshini barcha klaster node-larida tozalaymiz
-                await valkey.invalidate(table="anime_list", obj_id=f"id_{anime_id}", broadcast=True)
-                
-                # 2. Agar sarlavha yoki yil o'zgargan bo'lsa, global qidiruv xaritasini yangilaymiz
-                if "title" in kwargs or "year" in kwargs:
-                    await valkey.update_single_anime_in_search_map(
-                        anime_id=updated_anime.anime_id,
-                        title=updated_anime.title,
-                        year=updated_anime.year
-                    )
-                logger.info(f"🧹 Anime [{anime_id}] keshlari universal tarzda yangilandi.")
-                
-                # Yangilangan obyektni olish uchun selectinload
                 fetch_stmt = (select(Anime)
                               .options(selectinload(Anime.genres), selectinload(Anime.episodes))
                               .where(Anime.anime_id == anime_id))
                 fetch_res = await real_session.execute(fetch_stmt)
                 final_anime = fetch_res.scalar_one()
+
+                # Post-commit uchun kerakli parametrlarni qulflaymiz
+                aid = final_anime.anime_id
+                title_changed = "title" in kwargs or "year" in kwargs
+                new_title = final_anime.title
+                new_year = final_anime.year
+
+                async def _post_commit_update_cache():
+                    try:
+                        # 1. Anime ma'lumotlari keshini barcha klaster node-larida tozalaymiz
+                        await valkey.invalidate(table="anime_list", obj_id=f"id_{aid}", broadcast=True)
+                        
+                        # 2. Agar sarlavha yoki yil o'zgargan bo'lsa, global qidiruv xaritasini yangilaymiz
+                        if title_changed:
+                            await valkey.update_single_anime_in_search_map(anime_id=aid, title=new_title, year=new_year)
+                        logger.info(f"🚀 [Post-Commit] Anime [{aid}] keshlari muvaffaqiyatli yangilandi.")
+                    except Exception as cache_err:
+                        logger.error(f"❌ Yangilash keshini sinxronlashda xatolik: {cache_err}")
+
+                if hasattr(session, "on_commit"):
+                    session.on_commit(lambda: asyncio.create_task(_post_commit_update_cache()))
+                else:
+                    await _post_commit_update_cache()
+
                 return AnimeRepository._serialize_anime(final_anime)
                 
             return None
@@ -781,7 +796,6 @@ class AnimeRepository:
 
         real_session = await AnimeRepository._prepare_session(session)
 
-        # Kesh miss bo'lganda bazadan yuklaymiz
         stmt = (
             select(Anime)
             .where(Anime.anime_id == anime_id)
@@ -822,15 +836,12 @@ class AnimeRepository:
         except Exception as cache_err:
             logger.error(f"⚠️ Qidiruv keshini o'qishda xatolik: {cache_err}")
 
-        # Agar xaritada bo'lsa, ularni parallel olamiz
         if matched_anime_ids:
             tasks = [AnimeRepository.get_anime_by_id(session, a_id) for a_id in matched_anime_ids]
             fetched_animes = await asyncio.gather(*tasks)
             return [anime for anime in fetched_animes if anime]
 
-        # FALLBACK: DB dan qidirish
         logger.warning(f"⚠️ Keshda moslik topilmadi. DB Fallback ishga tushdi: '{query_text}'")
-        
         real_session = await AnimeRepository._prepare_session(session)
 
         stmt = (
