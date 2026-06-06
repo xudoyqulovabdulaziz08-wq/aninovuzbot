@@ -234,7 +234,7 @@ async def process_anime_photo(message: Message, state: FSMContext, **data):
 
 
 # =====================================================================
-# ⛩ QADAM 4 (Asosiy): Tanlangan janrlarni tasdiqlash -> Yilni so'rash
+# 🏁 QADAM 5: Admin janrlarni tanlab bo'lib 'Saqlash' tugmasini bosganda
 # =====================================================================
 @router.callback_query(AnimeMenuState.adding_genres, F.data == "confirm_genres_choice")
 async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, session: Any):
@@ -243,7 +243,7 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
     current_data = await state.get_data()
     selected_genre_ids = current_data.get("selected_genres", [])
     
-    # Jiddiy UX tekshiruvi: Agar admin birorta ham janr tanlamasdan saqlamoqchi bo'lsa
+    # UX tekshiruvi: Agar admin birorta ham janr tanlamasdan saqlamoqchi bo'lsa
     if not selected_genre_ids:
         return await callback.answer(
             "⚠️ Kamida 1 ta janr tanlashingiz shart!", 
@@ -252,10 +252,8 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
         
     await callback.answer("⚙️ Janrlar qayta ishlanmoqda...")
 
-    # 🔥 BAZADAN ID LAR ORQALI JANR NOMLARINI TORTIB OLAMIZ (XATOSIZ KO'RSATISH UCHUN)
     genre_names = []
     if selected_genre_ids:
-        # Ro'yxat elementlari int yoki string ekanligini tekshirib olamiz (xavfsizlik uchun)
         try:
             clean_ids = [int(g_id) for g_id in selected_genre_ids if str(g_id).isdigit()]
             
@@ -263,10 +261,10 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
                 stmt = select(Genre).where(Genre.id.in_(clean_ids))
                 result = await session.execute(stmt)
                 genres_objs = result.scalars().all()
-                # Xatoliklarni oldini olish uchun html.escape qilamiz
+                # Xatoliklarni oldini olish uchun xavfsiz html.escape
                 genre_names = [html.escape(g.name) for g in genres_objs]
-        except Exception:
-            # Agar FSMda eski stringlar qolib ketgan bo'lsa, zaxira filtri
+        except Exception as e:
+            logger.warning(f"⚠️ FSM dan janr ID o'qishda fallback faollashdi: {e}")
             genre_names = [html.escape(str(g)) for g in selected_genre_ids]
 
     # Agar biron sabab bilan nomlar topilmasa, IDlarni o'zini chiqaramiz
@@ -276,7 +274,6 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
     # Keyingi bosqichga (Yilni so'rash) o'tkazamiz
     await state.set_state(AnimeMenuState.adding_year)
     
-    # 🔥 TUZATILGAN HTML FORMATLASH (Barcha teglar qat'iy yopilgan)
     text = (
         "╔═══════════ ⛩ ═══════════╗\n"
         "        <b>JANRLAR TASDIQLANDI</b>\n"
@@ -284,18 +281,17 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
         f"🔮 <b>Tanlangan janrlar:</b> <code>{', '.join(genre_names)}</code>\n"
         "───────────────────────\n\n"
         "📅 Endi animening <b>chiqarilgan yilini</b> kiriting:\n"
-        "<i>(Masalan: 2024, 2025 kabi faqat yil raqamini yozing)</i>"
+        "<i>(Masalan: 2024, 2026 kabi faqat yil raqamini yozing)</i>"
     )
     
     builder = InlineKeyboardBuilder()
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Jarayonni bekor qilish", 
-            callback_data="add_anime"
+            callback_data="add_anime_main"  # Izchillik uchun asosiy menyu callbackiga o'zgartirildi
         )
     )
     
-    # Silliq tarzda xabarni yangilaymiz
     try:
         await callback.message.edit_text(
             text=text,
@@ -303,7 +299,7 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
             parse_mode="HTML"
         )
     except TelegramBadRequest:
-        # Agar edit_text'da muammo bo'lsa, javob xabari sifatida yuboramiz
+        # Agar xabarda media (rasm) bo'lsa edit_text ishlamaydi, yangi xabar yuboramiz
         await callback.message.answer(
             text=text,
             reply_markup=builder.as_markup(),
@@ -318,55 +314,53 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
 async def fallback_anime_genres_message(message: Message, state: FSMContext, session: Any):
     """ 🛡 Admin tugmalarni bosish o'rniga chatga matn yozganda ishlaydigan aqlli tizim """
     
-    # Buyruqlar (commands) kelib qolsa, o'tkazib yubormaslik uchun
     if not message.text or message.text.startswith("/"):
         return await message.answer("❌ Iltimos, faqat matn ko'rinishida yozing yoki yuqoridagi tugmalardan foydalaning.")
         
-    # Matnni tozalaymiz va har bir janr nomini chiroyli formatlaymiz
-    input_genres = [g.strip().capitalize() for g in message.text.split(", ") if g.strip()]
-    if not input_genres:
-        # Agar shunchaki vergullar tashlab yuborilgan bo'lsa
-        input_genres = [g.strip().capitalize() for g in message.text.split(",") if g.strip()]
+    # Matnni chiroyli tozalaymiz
+    raw_inputs = [g.strip() for g in message.text.replace(",", " ").split() if g.strip()]
+    
+    # Agar tepadagi split o'xshamasa standart vergulli split
+    if not raw_inputs:
+        raw_inputs = [g.strip() for g in message.text.split(",") if g.strip()]
 
-    if not input_genres:
+    if not raw_inputs:
         return await message.answer(
             "⚠️ <b>Janrlar aniqlanmadi!</b>\n"
-            "Iltimos, janr nomlarini vergul bilan ajratgan holda kiriting.\n"
-            "<i>(Masalan: Shounen, Isekai, Ekshen)</i>",
+            "Iltimos, janr nomlarini bo'shliq yoki vergul bilan ajratgan holda kiriting.\n"
+            "<i>(Masalan: Shounen Isekai Ekshen)</i>",
             parse_mode="HTML"
         )
 
     loading_msg = await message.answer("⚙️ <code>Janrlar tekshirilmoqda va indekslanmoqda...</code>", parse_mode="HTML")
 
-    # 🔥 ARXITEKTURA FIX: String nomlarni bazadagi ID'lar bilan sinxronizatsiya qilamiz
     final_genre_ids = []
     processed_names = []
 
     try:
-        for genre_name in input_genres:
-            # 1. Bazadan ushbu nomdagi janr bor-yo'qligini tekshiramiz
-            # Model nomingiz 'Genre' ekanligidan kelib chiqib:
-            stmt = select(Genre).where(Genre.name == genre_name)
+        for raw_name in raw_inputs:
+            # Sarlavha ko'rinishiga keltiramiz (isekai -> Isekai)
+            genre_name = raw_name.capitalize()
+            
+            # 🔥 FIX 2: Case-Insensitive qidiruv (Duplikat yaratilishini oldini oladi)
+            stmt = select(Genre).where(Genre.name.ilike(genre_name))
             result = await session.execute(stmt)
             genre_obj = result.scalar_one_or_none()
             
-            # 2. Agar janr bazada bo'lmasa, uni avtomat yaratamiz! (Aqlli tizim)
+            # Agar bazada garchi boshqa registrdagi shakli ham bo'lmasa, yangi ochamiz
             if not genre_obj:
                 genre_obj = Genre(name=genre_name)
                 session.add(genre_obj)
-                await session.flush() # Bazadan yangi ID olish uchun flush qilamiz (commit shart emas hali)
+                await session.flush() # Yangi ID generatsiya qilinadi
             
             final_genre_ids.append(genre_obj.id)
-            processed_names.append(genre_obj.name)
+            # 🔥 FIX 1: Telegram crash bo'lmasligi uchun xavfsiz HTML Escape
+            processed_names.append(html.escape(genre_obj.name))
 
-        # 3. 🔥 ENGL MUHIM JOYI: FSM xotirasiga string emas, faqat ID ro'yxatini yozamiz!
-        # Loyihaning qolgan qismida 'selected_genres' aynan [1, 4, 7] ko'rinishida tutiladi
+        # FSM xotirasiga faqat toza va tartiblangan ID listni joylaymiz
         await state.update_data(selected_genres=final_genre_ids)
-        
-        # Holatni keyingi bosqichga (Yil kiritishga) o'tkazamiz
         await state.set_state(AnimeMenuState.adding_year)
         
-        # Premium Dark-Mode UI
         text = (
             "╔═══════════ ⛩ ═══════════╗\n"
             "        <b>JANRLAR INDEKSLANDI</b>\n"
