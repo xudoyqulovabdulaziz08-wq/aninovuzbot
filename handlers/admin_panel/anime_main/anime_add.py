@@ -157,58 +157,50 @@ async def process_anime_name(message: Message, state: FSMContext):
 # =====================================================================
 # 🔥 FIX: Faqat F.photo emas, umumiy holatda qabul qilib, ichkarida tekshiramiz (Crash proof)
 @router.message(AnimeMenuState.adding_anime_photo)
-async def process_anime_photo(message: Message, state: FSMContext, **data):
+async def process_anime_photo(message: Message, state: FSMContext, session: Any):
     """ 📥 Admin yuborgan rasmni (yoki URL) qabul qilib, janrlar klaviaturasini chiqarish """
     
     poster_id = None
     
-    # 1. Agar rasm formatida kelgan bo'lsa
+    # 1. Rasm formatlarini tekshirish
     if message.photo:
         poster_id = message.photo[-1].file_id
-    # 2. Agar siqilmagan fayl (Document) formatida rasm kelgan bo'lsa
     elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
         poster_id = message.document.file_id
-    # 3. Agar matnli URL havola yuborilgan bo'lsa
     elif message.text and (message.text.startswith("http://") or message.text.startswith("https://")):
         poster_id = message.text.strip()
     else:
-        # Noto'g'ri format yuborilsa, FSM uzilib qolmaydi, qayta so'raydi
         return await message.answer(
             "⚠️ <b>Noto'g'ri format!</b>\n"
             "Iltimos, animening rasmini yuboring yoki to'g'ri rasm URL havolasini kiriting:"
         )
 
-    # FSM xotirasiga poster_id va kelajakda tanlanadigan janrlar uchun bo'sh ro'yxat ochamiz
+    # FSM xotirasiga poster_id va tanlanadigan janr NOMUARI uchun bo'sh ro'yxat ochamiz
     await state.update_data(poster_id=poster_id, selected_genres=[])
-    
-    # Keyingi bosqichga o'tamiz
     await state.set_state(AnimeMenuState.adding_genres)
 
-    # 4. 🔥 BAZADAN JANRLARNI DYNAMIC UKLASH (Zanjir uzilmasligi uchun)
-    safe_session = data.get("session")
-    actual_session = getattr(safe_session, "_session", safe_session)
-    
     builder = InlineKeyboardBuilder()
     try:
-        # Bazadagi barcha janrlarni alifbo tartibida olamiz
+        # ✅ PROXY FIX: Sessiyani middleware qoidasiga ko'ra toza ishlatamiz
         stmt = select(Genre).order_by(Genre.name.asc())
-        res = await actual_session.execute(stmt)
+        res = await session.execute(stmt)
         genres_list = res.scalars().all()
         
-        # Har bir janr uchun dynamic tugma yaratamiz
+        if not genres_list:
+            return await message.answer("❌ Tizimda janrlar topilmadi. Avval janrlar yarating!")
+
+        # Dynamic tugmalar: callback_data ichida JANR NOMINI uzatamiz
         for genre in genres_list:
             builder.row(
                 types.InlineKeyboardButton(
                     text=f"🔮 {genre.name}", 
-                    callback_data=f"toggle_g_{genre.name}"
+                    callback_data=f"toggle_g_{genre.name}"  # Nom bo'yicha bog'laymiz
                 )
             )
     except Exception as e:
         logger.error(f"❌ Janrlarni yuklashda xatolik: {e}")
-        # Agar bazada hali janr bo'lmasa, fallback sifatida ogohlantiramiz
-        return await message.answer("❌ Tizimda janrlar topilmadi. Avval janrlar yarating!")
+        return await message.answer("❌ Janrlarni yuklashda texnik xatolik yuz berdi.")
 
-    # Davom etish va Bekor qilish tugmalari
     builder.row(
         types.InlineKeyboardButton(text="🚀 Saqlash va Davom etish", callback_data="confirm_genres_choice")
     )
@@ -230,9 +222,6 @@ async def process_anime_photo(message: Message, state: FSMContext, **data):
     )
 
 
-
-
-
 # =====================================================================
 # 🏁 QADAM 5: Admin janrlarni tanlab bo'lib 'Saqlash' tugmasini bosganda
 # =====================================================================
@@ -241,10 +230,10 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
     """ 🏁 Admin janrlarni tanlab bo'lib 'Saqlash' tugmasini bosganda ishlaydi """
     
     current_data = await state.get_data()
-    selected_genre_ids = current_data.get("selected_genres", [])
+    # ✅ FIX: Endi bu yerda har doim NOMlAR ro'yxati (str) bo'ladi
+    selected_genres = current_data.get("selected_genres", [])
     
-    # UX tekshiruvi: Agar admin birorta ham janr tanlamasdan saqlamoqchi bo'lsa
-    if not selected_genre_ids:
+    if not selected_genres:
         return await callback.answer(
             "⚠️ Kamida 1 ta janr tanlashingiz shart!", 
             show_alert=True
@@ -252,24 +241,8 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
         
     await callback.answer("⚙️ Janrlar qayta ishlanmoqda...")
 
-    genre_names = []
-    if selected_genre_ids:
-        try:
-            clean_ids = [int(g_id) for g_id in selected_genre_ids if str(g_id).isdigit()]
-            
-            if clean_ids:
-                stmt = select(Genre).where(Genre.id.in_(clean_ids))
-                result = await session.execute(stmt)
-                genres_objs = result.scalars().all()
-                # Xatoliklarni oldini olish uchun xavfsiz html.escape
-                genre_names = [html.escape(g.name) for g in genres_objs]
-        except Exception as e:
-            logger.warning(f"⚠️ FSM dan janr ID o'qishda fallback faollashdi: {e}")
-            genre_names = [html.escape(str(g)) for g in selected_genre_ids]
-
-    # Agar biron sabab bilan nomlar topilmasa, IDlarni o'zini chiqaramiz
-    if not genre_names:
-        genre_names = [str(g_id) for g_id in selected_genre_ids]
+    # Telegram crash bo'lmasligi uchun nomlarni xavfsiz escape qilamiz
+    genre_names = [html.escape(str(g)) for g in selected_genres]
 
     # Keyingi bosqichga (Yilni so'rash) o'tkazamiz
     await state.set_state(AnimeMenuState.adding_year)
@@ -288,7 +261,7 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Jarayonni bekor qilish", 
-            callback_data="add_anime_main"  # Izchillik uchun asosiy menyu callbackiga o'zgartirildi
+            callback_data="add_anime_main"
         )
     )
     
@@ -299,7 +272,6 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
             parse_mode="HTML"
         )
     except TelegramBadRequest:
-        # Agar xabarda media (rasm) bo'lsa edit_text ishlamaydi, yangi xabar yuboramiz
         await callback.message.answer(
             text=text,
             reply_markup=builder.as_markup(),
@@ -312,15 +284,14 @@ async def confirm_anime_genres(callback: CallbackQuery, state: FSMContext, sessi
 # =====================================================================
 @router.message(AnimeMenuState.adding_genres)
 async def fallback_anime_genres_message(message: Message, state: FSMContext, session: Any):
-    """ 🛡 Admin tugmalarni bosish o'rniga chatga matn yozganda ishlaydigan aqlli tizim """
+    """ 🛡 Admin tugmalarni bosish o'rniga chatga matn yozganda ishlaydigan tizim """
     
     if not message.text or message.text.startswith("/"):
         return await message.answer("❌ Iltimos, faqat matn ko'rinishida yozing yoki yuqoridagi tugmalardan foydalaning.")
         
-    # Matnni chiroyli tozalaymiz
+    # Matnni tozalash va ajratish
     raw_inputs = [g.strip() for g in message.text.replace(",", " ").split() if g.strip()]
     
-    # Agar tepadagi split o'xshamasa standart vergulli split
     if not raw_inputs:
         raw_inputs = [g.strip() for g in message.text.split(",") if g.strip()]
 
@@ -332,42 +303,42 @@ async def fallback_anime_genres_message(message: Message, state: FSMContext, ses
             parse_mode="HTML"
         )
 
-    loading_msg = await message.answer("⚙️ <code>Janrlar tekshirilmoqda va indekslanmoqda...</code>", parse_mode="HTML")
+    loading_msg = await message.answer("⚙️ <code>Janrlar tekshirilmoqda...</code>", parse_mode="HTML")
 
-    final_genre_ids = []
-    processed_names = []
+    final_genre_names = []
 
     try:
         for raw_name in raw_inputs:
-            # Sarlavha ko'rinishiga keltiramiz (isekai -> Isekai)
-            genre_name = raw_name.capitalize()
+            genre_name = raw_name.capitalize() # isekai -> Isekai
             
-            # 🔥 FIX 2: Case-Insensitive qidiruv (Duplikat yaratilishini oldini oladi)
+            # Case-Insensitive qidiruv
             stmt = select(Genre).where(Genre.name.ilike(genre_name))
             result = await session.execute(stmt)
             genre_obj = result.scalar_one_or_none()
             
-            # Agar bazada garchi boshqa registrdagi shakli ham bo'lmasa, yangi ochamiz
+            # Agar bazada bu janr bo'lmasa, yangi yaratamiz
             if not genre_obj:
                 genre_obj = Genre(name=genre_name)
                 session.add(genre_obj)
-                await session.flush() # Yangi ID generatsiya qilinadi
+                await session.flush() # ID va saqlash zanjirini tayyorlaymiz
             
-            final_genre_ids.append(genre_obj.id)
-            # 🔥 FIX 1: Telegram crash bo'lmasligi uchun xavfsiz HTML Escape
-            processed_names.append(html.escape(genre_obj.name))
+            # ✅ MUTLAQ FIX: ID o'rniga NOMINI saqlaymiz, izchillik buzilmasligi uchun!
+            final_genre_names.append(genre_obj.name)
 
-        # FSM xotirasiga faqat toza va tartiblangan ID listni joylaymiz
-        await state.update_data(selected_genres=final_genre_ids)
+        # FSM xotirasiga toza NOMlar ro'yxatini yozamiz
+        await state.update_data(selected_genres=final_genre_names)
         await state.set_state(AnimeMenuState.adding_year)
         
+        # HTML xavfsizligi
+        escaped_names = [html.escape(name) for name in final_genre_names]
+
         text = (
             "╔═══════════ ⛩ ═══════════╗\n"
             "        <b>JANRLAR INDEKSLANDI</b>\n"
             "╚═══════════ ⛩ ═══════════╝\n\n"
             f"✍️ <b>Tizim qabul qilgan janrlar:</b>\n"
-            f"<code>{', '.join(processed_names)}</code>\n"
-            f"📊 <i>(Jami: {len(final_genre_ids)} ta janr muvaffaqiyatli bog'landi)</i>\n"
+            f"<code>{', '.join(escaped_names)}</code>\n"
+            f"📊 <i>(Jami: {len(final_genre_names)} ta janr muvaffaqiyatli belgilandi)</i>\n"
             "───────────────────────\n\n"
             "📅 Endi animening <b>chiqarilgan yilini</b> kiriting:\n"
             "<i>(Masalan: 2024 yoki 2026)</i>"
@@ -389,9 +360,7 @@ async def fallback_anime_genres_message(message: Message, state: FSMContext, ses
 
     except Exception as e:
         logger.error(f"❌ Janrlarni qayta ishlashda xatolik: {e}")
-        await loading_msg.edit_text("❌ Janrlarni indekslashda kutilmagan xatolik yuz berdi. Qaytadan urinib ko'ring.")
-
-
+        await loading_msg.edit_text("❌ Janrlarni indekslashda kutilmagan xatolik yuz berdi.")
 
 # =====================================================================
 # ⛩ QADAM 5: Yilni qabul qilish -> Tavsifni so'rash
@@ -509,7 +478,7 @@ async def process_anime_description(message: Message, state: FSMContext):
 async def process_anime_languages_and_save(message: Message, state: FSMContext, session: Any):
     """ 🌐 Admin yuborgan tillarni qabul qilish va ma'lumotlarni bazaga muhrlash """
     
-    # 1. Input Validation: Faqat matn ekanligini tekshirish
+    # 1. Input Validation
     if not message.text or message.text.startswith("/"):
         return await message.answer(
             "⚠️ <b>Xatolik:</b> Iltimos, anime tillarini matn ko'rinishida yuboring!\n"
@@ -517,34 +486,32 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             parse_mode="HTML"
         )
 
-    # FSM xotirasidan barcha to'plangan ma'lumotlarni xavfsiz olamiz
+    # FSM xotirasidan ma'lumotlarni yig'amiz
     fsm_data = await state.get_data()
     
     selected_genres = fsm_data.get("selected_genres", [])
     if not selected_genres:
         return await message.answer("❌ Janrlar topilmadi. Iltimos, jarayonni qaytadan boshlang.")
 
-    # Tillarni chiroyli formatda tozalab va HTML escape qilib olamiz
+    # Tillarni chiroyli formatda tozalab olamiz
     languages_list = html.escape(message.text.strip())
     
-    # Vizual yuklanish (Loading animation) xabari
+    # Yuklanish animation xabari
     loading_msg = await message.answer(
         text="⏳ <code>Tizim ma'lumotlarni bazaga yozmoqda, iltimos kuting...</code>", 
         parse_mode="HTML"
     )
 
     try:
-        # 1. Repositoriyga yozish (ichkarida flush bo'ladi va kesh on_commit ga yuklanadi)
+        # 2-FIX: Repositoriy metodimiz kutayotgan aniq parametrlarga moslab chaqiramiz
         new_anime = await AnimeRepository.add_anime(
             session=session,
             title=fsm_data.get("title"),
+            year=int(fsm_data.get("year", 2026)), # xavfsiz int casting
             poster_id=fsm_data.get("poster_id"),
-            year=fsm_data.get("year"),
-            is_completed=fsm_data.get("is_completed", False),
-            genres=selected_genres,
             description=fsm_data.get("description"),
             languages=languages_list,
-            episodes=[]
+            genre_names=selected_genres  # 👈 Biz yozgan repositoriy parametr nomi (genre_names)
         )
         
         anime_id = new_anime["anime_id"]
@@ -569,30 +536,25 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi. "
             "Kesh fonda yangilanmoqda...</i>"
         )
-        # =====================================================================
-        # 🔥 HANDLER INTERFEYSINI COMMIT BILAN SINXRONLASH
-        # =====================================================================
+
+        # UI Post-Commit mantiq funksiyasi
         async def ui_final_commit_step():
             try:
-                # Middleware bazani haqiqatdan commit qilgandan so'ng xabarni chiroyli yangilaymiz
                 await loading_msg.edit_text(
                     text=success_text, 
                     reply_markup=builder.as_markup(), 
                     parse_mode="HTML"
                 )
-                # Faqat muvaffaqiyatli saqlangandagina xotirani o'chiramiz!
-                await state.clear()
-                logger.info(f"✅ [UI Post-Commit] Anime #{anime_id} uchun interfeys muvaffaqiyatli yakunlandi.")
+                await state.clear()  # Xotirani muvaffaqiyatli commitdan keyin tozalash
+                logger.info(f"✅ [UI Post-Commit] Anime #{anime_id} interfeysi yakunlandi.")
             except Exception as ui_err:
-                logger.error(f"❌ UI post-commit yangilashda xatolik: {ui_err}")
+                logger.error(f"❌ UI post-commit xatolik: {ui_err}")
 
-        # Middleware'dan kelgan SafeSession hook tizimiga sinxron lambda orqali topshiramiz
+        # 3-FIX: Xavfsiz lambda closure orqali taskni backgroundga topshiramiz
         if hasattr(session, "on_commit"):
-            session.on_commit(lambda: asyncio.create_task(ui_final_commit_step()))
+            session.on_commit(lambda step=ui_final_commit_step: asyncio.create_task(step()))
         else:
-            # Agar fallback holat bo'lsa, to'g'ridan-to'g'ri chaqiramiz
             await ui_final_commit_step()
-        # =====================================================================
         
     except Exception as e:
         logger.error(f"❌ Anime qo'shishda jiddiy xatolik: {e}")
@@ -603,7 +565,7 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
         await loading_msg.edit_text(
             text="❌ <b>Tizim xatoligi!</b>\n\n"
                  "Ma'lumotlarni bazaga yozishda texnik xatolik yuz berdi. "
-                 "Iltimos, server jurnallarini (logs) tekshiring.",
+                 "Iltimos, kiritilgan ma'lumotlar formatini yoki server loglarini tekshiring.",
             reply_markup=error_builder.as_markup(),
             parse_mode="HTML"
         )
