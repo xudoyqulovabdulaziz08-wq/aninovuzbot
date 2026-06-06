@@ -1,5 +1,6 @@
 import logging
 import html
+import asyncio
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -510,10 +511,6 @@ async def process_anime_description(message: Message, state: FSMContext):
 # =====================================================================
 # QADAM 7: Tillarni olish -> BAZAGA VA KESHGA YOZISH (YAKUN)
 # =====================================================================
-# =====================================================================
-# ⛩ QADAM 7: Tillarni qabul qilish -> BAZAGA VA KESHGA YOZISH (YAKUN)
-# =====================================================================
-# 🔥 FIX 1: State nomi 'adding_languages' deb to'g'rilandi
 @router.message(AnimeMenuState.adding_languages)
 async def process_anime_languages_and_save(message: Message, state: FSMContext, session: Any):
     """ 🌐 Admin yuborgan tillarni qabul qilish va ma'lumotlarni bazaga muhrlash """
@@ -531,10 +528,9 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     
     selected_genres = fsm_data.get("selected_genres", [])
     if not selected_genres:
-        # Agarda zanjir kutilmaganda uzilgan bo'lsa fallback
         return await message.answer("❌ Janrlar topilmadi. Iltimos, jarayonni qaytadan boshlang.")
 
-    # Tillarni chiroyli formatda tozalab va HTML crash bo'lmasligi uchun escape qilib olamiz
+    # Tillarni chiroyli formatda tozalab va HTML escape qilib olamiz
     languages_list = html.escape(message.text.strip())
     
     # Vizual yuklanish (Loading animation) xabari
@@ -544,7 +540,8 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     )
 
     try:
-        # AnimeRepository ma'lumotlarni muvaffaqiyatli saqlaydi (ichkarida flush() bajariladi)
+        # 🔥 ANIME REPOSITORY CHAQIRILADI
+        # Ichkarida flush() bajariladi va on_commit hookiga keshni yangilash vazifasi yuklanadi
         new_anime = await AnimeRepository.add_anime(
             session=session,
             title=fsm_data.get("title"),
@@ -562,7 +559,7 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
         anime_year = new_anime["year"]
         anime_genres = [html.escape(g) for g in new_anime.get("genres", [])]
         
-        # Dynamic va Premium ko'rinishdagi boshqaruv tugmalari
+        # Boshqaruv tugmalari
         builder = InlineKeyboardBuilder()
         builder.row(
             types.InlineKeyboardButton(
@@ -577,7 +574,7 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             )
         )
         
-        # Premium Final UI matni (Barcha teglar xavfsiz va yopilgan)
+        # Premium Final UI matni
         success_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
             "     🎉 MUVAFFAQIYATLI QO'SHILDI!\n"
@@ -593,42 +590,33 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
         )
 
         # =====================================================================
-        # 🔥 ENG ASOSIY INTEGRATSIYA: SAFE POST-COMMIT HOOK
+        # 🔥 HANDLER INTERFEYSINI COMMIT BILAN SINXRONLASH
         # =====================================================================
-        # Ushbu funksiya faqatgina middleware tranzaksiyani haqiqiy commit qilgandan keyin ishga tushadi
-        async def refresh_search_cache_after_commit():
+        async def ui_final_commit_step():
             try:
-                logger.info(f"🚀 Middleware tranzaksiyani muvaffaqiyatli commit qildi. Anime #{anime_id} keshga yozilmoqda...")
-                # Global qidiruv xaritasiga klaster bo'ylab qo'shish (Valkey/Redis)
-                await valkey.update_single_anime_in_search_map(
-                    anime_id=anime_id,
-                    title=new_anime.get("title"),
-                    year=new_anime.get("year")
-                )
-                
-                # Kesh muvaffaqiyatli yangilangandan keyin UI interfeysini foydalanuvchiga ko'rsatamiz
+                # Middleware bazani haqiqatdan commit qilgandan so'ng xabarni chiroyli yangilaymiz
                 await loading_msg.edit_text(
                     text=success_text, 
                     reply_markup=builder.as_markup(), 
                     parse_mode="HTML"
                 )
-                # Faqat muvaffaqiyatli saqlangandagina xotirani tozalaymiz!
+                # Faqat muvaffaqiyatli saqlangandagina xotirani o'chiramiz!
                 await state.clear()
-            except Exception as cache_err:
-                logger.error(f"❌ Post-commit kesh yangilashda xatolik: {cache_err}")
+                logger.info(f"✅ [UI Post-Commit] Anime #{anime_id} uchun interfeys muvaffaqiyatli yakunlandi.")
+            except Exception as ui_err:
+                logger.error(f"❌ UI post-commit yangilashda xatolik: {ui_err}")
 
-        # Middleware taqdim etgan SafeSession proxy obyektining hook tizimidan foydalanamiz
+        # Middleware'dan kelgan SafeSession hook tizimiga sinxron lambda orqali topshiramiz
         if hasattr(session, "on_commit"):
-            session.on_commit(refresh_search_cache_after_commit)
+            session.on_commit(lambda: asyncio.create_task(ui_final_commit_step()))
         else:
-            # Agar session oddiy obyekt bo'lsa (Fallback / Test rejimlari uchun)
-            await refresh_search_cache_after_commit()
+            # Agar fallback holat bo'lsa, to'g'ridan-to'g'ri chaqiramiz
+            await ui_final_commit_step()
         # =====================================================================
         
     except Exception as e:
         logger.error(f"❌ Anime qo'shishda jiddiy xatolik: {e}")
         
-        # Xatolik yuz berganda xotira saqlanib qolinadi, admin bekor qilish tugmasini bosishi mumkin
         error_builder = InlineKeyboardBuilder()
         error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="add_anime_main"))
         
