@@ -35,7 +35,7 @@ class UserRepository:
         return UserRepository._get_real_session(session)
 
     @staticmethod
-    def _to_dict(user: DBUser) -> dict:
+    def _to_dict(user: Any) -> dict:
         """ SQLAlchemy modelini keshbop va xavfsiz dict holatiga keltirish """
         return {
             "user_id": user.user_id,
@@ -45,33 +45,28 @@ class UserRepository:
             "referral_count": user.referral_count,
             "referred_by": user.referred_by,
             "vip_expire_date": user.vip_expire_date.isoformat() if user.vip_expire_date else None,
-            "health_mode": user.health_mode,
-            "joined_at": user.joined_at.isoformat() if user.joined_at else None
+            "health_mode": getattr(user, "health_mode", False),
+            "joined_at": user.joined_at.isoformat() if getattr(user, "joined_at", None) else None
         }
 
     @staticmethod
     async def _invalidate_cache(user_id: int, broadcast: bool = True):
-        """ 
-        🔥 UNIVERSAL KESH TOZALASH 
-        Kichik Muammo 3 FIX: broadcast boshqariladigan qilindi.
-        Kichik Muammo 4 FIX: Jadval nomi 'users' ekanligi aniqlashtirildi.
-        """
+        """ 🔥 UNIVERSAL KESH TOZALASH (Klaster bo'ylab) """
         try:
             await valkey.invalidate(table="users", obj_id=str(user_id), broadcast=broadcast)
+            logger.debug(f"🧹 User kesh o'chirildi: user_id={user_id}")
         except Exception as e:
-            logger.debug(f"❌ Cache invalidate error: {e}")
+            logger.error(f"❌ Cache invalidate error: {e}")
 
     # ================= GET OR CREATE (UPSERT) =================
     @staticmethod
     async def get_or_create(session: Any, tg_user: Any) -> dict:
         """
         🚀 Foydalanuvchini bazaga qo'shish yoki username o'zgargan bo'lsa yangilash (Upsert)
-        Jiddiy Xato 4 FIX: Faqat xatolik aniq yuz bergandagina (xmax != 0) kesh tozalanadi.
-        Qaytish qiymati doim DICT.
+        ✅ PROXY FIX: Keshni o'chirish Post-Commit Hook'ka yuklandi!
         """
         real_session = await UserRepository._prepare_session(session)
 
-        # xmax != 0 sharti PostgreSQL-da satr yangilanganligini anglatadi (Yangi qo'shilsa xmax=0 bo'ladi)
         stmt = (
             insert(DBUser)
             .values(
@@ -97,22 +92,21 @@ class UserRepository:
         user_model, is_updated = row[0], row[1]
         user_dict = UserRepository._to_dict(user_model)
 
-        # Keshni faqat ma'lumot rostdan ham yangilangan bo'lsa tozalaymiz
+        # ✅ FIX: Keshni commit'dan keyin xavfsiz o'chirish
         if is_updated:
-            await UserRepository._invalidate_cache(tg_user.id, broadcast=True)
+            if hasattr(session, "on_commit"):
+                session.on_commit(lambda uid=tg_user.id: UserRepository._invalidate_cache(user_id=uid, broadcast=True))
+            else:
+                await UserRepository._invalidate_cache(tg_user.id, broadcast=True)
             
         return user_dict
 
     # ================= GET BY ID =================
     @staticmethod
     async def get_by_id(session: Any, user_id: int) -> Optional[dict]:
-        """
-        🔍 Foydalanuvchini L1/L2 keshdan yoki bazadan qidirish
-        Jiddiy Xato 1 FIX: Har doim bir xil ma'lumot turi (dict) qaytaradi!
-        """
+        """ 🔍 Foydalanuvchini L1/L2 keshdan yoki bazadan qidirish """
         obj_key = str(user_id)
         
-        # 1. Keshdan qidirish
         try:
             cached_user = await valkey.get(table="users", obj_id=obj_key)
             if cached_user and isinstance(cached_user, dict):
@@ -120,7 +114,6 @@ class UserRepository:
         except Exception as cache_err:
             logger.warning(f"⚠️ get_by_id kesh o'qishda xatolik: {cache_err}")
 
-        # 2. Agar keshda bo'lmasa, bazadan o'qish
         real_session = await UserRepository._prepare_session(session)
 
         try:
@@ -145,10 +138,7 @@ class UserRepository:
     # ================= UPDATE POINTS =================
     @staticmethod
     async def update_points(session: Any, user_id: int, points: int) -> bool:
-        """
-        🔥 ATOMIC POINTS UPDATE
-        Jiddiy Xato 2 FIX: .commit() olib tashlandi, tranzaksiya boshqaruvi chaqiruvchida.
-        """
+        """ 🔥 ATOMIC POINTS UPDATE (Post-Commit kesh tozalash bilan) """
         real_session = await UserRepository._prepare_session(session)
 
         result = await real_session.execute(
@@ -161,67 +151,67 @@ class UserRepository:
             logger.warning(f"⚠️ update_points: user not found {user_id}")
             return False
 
-        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        # ✅ FIX: Kesh faqat commit muvaffaqiyatli bo'lsa o'chadi
+        if hasattr(session, "on_commit"):
+            session.on_commit(lambda uid=user_id: UserRepository._invalidate_cache(user_id=uid, broadcast=True))
+        else:
+            await UserRepository._invalidate_cache(user_id, broadcast=True)
+
         return True
 
     # ================= SET VIP =================
     @staticmethod
     async def set_vip(session: Any, user_id: int, days: int) -> bool:
-        """
-        👑 Foydalanuvchiga VIP maqomini berish
-        Jiddiy Xato 2 FIX: .commit() olib tashlandi.
-        """
+        """ 👑 Foydalanuvchiga VIP maqomini berish """
         real_session = await UserRepository._prepare_session(session)
         expire_date = datetime.now(timezone.utc) + timedelta(days=days)
 
         result = await real_session.execute(
             update(DBUser)
             .where(DBUser.user_id == user_id)
-            .values(
-                status="vip",
-                vip_expire_date=expire_date
-            )
+            .values(status="vip", vip_expire_date=expire_date)
         )
 
         if result.rowcount == 0:
             logger.warning(f"⚠️ set_vip: user not found {user_id}")
             return False
 
-        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        # ✅ FIX: Post-Commit Hook
+        if hasattr(session, "on_commit"):
+            session.on_commit(lambda uid=user_id: UserRepository._invalidate_cache(user_id=uid, broadcast=True))
+        else:
+            await UserRepository._invalidate_cache(user_id, broadcast=True)
+
         return True
 
     # ================= REMOVE VIP =================
     @staticmethod
     async def remove_vip(session: Any, user_id: int) -> bool:
-        """
-        📉 VIP maqomini olib tashlash
-        Jiddiy Xato 2 FIX: .commit() olib tashlandi.
-        """
+        """ 📉 VIP maqomini olib tashlash """
         real_session = await UserRepository._prepare_session(session)
 
         result = await real_session.execute(
             update(DBUser)
             .where(DBUser.user_id == user_id)
-            .values(
-                status="user",
-                vip_expire_date=None
-            )
+            .values(status="user", vip_expire_date=None)
         )
 
         if result.rowcount == 0:
             logger.warning(f"⚠️ remove_vip: user not found {user_id}")
             return False
 
-        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        # ✅ FIX: Post-Commit Hook
+        if hasattr(session, "on_commit"):
+            session.on_commit(lambda uid=user_id: UserRepository._invalidate_cache(user_id=uid, broadcast=True))
+        else:
+            await UserRepository._invalidate_cache(user_id, broadcast=True)
+
         return True
 
     # ================= ADD REFERRAL COUNT =================
     @staticmethod
     async def add_referral(session: Any, user_id: int) -> bool:
-        """
-        ➕ Referallar sonini bittaga oshirish
-        Jiddiy Xato 2 FIX: .commit() olib tashlandi.
-        """
+        """ ➕ Referallar sonini bittaga oshirish """
         real_session = await UserRepository._prepare_session(session)
 
         result = await real_session.execute(
@@ -234,16 +224,18 @@ class UserRepository:
             logger.warning(f"⚠️ add_referral: user not found {user_id}")
             return False
 
-        await UserRepository._invalidate_cache(user_id, broadcast=True)
+        # ✅ FIX: Post-Commit Hook
+        if hasattr(session, "on_commit"):
+            session.on_commit(lambda uid=user_id: UserRepository._invalidate_cache(user_id=uid, broadcast=True))
+        else:
+            await UserRepository._invalidate_cache(user_id, broadcast=True)
+
         return True
 
     # ================= SET REFERRER =================
     @staticmethod
     async def set_referrer(session: Any, user_id: int, ref_id: int) -> bool:
-        """
-        🔥 Yangi foydalanuvchiga taklif qilgan odamni xavfsiz biriktirish
-        Kichik Muammo 2 FIX: Muvaffaqiyatsiz bo'lsa (masalan allaqachon biriktirilgan bo'lsa) debug log qo'shildi.
-        """
+        """ 🔥 Yangi foydalanuvchiga taklif qilgan odamni xavfsiz biriktirish """
         real_session = await UserRepository._prepare_session(session)
 
         stmt = (
@@ -254,7 +246,11 @@ class UserRepository:
         result = await real_session.execute(stmt)
         
         if result.rowcount > 0:
-            await UserRepository._invalidate_cache(user_id, broadcast=True)
+            # ✅ FIX: Post-Commit Hook
+            if hasattr(session, "on_commit"):
+                session.on_commit(lambda uid=user_id: UserRepository._invalidate_cache(user_id=uid, broadcast=True))
+            else:
+                await UserRepository._invalidate_cache(user_id, broadcast=True)
             return True
             
         logger.debug(f"ℹ️ set_referrer: Referrer already set or user not found for {user_id}")
@@ -263,15 +259,11 @@ class UserRepository:
     # ================= PROCESS REFERRAL REWARD =================
     @staticmethod
     async def process_referral_reward(session: Any, user_id: int, amount: int = 10) -> Tuple[bool, Optional[int]]:
-        """
-        🎁 Referal mukofotini berish va kesh zanjirlarini tozalash.
-        Jiddiy Xato 2 FIX: .commit() va .rollback() olib tashlandi, bu ish handler zimmasida.
-        Jiddiy Xato 3 FIX: Exception holatida xato yutib yuborilmaydi (raise qilinadi).
-        """
+        """ 🎁 Referal mukofotini berish va kesh zanjirlarini tozalash. """
         real_session = await UserRepository._prepare_session(session)
 
         try:
-            # 1. Taklif qilingan foydalanuvchining referrer ID sini olish (Xavfsiz Race-condition oldini olish uchun FOR UPDATE bilan)
+            # 1. FOR UPDATE bilan xavfsiz o'qish (Race-condition oldini olish)
             stmt = select(DBUser.referred_by).where(DBUser.user_id == user_id).with_for_update()
             result = await real_session.execute(stmt)
             ref_id = result.scalar_one_or_none()
@@ -279,7 +271,7 @@ class UserRepository:
             if not ref_id:
                 return False, None
 
-            # 2. Taklif qilgan odamga ball va referal sonini atomik qo'shish
+            # 2. Referrerga ball va referal sonini qo'shish
             ref_update = await real_session.execute(
                 update(DBUser)
                 .where(DBUser.user_id == ref_id)
@@ -292,20 +284,26 @@ class UserRepository:
             if ref_update.rowcount == 0:
                 return False, None
 
-            # 3. Ikkinchi marta ball olmasligi uchun referred_by ustunini tozalash
+            # 3. Qayta mukofot olmasligi uchun tozalash
             await real_session.execute(
                 update(DBUser).where(DBUser.user_id == user_id).values(referred_by=None)
             )
             
-            # Keshni zanjirli tozalash
-            await UserRepository._invalidate_cache(user_id, broadcast=True)
-            await UserRepository._invalidate_cache(ref_id, broadcast=True)
+            # ✅ MUTLAQ FIX: Har ikkala foydalanuvchi keshini faqat COMMIT'dan keyin o'chirish zanjiri
+            if hasattr(session, "on_commit"):
+                session.on_commit(lambda uid=user_id, rid=ref_id: [
+                    UserRepository._invalidate_cache(user_id=uid, broadcast=True),
+                    UserRepository._invalidate_cache(user_id=rid, broadcast=True)
+                ])
+            else:
+                await UserRepository._invalidate_cache(user_id, broadcast=True)
+                await UserRepository._invalidate_cache(ref_id, broadcast=True)
             
             return True, ref_id
 
         except Exception as e:
             logger.error(f"❌ process_referral_reward error: {e}")
-            raise  # Xato yuqoriga uzatiladi, tranzaksiyani boshqarayotgan tashqi kod o'zi rollback qiladi
+            raise
 
 
 
@@ -366,41 +364,43 @@ class ChannelRepository:
 
     # ================= GET ALL CHANNELS =================
     @staticmethod
-    async def get_all_channels(session: Any) -> TypeErrorPreventerList[Dict[str, Any]]:
-        """ 🚀 Tizimdagi BARCHA kanallarni keshdan yoki bazadan olish. """
-        # 1. Keshdan tekshirish
-        try:
-            cached_data = await valkey.get(table="channels", obj_id="all_list")
-            if cached_data is not None and isinstance(cached_data, list):
-                return cached_data
-        except Exception as cache_err:
-            logger.warning(f"⚠️ get_all_channels kesh o'qishda xatolik: {cache_err}")
-
-        # 🔥 Fallback: Redis o'chiq bo'lsa, cheksiz siklga tushmaslik kafolati
-        if not valkey.is_alive or not valkey.redis:
-            real_session = await ChannelRepository._prepare_session(session)
-            result = await real_session.execute(select(Channel).order_by(Channel.id.desc()))
-            return [ChannelRepository._to_dict(ch) for ch in result.scalars().all()]
-
-        # 2. Singleflight / Cache Stampede Himoyasi (Distributed Redis Lock)
+    async def get_all_channels(session: Any) -> list[Dict[str, Any]]:
+        """ 🚀 Tizimdagi BARCHA kanallarni keshdan yoki bazadan olish (Sikl bilan xavfsiz variant). """
         lock_key = "channels:loading:all_list"
-        if await valkey.redis.set(lock_key, "1", nx=True, ex=5):
+        
+        while True:
+            # 1. Avval keshni tekshiramiz
             try:
+                cached_data = await valkey.get(table="channels", obj_id="all_list")
+                if cached_data is not None and isinstance(cached_data, list):
+                    return cached_data
+            except Exception as cache_err:
+                logger.warning(f"⚠️ get_all_channels kesh o'qishda xatolik: {cache_err}")
+
+            # Fallback
+            if not valkey.is_alive or not valkey.redis:
                 real_session = await ChannelRepository._prepare_session(session)
                 result = await real_session.execute(select(Channel).order_by(Channel.id.desc()))
-                channels_list = [ChannelRepository._to_dict(ch) for ch in result.scalars().all()]
+                return [ChannelRepository._to_dict(ch) for ch in result.scalars().all()]
 
+            # Lock olishga urinish
+            if await valkey.redis.set(lock_key, "1", nx=True, ex=5):
                 try:
-                    await valkey.set(table="channels", obj_id="all_list", data=channels_list, ttl=3600)
-                except Exception as cache_err:
-                    logger.error(f"⚠️ get_all_channels keshga yozishda xatolik: {cache_err}")
+                    real_session = await ChannelRepository._prepare_session(session)
+                    result = await real_session.execute(select(Channel).order_by(Channel.id.desc()))
+                    channels_list = [ChannelRepository._to_dict(ch) for ch in result.scalars().all()]
 
-                return channels_list
-            finally:
-                await valkey.redis.delete(lock_key)
-        else:
-            await asyncio.sleep(0.1)
-            return await ChannelRepository.get_all_channels(session)
+                    try:
+                        await valkey.set(table="channels", obj_id="all_list", data=channels_list, ttl=3600)
+                    except Exception as cache_err:
+                        logger.error(f"⚠️ keshga yozishda xatolik: {cache_err}")
+
+                    return channels_list
+                finally:
+                    await valkey.redis.delete(lock_key)
+            else:
+                # Agar lock band bo'lsa, 100ms kutib siklni qaytadan aylantiramiz (Rekursiyasiz!)
+                await asyncio.sleep(0.1)
 
     # ================= GET ALL ACTIVE CHANNELS =================
     @staticmethod
