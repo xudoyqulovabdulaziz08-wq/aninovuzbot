@@ -599,13 +599,12 @@ class AnimeRepository:
             ] if anime.episodes else []
         }
 
-    # ================= ADD ANIME (FIXED WITH ON_COMMIT) =================
+    # ================= ADD ANIME (100% DB COMMIT FIXED) =================
     @staticmethod
     async def add_anime(session: Any, title: str, poster_id: str, year: int, is_completed: bool, 
                         genres: List[Any], description: str, languages: str, episodes: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        ➕ Yangi anime qo'shish va qidiruv xaritasini klaster bo'ylab yangilash
-        🔥 BROADCAST FIX: Keshni yangilash faqatgina middleware DB commit qilgandan keyin fonda bajariladi.
+        ➕ Yangi anime qo'shish va ma'lumotni bazaga uzil-kesil muhrlash
         """
         real_session = await AnimeRepository._prepare_session(session)
 
@@ -637,39 +636,35 @@ class AnimeRepository:
             )
             
             real_session.add(anime)
-            await real_session.flush() 
             
+            # 🔥 ENGMUHIM FIX: Middleware'ni kutmasdan, tranzaksiyani shu yerning o'zida bazaga commit qilamiz!
+            await real_session.commit() 
+            
+            # Commit'dan keyin ob'ektni qayta o'qish (detallari bilan birlashtirib yuklash)
             stmt = (select(Anime)
                     .options(selectinload(Anime.genres), selectinload(Anime.episodes))
                     .where(Anime.anime_id == anime.anime_id))
             result = await real_session.execute(stmt)
             loaded_anime = result.scalar_one()
             
-            # Parametrlarni leksik qulflash (lambda scope lock)
             a_id = loaded_anime.anime_id
             a_title = loaded_anime.title
             a_year = loaded_anime.year
 
-            # Post-commit kesh yangilash wrapper funksiyasi
-            async def _post_commit_add_cache():
-                try:
-                    await valkey.update_single_anime_in_search_map(anime_id=a_id, title=a_title, year=a_year)
-                    logger.info(f"🚀 [Post-Commit] Anime #{a_id} qidiruv keshiga qo'shildi.")
-                except Exception as cache_err:
-                    logger.error(f"❌ Qidiruv keshini yangilashda xatolik (add_anime): {cache_err}")
-
-            # SafeSession'ning on_commit hook'iga asinxron vazifa sifatida topshirish
-            if hasattr(session, "on_commit"):
-                session.on_commit(lambda: asyncio.create_task(_post_commit_add_cache()))
-            else:
-                await _post_commit_add_cache()
+            # Keshni yangilashni xavfsiz fonda ishga tushiramiz
+            try:
+                await valkey.update_single_anime_in_search_map(anime_id=a_id, title=a_title, year=a_year)
+                logger.info(f"🚀 [Post-Commit] Anime #{a_id} qidiruv keshiga qo'shildi.")
+            except Exception as cache_err:
+                logger.error(f"❌ Qidiruv keshini yangilashda xatolik (add_anime): {cache_err}")
             
             return AnimeRepository._serialize_anime(loaded_anime)
             
         except Exception as e:
+            # Xato bo'lsa tranzaksiyani orqaga qaytaramiz
+            await real_session.rollback()
             logger.error(f"❌ add_anime xatolik: {e}")
             raise
-
     # ================= ADD ANIME EPISODE (FIXED WITH ON_COMMIT) =================
     @staticmethod
     async def add_anime_episode(session: Any, anime_id: int, episode_num: int, file_id: str) -> Dict[str, Any]:

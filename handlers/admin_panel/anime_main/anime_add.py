@@ -478,7 +478,6 @@ async def process_anime_description(message: Message, state: FSMContext):
 async def process_anime_languages_and_save(message: Message, state: FSMContext, session: Any):
     """ 🌐 Admin yuborgan tillarni qabul qilish va ma'lumotlarni bazaga muhrlash """
     
-    # 1. Input Validation
     if not message.text or message.text.startswith("/"):
         return await message.answer(
             "⚠️ <b>Xatolik:</b> Iltimos, anime tillarini matn ko'rinishida yuboring!\n"
@@ -486,37 +485,32 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             parse_mode="HTML"
         )
 
-    # FSM xotirasidan ma'lumotlarni yig'amiz
     fsm_data = await state.get_data()
-    
     selected_genres = fsm_data.get("selected_genres", [])
     if not selected_genres:
         return await message.answer("❌ Janrlar topilmadi. Iltimos, jarayonni qaytadan boshlang.")
 
-    # Tillarni chiroyli formatda tozalab olamiz
     languages_list = html.escape(message.text.strip())
     
-    # Yuklanish animation xabari
     loading_msg = await message.answer(
         text="⏳ <code>Tizim ma'lumotlarni bazaga yozmoqda, iltimos kuting...</code>", 
         parse_mode="HTML"
     )
 
     try:
-        # 🔥 FIX: Repositoriyingiz kutayotgan parametr nomlari va tartibiga 100% moslash
+        # Repositoriy o'zi ichida commit qiladi va xavfsiz Dict qaytaradi
         new_anime = await AnimeRepository.add_anime(
             session=session,
             title=fsm_data.get("title"),
             poster_id=fsm_data.get("poster_id"),
-            year=int(fsm_data.get("year", 2026)),  # xavfsiz casting
-            is_completed=fsm_data.get("is_completed", False),  # 👈 Repositoriyingiz kutayotgan argument
-            genres=selected_genres,  # 👈 'genre_names' o'rniga aniq 'genres' kaliti berildi!
+            year=int(fsm_data.get("year", 2026)),
+            is_completed=fsm_data.get("is_completed", False),
+            genres=selected_genres,
             description=fsm_data.get("description") or "Tavsif kiritilmagan.",
             languages=languages_list,
-            episodes=[]  # 👈 default list
+            episodes=[]
         )
         
-        # Repositoriy endi _serialize_anime orqali DICT qaytaradi. Uni xavfsiz o'qiymiz:
         anime_id = new_anime.get("anime_id")
         anime_title = html.escape(new_anime.get("title", "Nomsiz"))
         anime_year = new_anime.get("year", "Noma'lum")
@@ -536,43 +530,28 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             f"🔮 <b>Janrlar:</b> <code>{', '.join(anime_genres) if anime_genres else 'Kiritilmagan'}</code>\n"
             f"🌐 <b>Tillari:</b> <code>{languages_list}</code>\n\n"
             "───────────────────────\n"
-            "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi. "
-            "Kesh fonda yangilanmoqda...</i>"
+            "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi.</i>"
         )
 
-        # UI Post-Commit mantiq funksiyasi
-        async def ui_final_commit_step():
-            try:
-                await loading_msg.edit_text(
-                    text=success_text, 
-                    reply_markup=builder.as_markup(), 
-                    parse_mode="HTML"
-                )
-                await state.clear()  # Xotirani muvaffaqiyatli commitdan keyin tozalash
-                logger.info(f"✅ [UI Post-Commit] Anime #{anime_id} interfeysi yakunlandi.")
-            except Exception as ui_err:
-                logger.error(f"❌ UI post-commit xatolik: {ui_err}")
-
-        # Xavfsiz lambda closure orqali taskni backgroundga topshiramiz
-        if hasattr(session, "on_commit"):
-            session.on_commit(lambda step=ui_final_commit_step: asyncio.create_task(step()))
-        else:
-            await ui_final_commit_step()
+        # To'g'ridan-to'g'ri UI yangilanadi va state tozalanadi (chunki tepada commit bo'lib bo'ldi)
+        await loading_msg.edit_text(
+            text=success_text, 
+            reply_markup=builder.as_markup(), 
+            parse_mode="HTML"
+        )
+        await state.clear()
         
     except Exception as e:
         logger.error(f"❌ Anime qo'shishda jiddiy xatolik: {e}")
-        
         error_builder = InlineKeyboardBuilder()
         error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="add_anime_main"))
         
         await loading_msg.edit_text(
             text="❌ <b>Tizim xatoligi!</b>\n\n"
-                 "Ma'lumotlarni bazaga yozishda texnik xatolik yuz berdi. "
-                 "Iltimos, kiritilgan ma'lumotlar formatini yoki server loglarini tekshiring.",
+                 "Ma'lumotlarni bazaga yozishda muammo yuz berdi. Server jurnallarini tekshiring.",
             reply_markup=error_builder.as_markup(),
             parse_mode="HTML"
         )
-
 # =====================================================================
 # ⛩ QADAM 8: Qism qo'shish jarayoni (Video qabul qilish va bazaga saqlash)
 # =====================================================================
