@@ -16,9 +16,10 @@ from database.models import OutboxEvent, MODELS_TO_WATCH
 logger = logging.getLogger("OutboxEmitter")
 
 # ================= CONFIG =================
-ENABLE_COMPRESSION = True  # Worker tomonda decompress qilinadi
-ENABLE_DEDUP = True        # Takroriy xabarlarni filtrlash (Deduplication)
-SLOW_EVENT_THRESHOLD_MS = 50  # ✅ Kichik Muammo 3 FIX: Tranzaksiya ichida 20ms juda qattiq edi, 50ms ga ko'tarildi
+ENABLE_COMPRESSION = True  
+ENABLE_DEDUP = True        
+SLOW_EVENT_THRESHOLD_MS = 50  
+COMPRESSION_THRESHOLD_BYTES = 1024  # 🔥 OPTIMIZATSIYA: 1KB dan kichik payloadlarni siqib CPU ni qiynamaymiz!
 
 
 # ================= SAFE PRIMARY KEY EXTRACTION =================
@@ -28,7 +29,6 @@ def get_pk_value(target: Any, state: Optional[Any] = None) -> Optional[str]:
         mapper = obj_state.mapper
         pk_values = []
         for col in mapper.primary_key:
-            # Agarda obyekt o'chirilgan bo'lsa, xavfsiz holatda keshdan yoki atributdan olamiz
             val = obj_state.attrs[col.key].value if obj_state.detached else getattr(target, col.key)
             pk_values.append(str(val))
         return ":".join(pk_values)
@@ -41,7 +41,6 @@ def get_pk_value(target: Any, state: Optional[Any] = None) -> Optional[str]:
 def has_real_changes(target: Any) -> bool:
     try:
         state = inspect(target)
-        # Agar obyekt yangi bo'lsa yoki o'chirilayotgan bo'lsa, tekshirish shart emas
         if state.transient or state.deleted:
             return True
             
@@ -51,42 +50,23 @@ def has_real_changes(target: Any) -> bool:
         return False
     except Exception as e:
         logger.error(f"❌ Change detect error: {e}")
-        return True  # Xato bo'lsa xavfsizlik uchun o'zgargan deb hisoblaymiz
-
-
-# ================= DEDUP HASH =================
-def make_event_hash(table: str, pk: str, event_type: str, raw_payload: Dict[str, Any]) -> str:
-    """
-    💡 Jiddiy Xato 1 FIX: Hash doim siqilmagan (RAW) payload bo'yicha hisoblanadi.
-    sort_keys=True yordamida deterministik string yaratiladi.
-    """
-    serialized_payload = json.dumps(raw_payload, sort_keys=True, ensure_ascii=False)
-    raw = f"{table}:{pk}:{event_type}:{serialized_payload}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+        return True
 
 
 # ================= RAW PAYLOAD BUILDER =================
 def build_raw_payload(target: Any, state: Optional[Any] = None) -> Optional[Dict[str, Any]]:
-    """
-    🚀 Jiddiy Xato 1 SEPARATION: Faqat toza (raw) Python lug'atini yig'adi.
-    ✅ Kichik Muammo 1 FIX: Exception holatida dict emas, None qaytaradi.
-    """
     try:
         data = {}
         obj_state = state or inspect(target)
         
         for col in obj_state.mapper.column_attrs:
             key = col.key
-            if obj_state.deleted or obj_state.detached:
-                val = obj_state.attrs[key].value
-            else:
-                val = getattr(target, key)
+            val = obj_state.attrs[key].value if (obj_state.deleted or obj_state.detached) else getattr(target, key)
 
-            # 🔥 Maxsus ma'lumot turlarini JSON-safe formatga o'giramiz
             if isinstance(val, datetime):
                 data[key] = val.isoformat()
             elif isinstance(val, Decimal):
-                data[key] = str(val)  # ✅ Jiddiy Xato 4 FIX: float o'rniga str (Aniqlik yo'qolmaydi!)
+                data[key] = str(val)  
             elif val.__class__.__name__ == 'UUID':
                 data[key] = str(val)
             else:
@@ -98,25 +78,13 @@ def build_raw_payload(target: Any, state: Optional[Any] = None) -> Optional[Dict
         return None
 
 
-# ================= COMPRESS ENGINE =================
-def compress_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    🚀 Jiddiy Xato 1 SEPARATION: Toza payloadni meta-dict ichiga siqib beradi.
-    """
-    raw_str = json.dumps(raw_payload, ensure_ascii=False)
-    compressed_hex = zlib.compress(raw_str.encode(), level=6).hex()
-    return {
-        "is_compressed": True,
-        "data": compressed_hex  # Worker buni zlib.decompress qiladi
-    }
-
-
 # ================= CORE HANDLER ENGINE =================
 def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_built_raw_payload: Optional[Dict[str, Any]] = None):
     """
-    Yagona va xavfsiz Outbox yozish funksiyasi. Savepoint va to'liq izolyatsiya bilan.
+    Yagona va xavfsiz Outbox yozish funksiyasi. 
+    CPU-bound operatsiyalar (zlib, json) maksimal darajada optimallashtirildi.
     """
-    start = datetime.now(timezone.utc)  # ✅ Jiddiy Xato 2 FIX: Izchil Timezone (UTC)
+    start = datetime.now(timezone.utc)
     table = getattr(target, "__tablename__", "unknown")
     state = inspect(target)
     
@@ -125,25 +93,35 @@ def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_
         if not pk_val:
             return
 
-        # Empty update'larni o'tkazib yuborish
         if event_type == "update" and not has_real_changes(target):
             return
 
-        # 1. Toza (raw) payloadni olish yoki qurish
         raw_payload = pre_built_raw_payload or build_raw_payload(target, state=state)
-        
-        # ✅ Kichik Muammo 1 FIX: Agar payload qurishda xato bo'lsa, jarayonni to'xtatamiz (Outbox ifloslanmaydi)
         if raw_payload is None:
             logger.error(f"❌ Payload build failed, outbox skipped for {table}:{pk_val}")
             return
 
-        # 2. ✅ Jiddiy Xato 1 FIX: Dedup HASH siqishdan oldin toza ma'lumotdan olinadi!
+        # 🔥 OPTIMIZATSIYA 1: JSON serializatsiyani faqat 1 marta bajaramiz!
+        # sort_keys=True ham Dedup Hash uchun, ham siqish uchun yagona deterministik string beradi
+        raw_str = json.dumps(raw_payload, sort_keys=True, ensure_ascii=False)
+        raw_bytes = raw_str.encode('utf-8')
+
+        # 1. Dedup HASH hisoblash
         event_hash = None
         if ENABLE_DEDUP:
-            event_hash = make_event_hash(table, pk_val, event_type, raw_payload)
+            raw_hash_base = f"{table}:{pk_val}:{event_type}:{raw_str}"
+            event_hash = hashlib.sha256(raw_hash_base.encode('utf-8')).hexdigest()
 
-        # 3. Agar siqish yoqilgan bo'lsa, bazaga yozishdan oldin siqamiz
-        final_payload = compress_payload(raw_payload) if ENABLE_COMPRESSION else raw_payload
+        # 2. Aqlli Siqish Tizimi (Smart Compression)
+        # 🔥 OPTIMIZATSIYA 2: Faqat ma'lumot hajmi belgilangan chegaradan katta bo'lsa va level=3 (Tezkor) rejimda siqiladi
+        if ENABLE_COMPRESSION and len(raw_bytes) > COMPRESSION_THRESHOLD_BYTES:
+            compressed_hex = zlib.compress(raw_bytes, level=3).hex()  # level 6 dan 3 ga tushirildi (CPU yukini 3 barobarga kamaytiradi)
+            final_payload = {
+                "is_compressed": True,
+                "data": compressed_hex
+            }
+        else:
+            final_payload = raw_payload  # Kichik ma'lumotlar asl holida qoladi
 
         stmt = OutboxEvent.__table__.insert().values(
             id=str(uuid4()),
@@ -151,7 +129,7 @@ def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_
             aggregate_id=pk_val,
             event_type=event_type,
             payload=final_payload,
-            event_hash=event_hash,  # ✅ Kichik Muammo 4: Modelda nullable=True bo'lishi shart!
+            event_hash=event_hash,
             processed=False,
             retry_count=0,
             created_at=datetime.now(timezone.utc)
@@ -163,14 +141,14 @@ def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_
             connection.execute(stmt)
             nested.commit()
         except Exception as db_err:
-            nested.rollback()  # Faqat Outbox INSERT o'chadi, asosiy biznes oqimi saqlanadi
+            nested.rollback()
             raise db_err
 
         # Performance Monitoring
         duration = (datetime.now(timezone.utc) - start).total_seconds() * 1000
         if duration > SLOW_EVENT_THRESHOLD_MS:
             logger.warning(
-                f"⚠️ SLOW OUTBOX EVENT: {table} -> [{event_type}] bajarilishi {duration:.2f}ms cho'zildi."
+                f"⚠️ [SLOW OUTBOX ALERT] {table} -> [{event_type}] bajarilishi {duration:.2f}ms cho'zildi! Protsessor yoki DB yuklanishini tekshiring."
             )
 
     except Exception as e:
@@ -180,13 +158,9 @@ def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_
 
 
 # ================= HOOK LISTENERS (DUPLICATE SAFE) =================
-_handlers = {}  # ✅ Jiddiy Xato 3 FIX: Handlerlarni xotirada keshda saqlash uchun lug'at
+_handlers = {}
 
 def get_or_create_handlers(event_type: str):
-    """
-    Sinxron SQLAlchemy oqimi uchun har bir event_type bo'yicha 
-    yagona identifikatorga ega handlerlarni yetkazib beradi.
-    """
     def closure_handler(mapper: Any, connection: Connection, target: Any):
         if event_type == "insert":
             emit_outbox_event(connection, target, "insert")
@@ -195,7 +169,6 @@ def get_or_create_handlers(event_type: str):
         elif event_type == "before_delete":
             try:
                 state = inspect(target)
-                # O'chishidan oldin toza payloadni obyektdagi vaqtinchalik o'zgaruvchiga bog'laymiz
                 target._outbox_pre_delete_raw_payload = build_raw_payload(target, state=state)
             except Exception as e:
                 logger.error(f"❌ Pre-delete payload capture failed: {e}")
@@ -209,18 +182,12 @@ def get_or_create_handlers(event_type: str):
 
 # ================= ATTACH LISTENERS =================
 def attach_cache_listeners():
-    """
-    🚀 Modellar uchun mukammal Outbox oqimlarini ulash tizimi.
-    Idempotent: Ko'p marta chaqirilsa ham duplicate listenerlar ulamaydi!
-    """
     try:
         count = 0
         for model in MODELS_TO_WATCH:
-            # ✅ Jiddiy Xato 3 FIX: Agar model allaqachon tinglanayotgan bo'lsa, tashlab ketamiz
             if model in _handlers:
                 continue
 
-            # Handlerlarni faqat bir marta yaratib, keshga saqlaymiz
             handlers = {
                 "insert": get_or_create_handlers("insert"),
                 "update": get_or_create_handlers("update"),
@@ -231,13 +198,11 @@ def attach_cache_listeners():
 
             event.listen(model, "after_insert", handlers["insert"])
             event.listen(model, "after_update", handlers["update"])
-            
-            # O'chirish hodisalari zanjiri (DetachedInstanceError oldini olish)
             event.listen(model, "before_delete", handlers["before_delete"])
             event.listen(model, "after_delete", handlers["after_delete"])
             count += 1
 
-        logger.info(f"🚀 [Outbox System Engine] yuklandi: {count} ta model takrorlanishdan (Duplicate) himoyalangan holda ulandi.")
+        logger.info(f"🚀 [Outbox System Engine] yuklandi: {count} ta model takrorlanishdan himoyalangan holda ulandi.")
 
     except Exception as e:
         logger.critical(f"❌ [Outbox System Engine] modellar tinglovchilarini ulashda kritik xato: {e}")

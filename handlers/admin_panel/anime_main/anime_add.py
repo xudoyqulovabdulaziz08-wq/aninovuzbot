@@ -534,8 +534,7 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
     )
 
     try:
-        # 🔥 ANIME REPOSITORY CHAQIRILADI
-        # Ichkarida flush() bajariladi va on_commit hookiga keshni yangilash vazifasi yuklanadi
+        # 1. Repositoriyga yozish (ichkarida flush bo'ladi va kesh on_commit ga yuklanadi)
         new_anime = await AnimeRepository.add_anime(
             session=session,
             title=fsm_data.get("title"),
@@ -553,22 +552,10 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
         anime_year = new_anime["year"]
         anime_genres = [html.escape(g) for g in new_anime.get("genres", [])]
         
-        # Boshqaruv tugmalari
         builder = InlineKeyboardBuilder()
-        builder.row(
-            types.InlineKeyboardButton(
-                text="🎬 Qism (Epizod) yuklashni boshlash", 
-                callback_data=f"add_ep_{anime_id}"
-            )
-        )
-        builder.row(
-            types.InlineKeyboardButton(
-                text="🔙 Admin Panelga qaytish", 
-                callback_data="add_anime_main"
-            )
-        )
+        builder.row(types.InlineKeyboardButton(text="🎬 Qism yuklashni boshlash", callback_data=f"add_ep_{anime_id}"))
+        builder.row(types.InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="add_anime_main"))
         
-        # Premium Final UI matni
         success_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
             "     🎉 MUVAFFAQIYATLI QO'SHILDI!\n"
@@ -580,9 +567,8 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
             f"🌐 <b>Tillari:</b> <code>{languages_list}</code>\n\n"
             "───────────────────────\n"
             "💡 <i>Anime asosiy bazaga muvaffaqiyatli muhrlandi. "
-            "Endi unga video qismlarni (epizodlarni) biriktirishingiz mumkin.</i>"
+            "Kesh fonda yangilanmoqda...</i>"
         )
-
         # =====================================================================
         # 🔥 HANDLER INTERFEYSINI COMMIT BILAN SINXRONLASH
         # =====================================================================
