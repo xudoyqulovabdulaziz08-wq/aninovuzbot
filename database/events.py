@@ -16,8 +16,8 @@ from database.models import OutboxEvent, MODELS_TO_WATCH
 logger = logging.getLogger("OutboxEmitter")
 
 # ================= CONFIG =================
-ENABLE_COMPRESSION = True  
-ENABLE_DEDUP = True        
+ENABLE_COMPRESSION = False  # 🔥 OPTIMIZATSIYA: Siqishni defaultda o'chirib qo'yamiz, kerak bo'lsa yoqish mumkin! CPU yukini sezilarli kamaytiradi.  
+ENABLE_DEDUP = False  # 🔥 OPTIMIZATSIYA: Deduplicationni defaultda o'chirib qo'yamiz, kerak bo'lsa yoqish mumkin! CPU yukini sezilarli kamaytiradi.        
 SLOW_EVENT_THRESHOLD_MS = 50  
 COMPRESSION_THRESHOLD_BYTES = 1024  # 🔥 OPTIMIZATSIYA: 1KB dan kichik payloadlarni siqib CPU ni qiynamaymiz!
 
