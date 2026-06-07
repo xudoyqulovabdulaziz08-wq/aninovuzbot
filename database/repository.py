@@ -664,100 +664,94 @@ class AnimeRepository:
             raise
 
     # ================= ADD ANIME EPISODE (MUTLAQ KESH FIX) =================
-    # ================= ADD ANIME EPISODE (100% DB COMMIT FIXED) =================
+    # ================= ADD ANIME EPISODE (ISOLATED FORCE COMMIT) =================
     @staticmethod
     async def add_anime_episode(session: Any, anime_id: int, episode_num: int, file_id: str) -> Dict[str, Any]:
         """
-        ➕ Yangi epizod qo'shish va bazaga uzil-kesil muhrlash (COMMIT)
+        🔥 100% KAFOLATLANGAN YOZISH: Middleware ishdan chiqqan yoki bloklangan taqdirda ham, 
+        _session_pool orqali o'zimiz majburiy yangi ulanish (Isolated Transaction) ochib yozamiz!
         """
-        real_session = await AnimeRepository._prepare_session(session)
+        # Proxy obyekt ichidan connection poolni qidirib topamiz
+        pool = getattr(session, "_session_pool", None)
+        
+        async def _execute_insert(db_sess):
+            episode = Episode(anime_id=anime_id, episode=episode_num, file_id=file_id)
+            db_sess.add(episode)
+            
+            # 🔥 MAJBURIY YOZISH
+            await db_sess.commit() 
+            
+            # 🎯 Keshni on_commit() ni kutmasdan DARHOL tozalaymiz (Ghost Cache oldini olish)
+            try:
+                await valkey.invalidate(table="anime_list", obj_id=f"id_{anime_id}", broadcast=True)
+                await valkey.set_episode_file_id(anime_id, episode_num, file_id, ttl=86400 * 3)
+                logger.info(f"🚀 [Majburiy Yozish] {episode_num}-qism 100% bazaga tushdi va kesh tozalandi.")
+            except Exception as cache_err:
+                logger.error(f"❌ Kesh xatosi (Lekin baza yozildi): {cache_err}")
 
         try:
-            # 1. Epizod ob'ektini yaratamiz
-            episode = Episode(anime_id=anime_id, episode=episode_num, file_id=file_id)
-            real_session.add(episode)
-            
-            # 🔥 ENGMUHIM FIX: Middleware'ni kutib o'tirmaymiz, ma'lumotni shu soniyada bazaga yozamiz!
-            await real_session.commit()
-            
-            # 🎯 Sessiyadagi eski anime ma'lumotini joriy sessiyada eskilik belgisi bilan belgilaymiz.
-            # Shunda keyingi qidiruvda (List/View) qismlar soni yangilanadi
-            real_session.expire_all() 
-
-            aid = anime_id
-            ep_num = episode_num
-            fid = file_id
-
-            # Keshni fonda tozalash logikasi
-            async def _post_commit_episode_cache():
-                try:
-                    obj_key = f"id_{aid}"
-                    await valkey.invalidate(table="anime_list", obj_id=obj_key, broadcast=True)
-                    await valkey.set_episode_file_id(anime_id=aid, episode=ep_num, file_id=fid, ttl=86400 * 3)
-                    logger.info(f"🚀 [Post-Commit] Anime [{aid}] ning eski keshi o'chirildi va {ep_num}-qism saqlandi.")
-                except Exception as cache_err:
-                    logger.error(f"❌ Epizod keshini sinxronlashda xatolik: {cache_err}")
-
-            if hasattr(session, "on_commit"):
-                session.on_commit(lambda: asyncio.create_task(_post_commit_episode_cache()))
+            if pool:
+                # 🚨 MIDDLEWARE'NI CHETLAB O'TIB, TO'G'RIDAN-TO'G'RI YANGI ULANISH OCHAMIZ
+                async with pool() as isolated_session:
+                    await _execute_insert(isolated_session)
             else:
-                await _post_commit_episode_cache()
-            
+                # Agar qandaydir sabab bilan pool topilmasa, oddiy sessiyadan foydalanamiz
+                real_session = await AnimeRepository._prepare_session(session)
+                await _execute_insert(real_session)
+                real_session.expire_all()
+                
             return {"anime_id": anime_id, "episode": episode_num, "file_id": file_id}
             
         except Exception as e:
-            # Xato bo'lsa tranzaksiyani orqaga tortamiz (Baza qulab tushmasligi uchun)
-            await real_session.rollback()
-            logger.error(f"❌ add_anime_episode ichida xatolik: {e}")
+            logger.error(f"❌ add_anime_episode MUQARRAR xatolik: {e}")
             raise
 
-    # ================= UPDATE ANsIME (MUTLAQ KESH FIX) =================
+    # ================= UPDATE ANIME (FORCE COMMIT FIXED) =================
     @staticmethod
     async def update_anime(session: Any, anime_id: int, **kwargs) -> Optional[Dict[str, Any]]:
         """
-        🔄 Anime ma'lumotlarini yangilash va keshni tozalash
+        🔄 Anime yangilash: Commit qilinmayotgan xato tuzatildi va kesh on_commit ni kutmasdan darhol tozalanadi.
         """
-        real_session = await AnimeRepository._prepare_session(session)
-
-        try:
+        pool = getattr(session, "_session_pool", None)
+        
+        async def _execute_update(db_sess):
             stmt = update(Anime).where(Anime.anime_id == anime_id).values(**kwargs).returning(Anime)
-            result = await real_session.execute(stmt)
+            result = await db_sess.execute(stmt)
             updated_anime = result.scalar_one_or_none()
             
             if updated_anime:
-                # 🎯 FIX: Yangilangandan keyin sessiyadagi barcha ob'ekt keshlarini tozalaymiz
-                real_session.expire_all()
-
+                # 🔥 FIX: Oldingi kodda shu commit qatori umuman yo'q edi!
+                await db_sess.commit() 
+                db_sess.expire_all()
+                
                 fetch_stmt = (select(Anime)
                               .options(selectinload(Anime.genres), selectinload(Anime.episodes))
                               .where(Anime.anime_id == anime_id))
-                fetch_res = await real_session.execute(fetch_stmt)
+                fetch_res = await db_sess.execute(fetch_stmt)
                 final_anime = fetch_res.scalar_one()
 
                 aid = final_anime.anime_id
                 title_changed = "title" in kwargs or "year" in kwargs
-                new_title = final_anime.title
-                new_year = final_anime.year
-
-                async def _post_commit_update_cache():
-                    try:
-                        obj_key = f"id_{aid}"
-                        await valkey.invalidate(table="anime_list", obj_id=obj_key, broadcast=True)
-                        
-                        if title_changed:
-                            await valkey.update_single_anime_in_search_map(anime_id=aid, title=new_title, year=new_year)
-                        logger.info(f"🚀 [Post-Commit] Anime [{aid}] keshlari yangilandi.")
-                    except Exception as cache_err:
-                        logger.error(f"❌ Yangilash keshini sinxronlashda xatolik: {cache_err}")
-
-                if hasattr(session, "on_commit"):
-                    session.on_commit(lambda: asyncio.create_task(_post_commit_update_cache()))
-                else:
-                    await _post_commit_update_cache()
-
-                return AnimeRepository._serialize_anime(final_anime)
                 
+                # 🎯 Keshni darhol yangilash
+                try:
+                    await valkey.invalidate(table="anime_list", obj_id=f"id_{aid}", broadcast=True)
+                    if title_changed:
+                        await valkey.update_single_anime_in_search_map(anime_id=aid, title=final_anime.title, year=final_anime.year)
+                    logger.info(f"🚀 [Majburiy Yangilash] Anime [{aid}] bazada yangilandi va keshi tozalandi.")
+                except Exception as cache_err:
+                    logger.error(f"❌ Kesh xatosi (Lekin baza yangilandi): {cache_err}")
+                    
+                return AnimeRepository._serialize_anime(final_anime)
             return None
+
+        try:
+            if pool:
+                async with pool() as isolated_session:
+                    return await _execute_update(isolated_session)
+            else:
+                real_session = await AnimeRepository._prepare_session(session)
+                return await _execute_update(real_session)
         except Exception as e:
             logger.error(f"❌ update_anime ichida xatolik: {e}")
             raise
