@@ -664,36 +664,37 @@ class AnimeRepository:
             raise
 
     # ================= ADD ANIME EPISODE (MUTLAQ KESH FIX) =================
+    # ================= ADD ANIME EPISODE (100% DB COMMIT FIXED) =================
     @staticmethod
     async def add_anime_episode(session: Any, anime_id: int, episode_num: int, file_id: str) -> Dict[str, Any]:
         """
-        ➕ Yangi epizod qo'shish va joriy anime keshini L1/L2 darajasida tozalash.
-        🔥 FIX: Epizod qo'shilganda SQLAlchemy sessiyasidagi Anime ob'ekti majburan expire qilinadi.
+        ➕ Yangi epizod qo'shish va bazaga uzil-kesil muhrlash (COMMIT)
         """
         real_session = await AnimeRepository._prepare_session(session)
 
         try:
+            # 1. Epizod ob'ektini yaratamiz
             episode = Episode(anime_id=anime_id, episode=episode_num, file_id=file_id)
             real_session.add(episode)
-            await real_session.flush()
             
-            # 🎯 MUHIM QATOR: Sessiyadagi eski anime ma'lumotini joriy sessiyada eskilik belgisi bilan belgilaymiz.
-            # Shunda keyingi safar get_anime_by_id chaqirilganda bazadan TOZA ma'lumot (yangi epizod soni bilan) o'qiladi.
+            # 🔥 ENGMUHIM FIX: Middleware'ni kutib o'tirmaymiz, ma'lumotni shu soniyada bazaga yozamiz!
+            await real_session.commit()
+            
+            # 🎯 Sessiyadagi eski anime ma'lumotini joriy sessiyada eskilik belgisi bilan belgilaymiz.
+            # Shunda keyingi qidiruvda (List/View) qismlar soni yangilanadi
             real_session.expire_all() 
 
             aid = anime_id
             ep_num = episode_num
             fid = file_id
 
+            # Keshni fonda tozalash logikasi
             async def _post_commit_episode_cache():
                 try:
-                    # 1. Animening standart keshini o'chiramiz
                     obj_key = f"id_{aid}"
                     await valkey.invalidate(table="anime_list", obj_id=obj_key, broadcast=True)
-                    
-                    # 2. Epizod fayl IDsini keshga alohida joylaymiz
                     await valkey.set_episode_file_id(anime_id=aid, episode=ep_num, file_id=fid, ttl=86400 * 3)
-                    logger.info(f"🚀 [Post-Commit] Anime [{aid}] ning eski keshi o'chirildi va {ep_num}-qism keshga kiritildi.")
+                    logger.info(f"🚀 [Post-Commit] Anime [{aid}] ning eski keshi o'chirildi va {ep_num}-qism saqlandi.")
                 except Exception as cache_err:
                     logger.error(f"❌ Epizod keshini sinxronlashda xatolik: {cache_err}")
 
@@ -705,10 +706,12 @@ class AnimeRepository:
             return {"anime_id": anime_id, "episode": episode_num, "file_id": file_id}
             
         except Exception as e:
+            # Xato bo'lsa tranzaksiyani orqaga tortamiz (Baza qulab tushmasligi uchun)
+            await real_session.rollback()
             logger.error(f"❌ add_anime_episode ichida xatolik: {e}")
             raise
 
-    # ================= UPDATE ANIME (MUTLAQ KESH FIX) =================
+    # ================= UPDATE ANsIME (MUTLAQ KESH FIX) =================
     @staticmethod
     async def update_anime(session: Any, anime_id: int, **kwargs) -> Optional[Dict[str, Any]]:
         """
