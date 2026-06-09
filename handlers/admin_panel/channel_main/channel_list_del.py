@@ -107,8 +107,8 @@ async def _execute_channel_listing(callback: CallbackQuery, state: FSMContext, s
         text = (
             f"📋 <b>TIZIMDAGI KANALLAR</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Jami kanallar: <b>{total_channels}</b> ta\n"
-            f"Faol kanallar: <b>{len(activ_channels)}</b> ta\n\n"
+            f"<blockquote expandable> Jami kanallar: <b>{total_channels}</b> ta</blockquote>\n"
+            f"<blockquote expandable> Faol kanallar: <b>{len(activ_channels)}</b> ta</blockquote>\n\n"
             f"👇 <i>Kanal sozlamalarini ko'rish uchun uning ustiga bosing:</i>"
         )
         
@@ -145,10 +145,10 @@ async def view_channel_detail(callback: CallbackQuery, callback_data: ChannelDet
     text = (
         f"📢 <b>KANAL MA'LUMOTLARI</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>📌 Nomi:</b> {title}\n"
-        f"<b>🆔 ID:</b> <code>{ch_id}</code>\n"
-        f"<b>⚙️ Holati:</b> {status_text}\n"
-        f"<b>🔗 Havola:</b> <a href='{url}'>Kanalga o'tish</a>\n\n"
+        f"<blockquote expandable><b>📌 Nomi:</b> {title}</blockquote>\n"
+        f"<blockquote expandable><b>🆔 ID:</b> <code>{ch_id}</code></blockquote>\n"
+        f"<blockquote expandable><b>⚙️ Holati:</b> {status_text}</blockquote>\n"
+        f"<blockquote expandable><b>🔗 Havola:</b> <a href='{url}'>Kanalga o'tish</a></blockquote>\n\n"
         f"<i>💡 Ushbu kanalni o'chirish yoki orqaga qaytishingiz mumkin.</i>"
     )
     
