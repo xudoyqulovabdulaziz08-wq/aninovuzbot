@@ -290,14 +290,16 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
 
     loading_text = "⏳ <code>Anime ma'lumotlari repozitoriydan olinmoqda...</code>"
     
-    # Vizual yuklanish holatini xavfsiz boshqarish (Rasm yoki Matnligiga qarab)
+    # 🔥 UI Loading holatini SMART (Aqlli) boshqarish:
+    # Xabarda rasm yoki hujjat borligini avval tekshirib, keyin tegishli metodni chaqiramiz
     try:
-        current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
-    except TelegramBadRequest:
-        try:
+        if callback.message.photo or callback.message.document:
             current_msg = await callback.message.edit_caption(caption=loading_text, parse_mode="HTML")
-        except TelegramBadRequest:
-            current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
+        else:
+            current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
+    except TelegramBadRequest:
+        # Fallback: Agar edit qilishda baribir muammo bo'lsa, yangi xabar tashlaymiz
+        current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
 
     try:
         # 2. SEANS TAYYORLASH (Sizning AnimeRepository logikangiz asosida)
@@ -407,6 +409,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         admin_builder = InlineKeyboardBuilder()
         admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
         
+        # ================= SUCCESS RENDERING (TO'G'RILANDI) =================
         success_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
             "   📢 KANALGA MUVAFFAQLI JOYLANDI!\n"
@@ -417,12 +420,21 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
             "✅ <i>Baza bilan hech qanday yozish yoki o'chirish amallari bajarilmadi. Faqat repozitoriydan o'qilib, kanalga yo'llandi.</i>"
         )
         
-        try:
-            await current_msg.edit_text(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-        except TelegramBadRequest:
-            await current_msg.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        # 🟢 Avval xabarda rasm bor yoki yo'qligini aniq tekshiramiz
+        if callback.message.photo or callback.message.document:
+            try:
+                await current_msg.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                # Agar edit qilish imkoni bo'lmasa, fallback sifatida yangi xabar yuboramiz
+                await current_msg.answer(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        else:
+            try:
+                await current_msg.edit_text(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                await current_msg.answer(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
             
     except Exception as e:
+        # ================= ERROR RENDERING (TO'G'RILANDI) =================
         logger.error(f"❌ Qayta e'lon qilishda xatolik (retry_publish): {e}")
         
         admin_builder = InlineKeyboardBuilder()
@@ -433,7 +445,15 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
             f"<b>Xato matni:</b> <code>{html.escape(str(e))}</code>\n\n"
             f"💡 <i>Eslatma: Bot kanalda admin ekanligini va post joylash huquqlari ochiqligini tekshiring.</i>"
         )
-        try:
-            await current_msg.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-        except TelegramBadRequest:
-            await current_msg.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        
+        # 🔴 Xatolik matnini ham rasm bor-yo'qligiga qarab xavfsiz render qilamiz
+        if callback.message.photo or callback.message.document:
+            try:
+                await current_msg.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                await current_msg.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        else:
+            try:
+                await current_msg.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                await current_msg.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
