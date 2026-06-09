@@ -2,7 +2,8 @@ import logging
 import html
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from database.models import Anime
+# Masalan, modellar models papkasi ichida bo'lsa:
+from database.models import Anime, Genre, Episode
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
