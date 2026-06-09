@@ -169,8 +169,12 @@ async def list_anime(
 
 @router.callback_query(AnimeDetailCallback.filter())
 async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetailCallback, session: Any):
-    await callback.answer("📖")
-    
+    # Agar callback javobi yuqorida berilmagan bo'lsa, xavfsizlik uchun javob beramiz
+    try:
+        await callback.answer("📖 Yuklanmoqda")
+    except Exception:
+        pass
+        
     anime_id = callback_data.anime_id
     current_page = callback_data.page
     
@@ -280,36 +284,23 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
     📢 AnimeRepository standartlariga mos ravishda, bazadagi mavjud animeni 
     hech qanday yangi ma'lumot yozmasdan @Aninovuz kanaliga qayta e'lon qiladi.
     """
-    await callback.answer("📢 Kanalga qayta e'lon qilish boshlandi...")
-    
     # 1. Callback_data ichidan anime_id ni ajratib olish
     try:
         anime_id = int(callback.data.rsplit("_", 1)[-1])
     except (IndexError, ValueError):
         return await callback.answer("❌ Anime ID aniqlanmadi!", show_alert=True)
 
-    loading_text = "⏳ <code>Anime ma'lumotlari repozitoriydan olinmoqda...</code>"
-    
-    # 🔥 UI Loading holatini SMART (Aqlli) boshqarish:
-    # Xabarda rasm yoki hujjat borligini avval tekshirib, keyin tegishli metodni chaqiramiz
-    try:
-        if callback.message.photo or callback.message.document:
-            current_msg = await callback.message.edit_caption(caption=loading_text, parse_mode="HTML")
-        else:
-            current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
-    except TelegramBadRequest:
-        # Fallback: Agar edit qilishda baribir muammo bo'lsa, yangi xabar tashlaymiz
-        current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
+    # Admin interfeysida loading bildirishnomasi
+    await callback.answer("⏳ Kanalga e'lon qilinmoqda, kuting...", show_alert=False)
 
     try:
-        # 2. SEANS TAYYORLASH (Sizning AnimeRepository logikangiz asosida)
-        # SafeSession proxy yoki oddiy seansligini tekshirib, haqiqiysini ajratib oladi
+        # 2. SEANS TAYYORLASH
         if hasattr(AnimeRepository, "_prepare_session"):
             real_session = await AnimeRepository._prepare_session(session)
         else:
             real_session = session._session if hasattr(session, "_session") else session
 
-        # 3. ANIMENI BAZADAN BARCHA ALOQALARI BILAN YUKLASH (Eager Loading)
+        # 3. ANIMENI BAZADAN BARCHA ALOQALARI BILAN YUKLASH
         stmt = (
             select(Anime)
             .options(
@@ -322,13 +313,9 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         anime_obj = result.scalar_one_or_none()
         
         if not anime_obj:
-            admin_builder = InlineKeyboardBuilder()
-            admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
-            await current_msg.edit_text("❌ Xatolik: Ushbu anime bazadan topilmadi.", reply_markup=admin_builder.as_markup())
-            return
+            return await callback.answer("❌ Xatolik: Ushbu anime bazadan topilmadi.", show_alert=True)
 
         # 4. REPOZITORIY STANDARTI BO'YICHA SERIALIZATSIYA
-        # _serialize_anime orqali ma'lumotlarni xavfsiz dict formatiga o'tkazamiz
         anime_data = AnimeRepository._serialize_anime(anime_obj)
 
         # 5. DICT ICHIDAN MA'LUMOTLARNI XAVFSIZ O'QISH
@@ -337,11 +324,9 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         poster_id = anime_data.get("poster_id")
         languages = html.escape(str(anime_data.get("languages", "O'zbekcha")))
         
-        # Janrlar ro'yxati (Sizning serializer g.name'larni string list qilib qaytaradi)
         genres_list = anime_data.get("genres", [])
         genres_str = ", ".join([html.escape(g) for g in genres_list]) if genres_list else "Kiritilmagan"
         
-        # Epizodlar soni
         episodes_list = anime_data.get("episodes", [])
         episodes_count = len(episodes_list) if isinstance(episodes_list, list) else 0
         
@@ -357,6 +342,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
             f"├ 🆔 Kod: <code>#{anime_id}</code>\n"  
             f"├ 📅 Yil: <b>{year}</b>\n"
             f"├ ▶️ Qism: <b>{episodes_count}</b> \n"
+            f"├ 🚦 Status: <b>{status_str}</b>\n"
             f"├ 🌐 Til: <b>{languages}</b>\n"
             f"╚══════════════════╝\n"
             f"╔══════════════════╗\n"
@@ -367,7 +353,6 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         
         raw_description = anime_data.get("description", "Tavsif kiritilmagan.")
         
-        # Telegram Caption (1024 belgi) limitini dinamik hisoblash va qirqish
         if poster_id:
             max_description_allowed = 1024 - len(base_caption) - 35
             if len(raw_description) > max_description_allowed:
@@ -376,7 +361,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         safe_description = html.escape(raw_description)
         caption = base_caption + f"<blockquote expandable>{safe_description}</blockquote>"
         
-        # 7. DEEP-LINK TUGMASI (Kanal foydalanuvchilarini botga yo'naltirish uchun)
+        # 7. DEEP-LINK TUGMASI
         bot_info = await callback.bot.get_me()
         bot_username = bot_info.username
         
@@ -388,7 +373,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
             )
         )
 
-        # 📢 8. @Aninovuz KANALIGA CHIQARISH (Rasm mavjudligiga qarab)
+        # 📢 8. @Aninovuz KANALIGA CHIQARISH
         if poster_id:
             await callback.bot.send_photo(
                 chat_id="@Aninovuz", 
@@ -405,55 +390,18 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
                 reply_markup=channel_builder.as_markup()
             )
         
-        # 9. Admin uchun muvaffaqiyat hisoboti interfeysi
-        admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+        # 🔥 SUCCESS CALLBACK: Kanalga ketdi! Endi admin ekranida yashil bildirishnoma ko'rsatamiz
+        await callback.answer("✅ Kanalga muvaffaqiyatli joylandi!", show_alert=True)
         
-        # ================= SUCCESS RENDERING (TO'G'RILANDI) =================
-        success_text = (
-            "╔═══════════ ⛩ ═══════════╗\n"
-            "   📢 KANALGA MUVAFFAQLI JOYLANDI!\n"
-            "╚═══════════ ⛩ ═══════════╝\n\n"
-            f"🎬 <b>Anime:</b> <code>{title}</code>\n"
-            f"🚀 <b>Kanal:</b> @Aninovuz\n\n"
-            "───────────────────────\n"
-            "✅ <i>Baza bilan hech qanday yozish yoki o'chirish amallari bajarilmadi. Faqat repozitoriydan o'qilib, kanalga yo'llandi.</i>"
-        )
-        
-        # 🟢 Avval xabarda rasm bor yoki yo'qligini aniq tekshiramiz
-        if callback.message.photo or callback.message.document:
-            try:
-                await current_msg.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-            except TelegramBadRequest:
-                # Agar edit qilish imkoni bo'lmasa, fallback sifatida yangi xabar yuboramiz
-                await current_msg.answer(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-        else:
-            try:
-                await current_msg.edit_text(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-            except TelegramBadRequest:
-                await current_msg.answer(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-            
     except Exception as e:
-        # ================= ERROR RENDERING (TO'G'RILANDI) =================
         logger.error(f"❌ Qayta e'lon qilishda xatolik (retry_publish): {e}")
+        await callback.answer(f"⚠️ Xatolik yuz berdi: {str(e)}", show_alert=True)
         
-        admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="list_anime"))
-        
-        error_text = (
-            f"⚠️ <b>Kanalga post chiqarishda xatolik yuz berdi!</b>\n\n"
-            f"<b>Xato matni:</b> <code>{html.escape(str(e))}</code>\n\n"
-            f"💡 <i>Eslatma: Bot kanalda admin ekanligini va post joylash huquqlari ochiqligini tekshiring.</i>"
-        )
-        
-        # 🔴 Xatolik matnini ham rasm bor-yo'qligiga qarab xavfsiz render qilamiz
-        if callback.message.photo or callback.message.document:
-            try:
-                await current_msg.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-            except TelegramBadRequest:
-                await current_msg.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-        else:
-            try:
-                await current_msg.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
-            except TelegramBadRequest:
-                await current_msg.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+    # 🔥 ENGI MUHIM JOYI: Bajarib bo'lingach (yoki xato bo'lsa ham) adminni silliq qilib
+    # boyagi siz ko'rsatgan show_anime_details sahifasiga qaytarib yuboramiz!
+    # Buning uchun sun'iy callback_data ob'ektini yasab uzatamiz:
+    try:
+        fake_callback_data = AnimeDetailCallback(anime_id=anime_id, page=1) # page logikangizga qarab moslang, default 1 yoki dynamic
+        await show_anime_details(callback=callback, callback_data=fake_callback_data, session=session)
+    except Exception as redirect_err:
+        logger.error(f"❌ Show details'ga qaytarishda xato: {redirect_err}")
