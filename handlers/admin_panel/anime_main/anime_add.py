@@ -562,7 +562,7 @@ async def start_add_episode(callback: CallbackQuery, state: FSMContext, session:
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Yuklashni bekor qilish", 
-            callback_data="add_anime_main"
+            callback_data="add_anime"
         )
     )
     
@@ -766,8 +766,8 @@ async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMCont
         builder = InlineKeyboardBuilder()
         builder.row(
             types.InlineKeyboardButton(
-                text="🔙 Admin Panelga qaytish", 
-                callback_data="admin_anime_panel"
+                text="🔙 Orqaga", 
+                callback_data="add_anime"
             )
         )
         
@@ -805,7 +805,7 @@ async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMCont
         logger.error(f"❌ Yakuniy saqlashda jiddiy xatolik: {e}")
         
         error_builder = InlineKeyboardBuilder()
-        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="admin_anime_panel"))
+        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="add_anime"))
         
         error_text = "❌ <b>Bazada xatolik!</b>\n\nQismlarni bazaga yozish muvaffaqiyatsiz tugadi. Aloqani tekshiring."
         try:
@@ -957,7 +957,7 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
         
         # 7. Admin uchun yakuniy hisobot
         admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="admin_anime_panel"))
+        admin_builder.row(InlineKeyboardButton(text="🔙 Orqaga", callback_data="add_anime"))
         
         success_admin_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
