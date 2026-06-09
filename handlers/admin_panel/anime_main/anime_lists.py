@@ -1,5 +1,8 @@
 import logging
 import html
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from database.models import Anime
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
@@ -222,16 +225,27 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
         f"<blockquote expandable>{safe_desc}</blockquote>"  # FIX: Tavsif matnga biriktirildi
     )
 
-    # 4. Tugmalarni yaratish
+    # 4. Tugmalarni yaratish (Yaxshilangan UX 🚀)
     builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Qism qo'shish", callback_data=f"add_ep_{anime_id}")
-    builder.button(text="✏️ Tahrirlash", callback_data=f"edit_anime_{anime_id}")
-    builder.button(text="▶️ Qismlar", callback_data=f"view_eps_{anime_id}")
-    
-    # 🔙 ORQAGA TUGMASI (O'chirish logikasini callback_data orqali ajratib olish uchun maxsus prefiks)
-    # Masalan, back_page_1 ko'rinishida yuboriladi
-    builder.button(text="🔙 Orqaga", callback_data=f"back_page_{current_page}")
-    builder.adjust(2)
+
+    # 1-qator: Eng asosiy harakat (Kanalga e'lon qilish) - To'liq kenglikda, ajralib turishi uchun
+    builder.row(
+        types.InlineKeyboardButton(text="📢 Kanalga e'lon qilish", callback_data=f"publish_retry_anime_{anime_id}")
+    )
+
+    # 2-qator: Kontent bilan ishlash (Qismlarni ko'rish va yangi qism yuklash) - Yonma-yon
+    builder.row(
+        types.InlineKeyboardButton(text="▶️ Qismlarni ko'rish", callback_data=f"view_eps_{anime_id}"),
+        types.InlineKeyboardButton(text="➕ Qism qo'shish", callback_data=f"add_ep_{anime_id}")
+    )
+
+    # 3-qator: Boshqaruv va Navigatsiya (Tahrirlash va Orqaga qaytish) - Yonma-yon
+    builder.row(
+        types.InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"edit_anime_{anime_id}"),
+        types.InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"back_page_{current_page}")
+    )
+
+    # DIQQAT: builder.adjust() ishlatmang! Chunki biz .row() orqali qatorlarni o'zimiz chiroyli qilib taqsimladik.
     markup = builder.as_markup()
 
     # 5. ESKI XABARNI O'CHIRIB YANGI RENDER QILISH (Delete & Send)
@@ -254,6 +268,172 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
             reply_markup=markup
         )
 
-# =====================================================================
-# 🔙 ORQAGA TUGMASI BOSILGANDA RASMNI O'CHIRIB, RO'YXATNI QAYTA CHIQARISH
-# =====================================================================
+
+
+
+
+
+@router.callback_query(F.data.startswith("publish_retry_anime_"))
+async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
+    """ 
+    📢 AnimeRepository standartlariga mos ravishda, bazadagi mavjud animeni 
+    hech qanday yangi ma'lumot yozmasdan @Aninovuz kanaliga qayta e'lon qiladi.
+    """
+    await callback.answer("📢 Kanalga qayta e'lon qilish boshlandi...")
+    
+    # 1. Callback_data ichidan anime_id ni ajratib olish
+    try:
+        anime_id = int(callback.data.rsplit("_", 1)[-1])
+    except (IndexError, ValueError):
+        return await callback.answer("❌ Anime ID aniqlanmadi!", show_alert=True)
+
+    loading_text = "⏳ <code>Anime ma'lumotlari repozitoriydan olinmoqda...</code>"
+    
+    # Vizual yuklanish holatini xavfsiz boshqarish (Rasm yoki Matnligiga qarab)
+    try:
+        current_msg = await callback.message.edit_text(text=loading_text, parse_mode="HTML")
+    except TelegramBadRequest:
+        try:
+            current_msg = await callback.message.edit_caption(caption=loading_text, parse_mode="HTML")
+        except TelegramBadRequest:
+            current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
+
+    try:
+        # 2. SEANS TAYYORLASH (Sizning AnimeRepository logikangiz asosida)
+        # SafeSession proxy yoki oddiy seansligini tekshirib, haqiqiysini ajratib oladi
+        if hasattr(AnimeRepository, "_prepare_session"):
+            real_session = await AnimeRepository._prepare_session(session)
+        else:
+            real_session = session._session if hasattr(session, "_session") else session
+
+        # 3. ANIMENI BAZADAN BARCHA ALOQALARI BILAN YUKLASH (Eager Loading)
+        stmt = (
+            select(Anime)
+            .options(
+                selectinload(Anime.genres),
+                selectinload(Anime.episodes)
+            )
+            .where(Anime.anime_id == anime_id)
+        )
+        result = await real_session.execute(stmt)
+        anime_obj = result.scalar_one_or_none()
+        
+        if not anime_obj:
+            admin_builder = InlineKeyboardBuilder()
+            admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+            await current_msg.edit_text("❌ Xatolik: Ushbu anime bazadan topilmadi.", reply_markup=admin_builder.as_markup())
+            return
+
+        # 4. REPOZITORIY STANDARTI BO'YICHA SERIALIZATSIYA
+        # _serialize_anime orqali ma'lumotlarni xavfsiz dict formatiga o'tkazamiz
+        anime_data = AnimeRepository._serialize_anime(anime_obj)
+
+        # 5. DICT ICHIDAN MA'LUMOTLARNI XAVFSIZ O'QISH
+        title = html.escape(str(anime_data.get("title", "Nomsiz")))
+        year = anime_data.get("year", "Noma'lum")
+        poster_id = anime_data.get("poster_id")
+        languages = html.escape(str(anime_data.get("languages", "O'zbekcha")))
+        
+        # Janrlar ro'yxati (Sizning serializer g.name'larni string list qilib qaytaradi)
+        genres_list = anime_data.get("genres", [])
+        genres_str = ", ".join([html.escape(g) for g in genres_list]) if genres_list else "Kiritilmagan"
+        
+        # Epizodlar soni
+        episodes_list = anime_data.get("episodes", [])
+        episodes_count = len(episodes_list) if isinstance(episodes_list, list) else 0
+        
+        status_str = "🟢 Tugallangan" if anime_data.get("is_completed", False) else "🔴 Davom etmoqda"
+
+        # 6. SHABLON MATNINI SHAKLLANTIRISH
+        base_caption = (
+            f"╔══════════════════╗\n"
+            f"     🎬 <b>{title}</b>\n"
+            f"╚══════════════════╝\n\n"
+            f"📌 <b>Anime haqida ma'lumot:</b>\n"
+            f"╔══════════════════╗\n"
+            f"├ 🆔 Kod: <code>#{anime_id}</code>\n"  
+            f"├ 📅 Yil: <b>{year}</b>\n"
+            f"├ ▶️ Qism: <b>{episodes_count}</b> \n"
+            f"├ 🚦 Status: <b>{status_str}</b>\n"
+            f"├ 🌐 Til: <b>{languages}</b>\n"
+            f"╚══════════════════╝\n"
+            f"╔══════════════════╗\n"
+            f"  🔮 Janrlar: <i>{genres_str}</i>\n"
+            f"╚══════════════════╝\n\n"
+            f"📝 <b>Tavsif:</b>\n"
+        )
+        
+        raw_description = anime_data.get("description", "Tavsif kiritilmagan.")
+        
+        # Telegram Caption (1024 belgi) limitini dinamik hisoblash va qirqish
+        if poster_id:
+            max_description_allowed = 1024 - len(base_caption) - 35
+            if len(raw_description) > max_description_allowed:
+                raw_description = raw_description[:max_description_allowed] + "..."
+                
+        safe_description = html.escape(raw_description)
+        caption = base_caption + f"<blockquote expandable>{safe_description}</blockquote>"
+        
+        # 7. DEEP-LINK TUGMASI (Kanal foydalanuvchilarini botga yo'naltirish uchun)
+        bot_info = await callback.bot.get_me()
+        bot_username = bot_info.username
+        
+        channel_builder = InlineKeyboardBuilder()
+        channel_builder.row(
+            types.InlineKeyboardButton(
+                text="🎬 Animeni ko'rish", 
+                url=f"https://t.me/{bot_username}?start=anime_{anime_id}"
+            )
+        )
+
+        # 📢 8. @Aninovuz KANALIGA CHIQARISH (Rasm mavjudligiga qarab)
+        if poster_id:
+            await callback.bot.send_photo(
+                chat_id="@Aninovuz", 
+                photo=poster_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=channel_builder.as_markup()
+            )
+        else:
+            await callback.bot.send_message(
+                chat_id="@Aninovuz", 
+                text=caption,
+                parse_mode="HTML",
+                reply_markup=channel_builder.as_markup()
+            )
+        
+        # 9. Admin uchun muvaffaqiyat hisoboti interfeysi
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+        
+        success_text = (
+            "╔═══════════ ⛩ ═══════════╗\n"
+            "   📢 KANALGA MUVAFFAQLI JOYLANDI!\n"
+            "╚═══════════ ⛩ ═══════════╝\n\n"
+            f"🎬 <b>Anime:</b> <code>{title}</code>\n"
+            f"🚀 <b>Kanal:</b> @Aninovuz\n\n"
+            "───────────────────────\n"
+            "✅ <i>Baza bilan hech qanday yozish yoki o'chirish amallari bajarilmadi. Faqat repozitoriydan o'qilib, kanalga yo'llandi.</i>"
+        )
+        
+        try:
+            await current_msg.edit_text(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        except TelegramBadRequest:
+            await current_msg.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            
+    except Exception as e:
+        logger.error(f"❌ Qayta e'lon qilishda xatolik (retry_publish): {e}")
+        
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+        
+        error_text = (
+            f"⚠️ <b>Kanalga post chiqarishda xatolik yuz berdi!</b>\n\n"
+            f"<b>Xato matni:</b> <code>{html.escape(str(e))}</code>\n\n"
+            f"💡 <i>Eslatma: Bot kanalda admin ekanligini va post joylash huquqlari ochiqligini tekshiring.</i>"
+        )
+        try:
+            await current_msg.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        except TelegramBadRequest:
+            await current_msg.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
