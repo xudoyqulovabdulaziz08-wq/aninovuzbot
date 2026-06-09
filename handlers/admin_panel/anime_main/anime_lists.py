@@ -438,7 +438,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         logger.error(f"❌ Qayta e'lon qilishda xatolik (retry_publish): {e}")
         
         admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_anime_panel"))
+        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panel", callback_data="list_anime"))
         
         error_text = (
             f"⚠️ <b>Kanalga post chiqarishda xatolik yuz berdi!</b>\n\n"
