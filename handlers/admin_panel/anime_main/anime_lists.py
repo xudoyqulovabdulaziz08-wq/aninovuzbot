@@ -276,7 +276,8 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
 
 
 
-
+#=========================================================================
+    
 
 @router.callback_query(F.data.startswith("publish_retry_anime_"))
 async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
@@ -373,7 +374,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
             )
         )
 
-        # 📢 8. @Aninovuz KANALIGA CHIQARISH
+        # 📢 8. @Aninovuz KANALIGA CHIQARISH (Rasm mavjudligiga qarab)
         if poster_id:
             await callback.bot.send_photo(
                 chat_id="@Aninovuz", 
@@ -390,18 +391,59 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
                 reply_markup=channel_builder.as_markup()
             )
         
-        # 🔥 SUCCESS CALLBACK: Kanalga ketdi! Endi admin ekranida yashil bildirishnoma ko'rsatamiz
-        await callback.answer("✅ Kanalga muvaffaqiyatli joylandi!", show_alert=True)
+        # ==================== 🔥 MANASHU JOYI O'ZGARDI 🔥 ====================
         
+        # 1. Oldin admin panelga qaytish tugmasini yasaymiz
+        admin_builder = InlineKeyboardBuilder()
+        
+        # O'sha animening o'ziga qaytish tugmasi (ixtiyoriy, UX uchun zo'r yechim)
+        admin_builder.row(types.InlineKeyboardButton(text="🎬 Anime sahifasiga qaytish", callback_data=f"anime_detail_{anime_id}"))
+
+        success_text = (
+            "╔═══════════ ⛩ ═══════════╗\n"
+            "   📢 KANALGA MUVAFFAQLI JOYLANDI!\n"
+            "╚═══════════ ⛩ ═══════════╝\n\n"
+            f"🎬 <b>Anime:</b> <code>{title}</code>\n"
+            f"🚀 <b>Kanal:</b> @Aninovuz\n\n"
+            "───────────────────────\n"
+            "✅ <i>Baza bilan hech qanday yozish amallari bajarilmadi. Faqat repozitoriydan o'qilib, kanalga yo'llandi.</i>"
+        )
+
+        # 2. Xabarni o'chirmasdan, uning o'zini muvaffaqiyat matniga tahrirlaymiz!
+        if callback.message.photo or callback.message.document:
+            try:
+                await callback.message.edit_caption(caption=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                await callback.message.answer(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        else:
+            try:
+                await callback.message.edit_text(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                await callback.message.answer(text=success_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+
+        # 3. Va nihoyat, xabar tahrirlanib bo'lingach, ALERT ni chiqaramiz! 
+        # Endi xabar o'chib ketmagani uchun bu oyna ekranda muhrlanib turadi standard bo'yicha.
+        await callback.answer("🎉 Muvaffaqiyatli: Anime kanalga e'lon qilindi!", show_alert=True)
+        return  # Funksiyani shu yerda tugatamiz, show_anime_details'ga redirect shart emas!
+
     except Exception as e:
         logger.error(f"❌ Qayta e'lon qilishda xatolik (retry_publish): {e}")
+        # Xatolik yuz berganda ham alert chiqaramiz
         await callback.answer(f"⚠️ Xatolik yuz berdi: {str(e)}", show_alert=True)
         
-    # 🔥 ENGI MUHIM JOYI: Bajarib bo'lingach (yoki xato bo'lsa ham) adminni silliq qilib
-    # boyagi siz ko'rsatgan show_anime_details sahifasiga qaytarib yuboramiz!
-    # Buning uchun sun'iy callback_data ob'ektini yasab uzatamiz:
-    try:
-        fake_callback_data = AnimeDetailCallback(anime_id=anime_id, page=1) # page logikangizga qarab moslang, default 1 yoki dynamic
-        await show_anime_details(callback=callback, callback_data=fake_callback_data, session=session)
-    except Exception as redirect_err:
-        logger.error(f"❌ Show details'ga qaytarishda xato: {redirect_err}")
+        # Xatolik interfeysini ko'rsatish
+        admin_builder = InlineKeyboardBuilder()
+        admin_builder.row(types.InlineKeyboardButton(text="🎬 Anime sahifasiga qaytish", callback_data=f"anime_detail_{anime_id}"))
+        
+        error_text = f"⚠️ <b>Kanalga post chiqarishda xatolik!</b>\n\n<code>{html.escape(str(e))}</code>"
+        
+        if callback.message.photo or callback.message.document:
+            try:
+                await callback.message.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                await callback.message.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+        else:
+            try:
+                await callback.message.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+            except TelegramBadRequest:
+                await callback.message.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
