@@ -1,4 +1,5 @@
 import logging
+import html
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -44,15 +45,15 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
     "╚═════════ ⛩ ═════════╝\n\n"
     
     # 1-Blok: Foydalanuvchi statusi va IDsi
-        f"<blockquote expandable>👤 <b>Sizning profilingiz:</b>\n"
-        f"├ Daraja: {status_info}\n"
-        f"└ Maxfiy ID: <code>{user_id}</code></blockquote>\n\n"
+        f"👤 <b>SIZNING PROFILINGIZ:</b>\n"
+        f"<blockquote expandable><b>STATUS</b>: {status_info}\n"
+        f"<b>ID</b>: <code>{user_id}</code></blockquote>\n"
     
         # 2-Blok: Premium afzalliklari
-        f"👑 <b>VIP Premium afzalliklari:</b>\n"
-        f"<blockquote expandable>🚀 <code>Cheklovlarsiz qidiruv</code> - Hech qanday taymautsiz tezkor qidiruv tizimi.\n"
-        f"🚫 <code>Reklamasiz muhit</code> - Botdan mutlaqo reklamasiz va toza foydalanish.\n"
-        f"✨ <code>Eksklyuziv status</code> - Profilingizda maxsus VIP ramka va nishonlar.</blockquote>\n\n"
+        f"👑 <b>VIP  AFZALLIKLARI:</b>\n"
+        f"<blockquote expandable>🚀 <b>Cheklovlarsiz qidiruv</b> - Hech qanday taymautsiz tezkor qidiruv tizimi. </blockquote>\n"
+        f"<blockquote expandable>🚫 <b>Reklamasiz muhit</b> - Botdan mutlaqo reklamasiz va toza foydalanish.</blockquote>\n"
+        f"<blockquote expandable>✨ <b>Eksklyuziv status</b> - Profilingizda maxsus VIP ramka va nishonlar.</blockquote>\n"
     
         # 3-Blok: Tarifikatsiya va bonus tizimi
         f"⚖️ <b>Bonus almashinuvi:</b>\n"
@@ -98,17 +99,28 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     }
     
     text = (
-        "╔═════════ ⛩ ═════════╗\n"
-        "   💳 <b>VIP TARIFLARI</b>\n"
-        "╚═════════ ⛩ ═════════╝\n\n"
-        f"Salom, <b>{callback.from_user.full_name}</b>!\n"
-        f"Sizning Maxfiy 🆔: <code>{user_id}</code>\n\n"
-        f"O'zingizga mos keladigan tarifni tanlang:\n\n"
-        f"💵 <b>Oltin tangalar (Narxlar):</b>\n"
-        f"🔹 <b>1 oylik:</b> {VIP_PRICES['1m']} so'm\n"
-        f"🔹 <b>3 oylik:</b> {VIP_PRICES['3m']} so'm\n"
-        f"🔹 <b>6 oylik:</b> {VIP_PRICES['6m']} so'm\n"
-        f"🔹 <b>1 yillik:</b> {VIP_PRICES['12m']} so'm\n\n"
+    "╔═════════ ⛩ ═════════╗\n"
+    "   💳 <b>VIP TARIFLARI</b>\n"
+    "╚═════════ ⛩ ═════════╝\n\n"
+    
+        f"Salom, <b>{html.escape(callback.from_user.full_name)}</b>! 👋\n\n"
+    
+        # 1-Blok: Foydalanuvchi hisobi ma'lumotlari
+        f"👤 <b>Abonent ma'lumotlari:</b>\n"
+        f"<blockquote expandable>└ Maxfiy 🆔: <code>{user_id}</code>\n"
+        f"<i>Sotib olish paytida ushbu ID hisobga olinadi.</i></blockquote>\n\n"
+    
+        # 2-Blok: Tariflar va Narxlar (Modulli quti)
+        f"💵 <b>Mavjud tariflar va narxlar:</b>\n"
+        f"<blockquote expandable>"
+        f"🔹 1 oylik ➔ <b>{VIP_PRICES['1m']:,} so'm</b>\n"
+        f"🔹 3 oylik ➔ <b>{VIP_PRICES['3m']:,} so'm</b>\n"
+        f"🔹 6 oylik ➔ <b>{VIP_PRICES['6m']:,} so'm</b>\n"
+        f"🔹 1 yillik ➔ <b>{VIP_PRICES['12m']:,} so'm</b>"
+        f"</blockquote>\n\n"
+    
+        f"⚡️ <i>Har bir tarif barcha premium afzalliklarni cheklovsiz faollashtiradi.</i>\n"
+        f"═════════ ⛩ ═════════\n"
         f"👇 <i>Sotib olish jarayonini boshlash uchun tarifni tanlang:</i>"
     )
     
