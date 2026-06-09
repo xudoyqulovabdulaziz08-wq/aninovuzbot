@@ -92,10 +92,10 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     
     VIP_PRICES = {
-        "1m": "20,000",
-        "3m": "55,000",
-        "6m": "100,000",
-        "12m": "180,000"
+        "1m": "20000",
+        "3m": "55000",
+        "6m": "100000",
+        "12m": "180000"
     }
     
     text = (
