@@ -41,11 +41,11 @@ def get_guide_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMa
         "Eng kuchli ninjalar va TOP foydalanuvchilar ro'yxati.\n\n"
         "💎 <b>Premium (VIP):</b>\n"
         "Cheklovsiz kirish, reklamalarsiz muhit va maxsus imtiyozlar.\n\n"
-        "👥 <b>Nakama (Referal):</b>\n"
+        "👥 <b>Referal:</b>\n"
         "Do'stlaringizni taklif qilib, har bir faol do'stingiz uchun energiya yig'ing.\n\n"
         "═════════ ⛩ ═════════\n"
         "📩 <b>Yordam kerakmi?</b>\n"
-        "Savollar yoki takliflar bo'lsa, Kage (Admin) ga murojaat qiling:"
+        "Savollar yoki takliflar bo'lsa, Admin ga murojaat qiling:"
     )
 
     admin_username = "Khudoyqulov_pg"
@@ -54,7 +54,7 @@ def get_guide_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMa
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
-            types.InlineKeyboardButton(text="📩 Kage (Admin) bilan bog'lanish", url=admin_url)
+            types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url=admin_url)
         ]
     ])
     

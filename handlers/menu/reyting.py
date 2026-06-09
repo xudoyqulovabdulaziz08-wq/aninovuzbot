@@ -28,10 +28,9 @@ async def ranked_menu(event: types.Message | types.CallbackQuery, state: FSMCont
     
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   🌟 <b>REYTING CHODIRI</b> 🌟\n"
+        "   🌟 <b>REYTING BO'LIMI</b> 🌟\n"
         "╚═════════ ⛩ ═════════╝\n\n"
-        "Buyuk ninjalar va eng sara afsonalar olamiga xush kelibsiz! "
-        "Kim eng kuchli ekanini bilish vaqti keldi: 🔍\n\n"
+        
         "🎬 <b>Anime Shon-sharafi:</b>\n"
         "└ <i>Eng ko'p ko'rilgan va ommabop animelar TOP ro'yxati</i>\n\n"
         "🏆 <b>Top Shinobilar:</b>\n"
@@ -68,8 +67,8 @@ async def anime_ranked(callback: types.CallbackQuery, state: FSMContext):
         "   🎬 <b>ANIME REYTINGI</b> 🎬\n"
         "╚═════════ ⛩ ═════════╝\n\n"
         "Afsuski, bu maxfiy varoq hali to'liq ochilmadi! 📜\n\n"
-        "❗️ Hozircha eng ommabop animelar reytingini ko'rish jutsusi tayyor emas. "
-        "Tez orada klan muhandislari uni yakunlashadi. Yangilanishlarni kuting, Nakama! 🌸"
+        "❗️ Hozircha eng ommabop animelar reytingini ko'rish  tayyor emas. "
+        "Tez orada klan muhandislari uni yakunlashadi. Yangilanishlarni kuting ! 🌸"
     )
     
     builder = InlineKeyboardBuilder()
@@ -100,11 +99,11 @@ async def user_ranked(callback: types.CallbackQuery, state: FSMContext):
 
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   🏆 <b>SHINOBI REYTINGI</b> 🏆\n"
+        "   🏆 <b>USER REYTINGI</b> 🏆\n"
         "╚═════════ ⛩ ═════════╝\n\n"
-        "Eng kuchli ninjalar ro'yxati hali shakllantirilmoqda! ⚔️\n\n"
+        
         "❗️ Hozircha yuqori ballga ega faol foydalanuvchilar reytingini ko'rish imkoniyati mavjud emas. "
-        "Buyuk ninja urushiga tayyorgarlik ko'rilmoqda. O'z energiyangizni yig'ishda davom eting! 🌸"
+        " O'z energiyangizni yig'ishda davom eting! 🌸"
     )
     
     builder = InlineKeyboardBuilder()
@@ -119,4 +118,4 @@ async def user_ranked(callback: types.CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"❌ User ranked kutilmagan xatosi: {e}")
     finally:
-        await callback.answer("🏆 Shinobilar reytingi tez orada qo'shiladi!")  
+        await callback.answer("🏆 User reytingi tez orada qo'shiladi!")  

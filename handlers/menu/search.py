@@ -33,9 +33,8 @@ def get_search_menu_content(user_id: int) -> tuple[str, types.InlineKeyboardMark
 
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   🔍 <b>QIDIRUV HUDUDI</b> 🔍\n"
+        "   🔍 <b>QIDIRUV BO'LIMI</b> 🔍\n"
         "╚═════════ ⛩ ═════════╝\n\n"
-        "Barcha yashirin anime va qahramonlarni shu yerdan topishingiz mumkin. "
         "Qidiruv turini tanlang, o'z hududingizni kengaytiring! 🌌\n\n"
         "📝 <b>Nomi bo'yicha:</b> <i>Anime yoki qahramon ismini yozing</i>\n"
         "🆔 <b>Maxfiy kod (ID):</b> <i>Aniqlik bilan topish uchun</i>\n"
@@ -91,10 +90,10 @@ async def search_by_name(callback: types.CallbackQuery, state: FSMContext):
     
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   📝 <b>ISMLAR KITOBOYI</b>\n"
+        "   📝 <b>NOMI BO'YICHA QIDIRUV</b>\n"
         "╚═════════ ⛩ ═════════╝\n\n"
         "Siz qidirayotgan animening to'liq yoki qisqacha nomini kiriting. "
-        "<i>Masalan: Jujutsu Kaisen, Naruto, Toji...</i> ✍️"
+        "<i>Masalan: Jujutsu Kaisen, Naruto</i> ✍️"
     )
 
     try:
@@ -103,7 +102,7 @@ async def search_by_name(callback: types.CallbackQuery, state: FSMContext):
         if "message is not modified" not in str(e).lower():
             logger.error(f"❌ Nomi bo'yicha qidiruv xatoligi: {e}")
     finally:
-        await callback.answer("Nomi bo'yicha qidiruv hududi faollashdi ⚡️")
+        await callback.answer("Nomi bo'yicha qidiruv  faollashdi ⚡️")
 
 
 # ========================================================================
@@ -118,7 +117,7 @@ async def search_by_id(callback: types.CallbackQuery, state: FSMContext):
 
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   🆔 <b>MAXFIY KOD (ID)</b>\n"
+        "   🆔 <b> KOD (ID)</b>\n"
         "╚═════════ ⛩ ═════════╝\n\n"
         "Aniqlik - eng yaxshi qurol! 🎯\n"
         "Iltimos, qidirilayotgan anime yoki seriyaning maxsus ID raqamini kiriting:"

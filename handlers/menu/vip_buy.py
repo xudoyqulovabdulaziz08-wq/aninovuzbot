@@ -32,20 +32,20 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
     if int(user_id) == int(CREATOR_ID):
         status_info = "👑 <b>KAGE (Yaratuvchi)</b>"
     elif user_status == "admin":
-        status_info = "🛡 <b>JONIN (Admin)</b>"
+        status_info = "🛡 <b>Admin</b>"
     elif is_vip:
-        status_info = "💎 <b>ANBU (VIP Shinobi)</b>"
+        status_info = "💎 <b>VIP </b>"
     else:
-        status_info = "👤 <b>GENIN (Oddiy foydalanuvchi)</b>"
+        status_info = "👤 <b>Foydalanuvchi</b>"
     
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   💎 <b>PREMIUM CHODIRI</b> 💎\n"
+        "   💎 <b>VIP OLISH</b> 💎\n"
         "╚═════════ ⛩ ═════════╝\n\n"
         f"Sizning darajangiz: {status_info}\n"
-        f"🔋 <b>Energiya (Ball):</b> <code>{points} ball</code>\n\n"
-        "✨ <b>VIP (Premium) afzalliklari:</b>\n"
-        "🚀 <b>Shunshin tezligi:</b> Cheklovlarsiz qidiruv\n"
+        f"🔋 <b>Ball:</b> <code>{points} ball</code>\n\n"
+        "✨ <b>VIP Premium afzalliklari:</b>\n"
+        "🚀 <b>Qidiruv tezligi:</b> Cheklovlarsiz qidiruv\n"
         "🚫 <b>Sof ko'zlar:</b> Reklamalarsiz toza muhit\n"
         "👑 <b>Maxsus daraja:</b> VIP profili va ramkasi\n\n"
         "🏷 <b>Bonus almashinuvi:</b> <code>100 energiya = 30 kun VIP</code>\n"
@@ -89,11 +89,11 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   💳 <b>VIP SHARTNOMALARI</b>\n"
+        "   💳 <b>VIP TARIFLARI</b>\n"
         "╚═════════ ⛩ ═════════╝\n\n"
         f"Salom, <b>{callback.from_user.full_name}</b>!\n"
         f"Sizning Maxfiy 🆔: <code>{user_id}</code>\n\n"
-        f"O'zingizga mos keladigan shartnomani (tarifni) tanlang:\n\n"
+        f"O'zingizga mos keladigan tarifni tanlang:\n\n"
         f"💵 <b>Oltin tangalar (Narxlar):</b>\n"
         f"🔹 <b>1 oylik:</b> {VIP_PRICES['1m']} so'm\n"
         f"🔹 <b>3 oylik:</b> {VIP_PRICES['3m']} so'm\n"
@@ -142,8 +142,8 @@ async def vip_tariff_selection_handler(callback: types.CallbackQuery):
     )
     
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="💬 Kage (Admin) bilan bog'lanish", url=admin_url))
-    builder.row(types.InlineKeyboardButton(text="⛩ Ortga qaytish", callback_data="buy_vip_med"))
+    builder.row(types.InlineKeyboardButton(text="Admin bilan bog'lanish", url=admin_url))
+    builder.row(types.InlineKeyboardButton(text="⬅️ Ortga qaytish", callback_data="buy_vip_med"))
     
     try:
         await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
@@ -162,11 +162,11 @@ async def buy_vip_bonus_handler(callback: types.CallbackQuery):
     
     text = (
         "╔═════════ ⛩ ═════════╗\n"
-        "   🎁 <b>ENERGIYANI ALMASHTIRISH</b>\n"
+        "   🎁 <b>BALL ALMASHTIRISH</b>\n"
         "╚═════════ ⛩ ═════════╝\n\n"
-        "Bu sehrli jutsu ustida hali ishlanmoqda! ⏳\n\n"
-        "❗️ Hozircha to'plagan energiyangizni (ballarni) VIP darajaga almashtirish imkoniyati yopiq. "
-        "Klan muhandislari bu tizimni tez orada yakunlashadi. Yangilanishlarni kuting! 🌸"
+        "Bu bo'lim ustida hali ishlanmoqda! ⏳\n\n"
+        "❗️ Hozircha to'plagan ballarni VIP darajaga almashtirish imkoniyati yopiq. "
+        "Bot muhandislari bu tizimni tez orada yakunlashadi. Yangilanishlarni kuting! 🌸"
     )
     
     builder = InlineKeyboardBuilder()

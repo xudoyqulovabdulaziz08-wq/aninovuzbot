@@ -31,17 +31,17 @@ def get_adv_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMark
         "   📢  <b>HAMKORLIK & REKLAMA</b> 📢\n"
         "╚═════════ ⛩ ═════════╝\n\n"
         "O'z loyihangiz, botingiz yoki kanalingizni bizning ulkan "
-        "<b>Nakama (Auditoriyamiz)</b>ga namoyish etishni xohlaysizmi? Biz sizga yordam beramiz! 🚀\n\n"
+        "<b>Auditoriyamiz</b>ga namoyish etishni xohlaysizmi? Biz sizga yordam beramiz! 🚀\n\n"
         "📜 <b>Reklama joylash tartibi:</b>\n"
         "🔹 Tayyor ijodiy post <i>(Matn + Rasm/Video)</i>\n"
         "🔹 To'g'ri sozlangan yashirin muhrlar <i>(Linklar)</i>\n"
         "🔹 Klanlararo kelishilgan vaqt va reja\n\n"
         "✨ <b>Nima uchun aynan biz?</b>\n"
-        "✅ Doimiy faol va tirik ninjalar jamoasi\n"
+        "✅ Doimiy faol va tirik foydalanuvchilar jamoasi\n"
         "✅ Hamyonbop oltinlar <i>(Narxlar)</i>\n"
-        "✅ Joylashtirish <b>Shunshin no Jutsu</b> tezligida ⚡️\n\n"
+        "✅ Joylashtirish  tezligida ⚡️\n\n"
         "═════════ ⛩ ═════════\n"
-        "👨‍💼 <b>Kage (Admin)</b> sizga barcha maxfiy ma'lumotlarni taqdim etadi:"
+        "👨‍💼 <b>Admin</b> sizga barcha maxfiy ma'lumotlarni taqdim etadi:"
     )
 
     admin_username = "Khudoyqulov_pg"
@@ -50,7 +50,7 @@ def get_adv_content(user: Optional[dict]) -> Tuple[str, types.InlineKeyboardMark
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
-            types.InlineKeyboardButton(text="📩 Kage bilan bog'lanish", url=admin_url)
+            types.InlineKeyboardButton(text="📩 Admin bilan bog'lanish", url=admin_url)
         ]
         
     ])

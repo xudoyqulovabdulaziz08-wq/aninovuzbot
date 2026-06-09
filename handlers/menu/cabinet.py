@@ -36,13 +36,13 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], sta
     is_vip = user.get("is_vip", False)
 
     if str(user_id) == str(CREATOR_ID):
-        status_label = "👑 KAMI (Yaratuvchi)"
+        status_label = "👑 Yaratuvchi"
     elif raw_status in ["admin", "owner"]:
-        status_label = "🛡 HOKAGE (Admin)"
+        status_label = "🛡 Admin"
     elif is_vip:
-        status_label = "💎 VIP SENSEI"
+        status_label = "💎 VIP "
     else:
-        status_label = "🥷 GENIN (Foydalanuvchi)"
+        status_label = "🥷 Foydalanuvchi"
 
     # 2. TIMEZONE & VIP LOGIC (FIXED: Timestamp emas, ISO String)
     uzb_tz = pytz.timezone('Asia/Tashkent')
@@ -76,8 +76,8 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], sta
         "╚═════════ ⛩ ═════════╝\n\n"
         f"🪪 <b>ID raqam:</b> <code>{user_id}</code>\n"
         f"💠 <b>Daraja:</b> <b>{status_label}</b>\n"
-        f"✨ <b>Energiya:</b> <b>{points}</b> <i>(Ballar)</i>\n"
-        f"👥 <b>Nakama:</b> <b>{referrals} ta</b> <i>(Takliflar)</i>\n"
+        f"✨ <b>Ball:</b> <b>{points}</b> <i>(Ballar)</i>\n"
+        f"👥 <b>Referal:</b> <b>{referrals} ta</b> <i>(Takliflar)</i>\n"
         f"💎 <b>Premium:</b> <b>{vip_status}</b>\n\n"
         "🌸 <i>O'zingiz yoqtirgan animelarni biz bilan kashf eting!</i>"
     )
