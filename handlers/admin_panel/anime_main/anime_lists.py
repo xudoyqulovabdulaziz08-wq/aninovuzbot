@@ -254,25 +254,24 @@ async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetail
     # DIQQAT: builder.adjust() ishlatmang! Chunki biz .row() orqali qatorlarni o'zimiz chiroyli qilib taqsimladik.
     markup = builder.as_markup()
 
-    # 5. ESKI XABARNI O'CHIRIB YANGI RENDER QILISH (Delete & Send)
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest:
-        pass  # Agar xabar allaqachon o'chirilgan bo'lsa, xatolikni o'tkazib yuboramiz
-
+    
+    # 5. SILIQ RENDERING (Delete & Send o'rniga Edit)
     if poster_id:
-        await callback.message.answer_photo(
-            photo=poster_id, 
-            caption=text, 
-            parse_mode="HTML", 
-            reply_markup=markup
-        )
+        try:
+            # Agar rasm o'zgarmagan bo'lsa, shunchaki caption tahrirlanadi
+            await callback.message.edit_caption(caption=text, parse_mode="HTML", reply_markup=markup)
+        except TelegramBadRequest:
+            # Agar eski xabarda rasm bo'lmasa yoki o'chirib tashlangan bo'lsa, fallback
+            try: await callback.message.delete()
+            except Exception: pass
+            await callback.message.answer_photo(photo=poster_id, caption=text, parse_mode="HTML", reply_markup=markup)
     else:
-        await callback.message.answer(
-            text=text, 
-            parse_mode="HTML", 
-            reply_markup=markup
-        )
+        try:
+            await callback.message.edit_text(text=text, parse_mode="HTML", reply_markup=markup)
+        except TelegramBadRequest:
+            try: await callback.message.delete()
+            except Exception: pass
+            await callback.message.answer(text=text, parse_mode="HTML", reply_markup=markup)
 
 
 
@@ -491,7 +490,7 @@ async def view_episodes(callback: CallbackQuery, session: Any):
             builder.row(types.InlineKeyboardButton(text="➕ Ilk qismni qo'shish", callback_data=f"add_ep_{anime_id}"))
             try:
                 # Agar CallbackData ishlatsangiz: AnimeDetailCallback(anime_id=anime_id, page=1).pack()
-                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"anime_detail_{anime_id}"))
+                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=AnimeDetailCallback(anime_id=anime_id, page=current_page).pack()))
             except Exception:
                 builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"back_page_1"))
                 
