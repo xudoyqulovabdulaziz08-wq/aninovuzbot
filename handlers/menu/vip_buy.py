@@ -39,18 +39,28 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
         status_info = "👤 <b>Foydalanuvchi</b>"
     
     text = (
-        "╔═════════ ⛩ ═════════╗\n"
-        "   💎 <b>VIP OLISH</b> 💎\n"
-        "╚═════════ ⛩ ═════════╝\n\n"
-        f"Sizning darajangiz: {status_info}\n"
-        f"🔋 <b>Ball:</b> <code>{points} ball</code>\n\n"
-        "✨ <b>VIP Premium afzalliklari:</b>\n"
-        "🚀 <b>Qidiruv tezligi:</b> Cheklovlarsiz qidiruv\n"
-        "🚫 <b>Sof ko'zlar:</b> Reklamalarsiz toza muhit\n"
-        "👑 <b>Maxsus daraja:</b> VIP profili va ramkasi\n\n"
-        "🏷 <b>Bonus almashinuvi:</b> <code>100 energiya = 30 kun VIP</code>\n"
-        "═════════ ⛩ ═════════\n"
-        "👇 <i>O'z darajangizni oshirish uchun quyidagi tugmalardan birini tanlang:</i>"
+    "╔═════════ ⛩ ═════════╗\n"
+    "   💎 <b>VIP OLISH</b> 💎\n"
+    "╚═════════ ⛩ ═════════╝\n\n"
+    
+    # 1-Blok: Foydalanuvchi statusi va IDsi
+        f"<blockquote expandable>👤 <b>Sizning profilingiz:</b>\n"
+        f"├ Daraja: {status_info}\n"
+        f"└ Maxfiy ID: <code>{user_id}</code></blockquote>\n\n"
+    
+        # 2-Blok: Premium afzalliklari
+        f"👑 <b>VIP Premium afzalliklari:</b>\n"
+        f"<blockquote expandable>🚀 <code>Cheklovlarsiz qidiruv</code> - Hech qanday taymautsiz tezkor qidiruv tizimi.\n"
+        f"🚫 <code>Reklamasiz muhit</code> - Botdan mutlaqo reklamasiz va toza foydalanish.\n"
+        f"✨ <code>Eksklyuziv status</code> - Profilingizda maxsus VIP ramka va nishonlar.</blockquote>\n\n"
+    
+        # 3-Blok: Tarifikatsiya va bonus tizimi
+        f"⚖️ <b>Bonus almashinuvi:</b>\n"
+        f"<blockquote expandable>🏷 <code>100 energiya = 30 kun VIP</code>\n\n"
+        f"<i>To'plagan energiyalaringizni darhol Premium obunaga almashtirishingiz mumkin!</i></blockquote>\n"
+    
+        f"═════════ ⛩ ═════════\n"
+        f"👇 <i>O'z darajangizni oshirish uchun quyidagi tugmalardan birini tanlang:</i>"
     )
     
     kb = vip_buy_kb(is_vip=is_vip)
