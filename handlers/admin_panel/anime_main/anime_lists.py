@@ -396,8 +396,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         # 1. Oldin admin panelga qaytish tugmasini yasaymiz
         admin_builder = InlineKeyboardBuilder()
         
-        # O'sha animening o'ziga qaytish tugmasi (ixtiyoriy, UX uchun zo'r yechim)
-        admin_builder.row(types.InlineKeyboardButton(text="🎬 Anime sahifasiga qaytish", callback_data=f"anime_detail_{anime_id}"))
+        
 
         success_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
