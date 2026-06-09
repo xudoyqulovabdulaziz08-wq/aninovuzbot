@@ -402,8 +402,8 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
             "╔═══════════ ⛩ ═══════════╗\n"
             "   📢 KANALGA MUVAFFAQLI JOYLANDI!\n"
             "╚═══════════ ⛩ ═══════════╝\n\n"
-            f"🎬 <b>Anime:</b> <code>{title}</code>\n"
-            f"🚀 <b>Kanal:</b> @Aninovuz\n\n"
+            f"<blockquote expandable>🎬 <b>Anime:</b> <code>{title}</code></blockquote>\n"
+            f"<blockquote expandable>🚀 <b>Kanal:</b> @Aninovuz</blockquote>\n\n"
             "───────────────────────\n"
             "✅ <i>Baza bilan hech qanday yozish amallari bajarilmadi. Faqat repozitoriydan o'qilib, kanalga yo'llandi.</i>"
         )
@@ -560,9 +560,9 @@ async def view_episodes(callback: CallbackQuery, session: Any):
             f"╔══════════════════╗\n"
             f"     🎬 <b>Qismlar ro'yxati</b>\n"
             f"╚══════════════════╝\n\n"
-            f"📖 <b>Anime:</b> <code>{title}</code>\n"
-            f"📊 <b>Jami qismlar:</b> <code>{total_episodes} ta</code>\n\n"
-            f"💡 <i>Qism kontentini ko'rish yoki tahrirlash uchun quyidagi raqamlardan birini tanlang:</i>"
+            f"<blockquote expandable>📖 <b>Anime:</b> <code>{title}</code></blockquote>\n"
+            f"<blockquote expandable>📊 <b>Jami qismlar:</b> <code>{total_episodes} ta</code></blockquote>\n\n"
+            f"<blockquote expandable>💡 <i>Qism kontentini ko'rish yoki tahrirlash uchun quyidagi raqamlardan birini tanlang:</i>"
         )
 
         # 6. SILIQ RENDERING (Xabar turi tekshirilib, edit qilinadi)
