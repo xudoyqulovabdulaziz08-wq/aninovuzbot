@@ -28,7 +28,7 @@ class AnimePageCallback(CallbackData, prefix="anime_page"):
 
 class AnimeDetailCallback(CallbackData, prefix="anime_detail"):
     anime_id: int
-    page: int
+    page: int = 1  # Orqaga qaytishda sahifa raqamini saqlash uchun default qiymat
 
 
 # =====================================================================
@@ -169,7 +169,7 @@ async def list_anime(
 
 
 @router.callback_query(AnimeDetailCallback.filter())
-@router.callback_query(F.data.startswith("anime_detail_"))
+
 async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetailCallback, session: Any):
     # Agar callback javobi yuqorida berilmagan bo'lsa, xavfsizlik uchun javob beramiz
     try:
@@ -396,7 +396,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         
         # 1. Oldin admin panelga qaytish tugmasini yasaymiz
         admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(types.InlineKeyboardButton(text="🔙 Animega qatish", callback_data=f"anime_detail_{anime_id}"))
+        admin_builder.row(types.InlineKeyboardButton(text="🔙 Animega qatish", callback_data=AnimeDetailCallback(anime_id=anime_id).pack()))
         
 
         success_text = (
@@ -433,7 +433,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         
         # Xatolik interfeysini ko'rsatish
         admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(types.InlineKeyboardButton(text="🎬 Anime sahifasiga qaytish", callback_data=f"anime_detail_{anime_id}"))
+        admin_builder.row(types.InlineKeyboardButton(text="🎬 Anime sahifasiga qaytish", callback_data=AnimeDetailCallback(anime_id=anime_id).pack()))
         
         error_text = f"⚠️ <b>Kanalga post chiqarishda xatolik!</b>\n\n<code>{html.escape(str(e))}</code>"
         
@@ -493,7 +493,7 @@ async def view_episodes(callback: CallbackQuery, session: Any):
             builder.row(types.InlineKeyboardButton(text="➕ Ilk qismni qo'shish", callback_data=f"add_ep_{anime_id}"))
             try:
                 # Agar CallbackData ishlatsangiz: AnimeDetailCallback(anime_id=anime_id, page=1).pack()
-                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"anime_detail_{anime_id}"))
+                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=AnimeDetailCallback(anime_id=anime_id).pack()))
             except Exception:
                 builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"back_page_1"))
                 
@@ -553,7 +553,7 @@ async def view_episodes(callback: CallbackQuery, session: Any):
 
         # 3-Bolim: Boshqaruv elementlari (Har doim ko'rinib turadigan pastki qator)
         builder.row(
-            types.InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"anime_detail_{anime_id}"),
+            types.InlineKeyboardButton(text="🔙 Orqaga", callback_data=AnimeDetailCallback(anime_id=anime_id).pack()),
             types.InlineKeyboardButton(text="➕ Qism qo'shish", callback_data=f"add_ep_{anime_id}")
         )
 
