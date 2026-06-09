@@ -395,7 +395,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         
         # 1. Oldin admin panelga qaytish tugmasini yasaymiz
         admin_builder = InlineKeyboardBuilder()
-        
+        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="admin_anime_panel"))
         
 
         success_text = (
@@ -446,3 +446,137 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
                 await callback.message.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
             except TelegramBadRequest:
                 await callback.message.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+
+
+
+
+
+
+
+
+
+
+@router.callback_query(F.data.startswith("view_eps_"))
+async def view_episodes(callback: CallbackQuery, session: Any):
+    """ 
+    ▶️ AnimeRepository standartlariga mos va Valkey keshidan foydalanuvchi,
+    qismlarni 24 tadan chiroyli Grid (inline tugma) shaklida sahifalovchi handler.
+    Callback formati: view_eps_{anime_id} yoki view_eps_{anime_id}_{page}
+    """
+    # 1. Callback_data ichidan anime_id va page (sahifa) raqamini ajratib olish
+    try:
+        parts = callback.data.split("_")
+        anime_id = int(parts[2])
+        current_page = int(parts[3]) if len(parts) > 3 else 1
+    except (IndexError, ValueError):
+        return await callback.answer("❌ Ma'lumotlarni o'qishda xatolik!", show_alert=True)
+
+    await callback.answer("⏳ Qismlar yuklanmoqda...", show_alert=False)
+
+    try:
+        # 2. REPOZITORIY ORQALI MA'LUMOTNI OLISH (Kesh va N+1 safe)
+        # To'g'ridan-to'g'ri repozitoriy metodini chaqiramiz, u o'zi keshni va seansni boshqaradi
+        anime_data = await AnimeRepository.get_anime_by_id(session=session, anime_id=anime_id)
+        
+        if not anime_data:
+            return await callback.answer("❌ Xatolik: Ushbu anime topilmadi.", show_alert=True)
+
+        # Repozitoriy serializeriga ko'ra epizodlar dict ro'yxati hisoblanadi
+        episodes = anime_data.get("episodes", [])
+        
+        if not episodes:
+            # Agar qismlar bo'lmasa, silliq tugma bilan ogohlantiramiz va orqaga qaytishni osonlashtiramiz
+            builder = InlineKeyboardBuilder()
+            builder.row(types.InlineKeyboardButton(text="➕ Ilk qismni qo'shish", callback_data=f"add_ep_{anime_id}"))
+            try:
+                # Agar CallbackData ishlatsangiz: AnimeDetailCallback(anime_id=anime_id, page=1).pack()
+                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"anime_detail_{anime_id}"))
+            except Exception:
+                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"back_page_1"))
+                
+            empty_text = f"📭 <b>{html.escape(anime_data.get('title', 'Nomsiz'))}</b>\n\n<i>Ushbu animega hali biror bir qism yuklanmagan!</i>"
+            
+            if callback.message.photo or callback.message.document:
+                return await callback.message.edit_caption(caption=empty_text, parse_mode="HTML", reply_markup=builder.as_markup())
+            return await callback.message.edit_text(text=empty_text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+        # 3. EPIZODLARNI TARTIBLASH VA SAHIFALASH (PAGINATION LOGIC)
+        # Epizod raqami bo'yicha o'sib borish tartibida saralaymiz
+        episodes = sorted(episodes, key=lambda x: x.get("episode", 0))
+        
+        total_episodes = len(episodes)
+        per_page = 24
+        total_pages = math.ceil(total_episodes / per_page)
+        
+        # Joriy sahifa chegarasini tekshirish
+        if current_page < 1:
+            current_page = 1
+        elif current_page > total_pages:
+            current_page = total_pages
+
+        start_idx = (current_page - 1) * per_page
+        end_idx = start_idx + per_page
+        page_episodes = episodes[start_idx:end_idx]
+
+        # 4. GRID INTERFEYSINI QURISH (UX CHUQUQLASHTIRILDI 🔥)
+        builder = InlineKeyboardBuilder()
+        
+        # 1-Bolim: Qismlar matrisasi (Har qatorda 4 tadan tugma - Raqamlar uchun ideal o'lcham)
+        row_buttons = []
+        for ep in page_episodes:
+            ep_num = ep.get("episode", 0)
+            # Har bir tugma bosilganda o'sha qism faylini yoki boshqaruvini ochadi
+            btn = types.InlineKeyboardButton(text=f"▶️ {ep_num}", callback_data=f"view_target_ep_{anime_id}_{ep_num}")
+            row_buttons.append(btn)
+            
+            if len(row_buttons) == 4: # 4 taga yetganda qatorga tashlaymiz
+                builder.row(*row_buttons)
+                row_buttons = []
+        if row_buttons: # Qolib ketgan qoldiq tugmalarni ham qo'shamiz
+            builder.row(*row_buttons)
+
+        # 2-Bolim: Sahifalash navigatsiyasi (Pagination Row)
+        nav_buttons = []
+        if current_page > 1:
+            nav_buttons.append(types.InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"view_eps_{anime_id}_{current_page - 1}"))
+        
+        # Joriy holat indikatori (Tugma ko'rinishida, bosganda shunchaki bildirishnoma beradi)
+        nav_buttons.append(types.InlineKeyboardButton(text=f"📄 {current_page}/{total_pages}-sahifa", callback_data="dont_click"))
+        
+        if current_page < total_pages:
+            nav_buttons.append(types.InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"view_eps_{anime_id}_{current_page + 1}"))
+        
+        builder.row(*nav_buttons)
+
+        # 3-Bolim: Boshqaruv elementlari (Har doim ko'rinib turadigan pastki qator)
+        builder.row(
+            types.InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"anime_detail_{anime_id}"),
+            types.InlineKeyboardButton(text="➕ Qism qo'shish", callback_data=f"add_ep_{anime_id}")
+        )
+
+        # 5. SHABLON MATNINI SHAKLLANTIRISH
+        title = html.escape(anime_data.get("title", "Nomsiz"))
+        text = (
+            f"╔══════════════════╗\n"
+            f"     🎬 <b>Qismlar ro'yxati</b>\n"
+            f"╚══════════════════╝\n\n"
+            f"📖 <b>Anime:</b> <code>{title}</code>\n"
+            f"📊 <b>Jami qismlar:</b> <code>{total_episodes} ta</code>\n\n"
+            f"💡 <i>Qism kontentini ko'rish yoki tahrirlash uchun quyidagi raqamlardan birini tanlang:</i>"
+        )
+
+        # 6. SILIQ RENDERING (Xabar turi tekshirilib, edit qilinadi)
+        if callback.message.photo or callback.message.document:
+            try:
+                await callback.message.edit_caption(caption=text, parse_mode="HTML", reply_markup=builder.as_markup())
+            except TelegramBadRequest:
+                await callback.message.answer(text=text, parse_mode="HTML", reply_markup=builder.as_markup())
+        else:
+            try:
+                await callback.message.edit_text(text=text, parse_mode="HTML", reply_markup=builder.as_markup())
+            except TelegramBadRequest:
+                await callback.message.answer(text=text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+    except Exception as e:
+        logger.error(f"❌ Qismlarni ko'rsatishda kutilmagan xatolik: {e}")
+        await callback.answer("⚠️ Qismlarni yuklashda ichki tizim xatoligi yuz berdi.", show_alert=True)

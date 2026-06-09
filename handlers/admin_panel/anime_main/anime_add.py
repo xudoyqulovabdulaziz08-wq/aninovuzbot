@@ -81,7 +81,7 @@ async def admin_add(callback: CallbackQuery, state: FSMContext):
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Jarayonni bekor qilish", 
-            callback_data="add_anime_main"
+            callback_data="admin_anime_panel"
         )
     )
     
@@ -139,7 +139,7 @@ async def process_anime_name(message: Message, state: FSMContext):
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Jarayonni bekor qilish", 
-            callback_data="add_anime_main"
+            callback_data="admin_anime_panel"
         )
     )
     
@@ -184,7 +184,7 @@ async def process_anime_photo(message: Message, state: FSMContext, session: Any)
 
     builder = InlineKeyboardBuilder()
     builder.row(
-        types.InlineKeyboardButton(text="🚫 Jarayonni bekor qilish", callback_data="add_anime_main")
+        types.InlineKeyboardButton(text="🚫 Jarayonni bekor qilish", callback_data="admin_anime_panel")
     )
 
     text = (
@@ -274,7 +274,7 @@ async def process_anime_genres_message(message: Message, state: FSMContext, sess
         builder.row(
             types.InlineKeyboardButton(
                 text="🚫 Jarayonni bekor qilish", 
-                callback_data="add_anime_main"
+                callback_data="admin_anime_panel"
             )
         )
         
@@ -329,7 +329,7 @@ async def process_anime_year(message: Message, state: FSMContext):
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Jarayonni bekor qilish", 
-            callback_data="add_anime_main"
+            callback_data="admin_anime_panel"
         )
     )
     
@@ -382,7 +382,7 @@ async def process_anime_description(message: Message, state: FSMContext):
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Jarayonni bekor qilish", 
-            callback_data="add_anime_main"
+            callback_data="admin_anime_panel"
         )
     )
     
@@ -455,8 +455,8 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
         anime_langs = html.escape(str(new_anime.get("languages", raw_languages)))
         
         builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🎬 Qism yuklashni boshlash", callback_data=f"add_ep_{anime_id}"))
-        builder.row(types.InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="add_anime_main"))
+        builder.row(types.InlineKeyboardButton(text="🎬 Qism yuklashни boshlash", callback_data=f"add_ep_{anime_id}"))
+        builder.row(types.InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="admin_anime_panel"))
         
         success_text = (
             "╔═══════════ ⛩ ═══════════╗\n"
@@ -482,7 +482,7 @@ async def process_anime_languages_and_save(message: Message, state: FSMContext, 
         
         # Xatolik bo'lsa ham admin bloklanib qolmasligi uchun stateni tozalash yoki boshqa sahifaga ruxsat berish
         error_builder = InlineKeyboardBuilder()
-        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="add_anime_main"))
+        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="admin_anime_panel"))
         
         try:
             await loading_msg.edit_text(
@@ -562,7 +562,7 @@ async def start_add_episode(callback: CallbackQuery, state: FSMContext, session:
     builder.row(
         types.InlineKeyboardButton(
             text="🚫 Yuklashni bekor qilish", 
-            callback_data="add_anime"
+            callback_data="admin_anime_panel"
         )
     )
     
@@ -805,7 +805,7 @@ async def finish_anime_addition_and_save(callback: CallbackQuery, state: FSMCont
         logger.error(f"❌ Yakuniy saqlashda jiddiy xatolik: {e}")
         
         error_builder = InlineKeyboardBuilder()
-        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="add_anime"))
+        error_builder.row(types.InlineKeyboardButton(text="🚫 Bekor qilish", callback_data="admin_anime_panel"))
         
         error_text = "❌ <b>Bazada xatolik!</b>\n\nQismlarni bazaga yozish muvaffaqiyatsiz tugadi. Aloqani tekshiring."
         try:
