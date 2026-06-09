@@ -169,6 +169,7 @@ async def list_anime(
 
 
 @router.callback_query(AnimeDetailCallback.filter())
+@router.callback_query(F.data.startswith("anime_detail_"))
 async def show_anime_details(callback: CallbackQuery, callback_data: AnimeDetailCallback, session: Any):
     # Agar callback javobi yuqorida berilmagan bo'lsa, xavfsizlik uchun javob beramiz
     try:
@@ -395,7 +396,7 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         
         # 1. Oldin admin panelga qaytish tugmasini yasaymiz
         admin_builder = InlineKeyboardBuilder()
-        admin_builder.row(types.InlineKeyboardButton(text="🔙 Admin Panelga qaytish", callback_data="admin_anime_panel"))
+        admin_builder.row(types.InlineKeyboardButton(text="🔙 Animega qatish", callback_data=f"anime_detail_{anime_id}"))
         
 
         success_text = (
@@ -439,8 +440,10 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
         if callback.message.photo or callback.message.document:
             try:
                 await callback.message.edit_caption(caption=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+
             except TelegramBadRequest:
                 await callback.message.answer(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+
         else:
             try:
                 await callback.message.edit_text(text=error_text, parse_mode="HTML", reply_markup=admin_builder.as_markup())
@@ -490,7 +493,7 @@ async def view_episodes(callback: CallbackQuery, session: Any):
             builder.row(types.InlineKeyboardButton(text="➕ Ilk qismni qo'shish", callback_data=f"add_ep_{anime_id}"))
             try:
                 # Agar CallbackData ishlatsangiz: AnimeDetailCallback(anime_id=anime_id, page=1).pack()
-                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=AnimeDetailCallback(anime_id=anime_id, page=current_page).pack()))
+                builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"anime_detail_{anime_id}"))
             except Exception:
                 builder.row(types.InlineKeyboardButton(text="🔙 Anime sahifasiga", callback_data=f"back_page_1"))
                 
