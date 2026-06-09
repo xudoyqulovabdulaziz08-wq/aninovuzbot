@@ -35,10 +35,13 @@ def get_search_menu_content(user_id: int) -> tuple[str, types.InlineKeyboardMark
     "╔═════════ 🔍 ═════════╗\n"
     "   <b>ANIME QIDIRISH</b>\n"
     "╚═════════ 🔍 ═════════╝\n\n"
-        "Qidiruv menyusiga xush kelibsiz! 🌟\n"
-        "<blockquote expandable>1️⃣ <code>Nomi bo'yicha qidirish</code> - Agar sizda animening nomi bo'lsa, bu variant siz uchun! To'liq yoki qisqacha nomni kiriting va biz sizga mos natijalarni taqdim etamiz.</blockquote>\n\n"
-        "<blockquote expandable>2️⃣ <code>ID bo'yicha qidirish</code> - Agar sizda animening maxsus ID raqami bo'lsa, bu eng aniq qidiruv usuli! ID raqamini kiriting va biz sizga to'g'ri natijani taqdim etamiz.</blockquote>\n\n"
-        "<blockquote expandable>3️⃣ <code>Janr bo'yicha qidirish</code> - Agar sizda aniq nom yoki ID bo'lmasa, lekin qaysi janrni yoqtirishingizni bilsangiz, bu variant siz uchun! Janr nomini kiriting va biz sizga mos keladigan animelarni taqdim etamiz.</blockquote>"
+        "Qidiruv menyusiga xush kelibsiz! 🌟\n\n"
+        "<b>Nomi bo'yicha qidirish</b>\n"
+        "<blockquote expandable>1️⃣ Agar sizda animening nomi bo'lsa, bu variant siz uchun! To'liq yoki qisqacha nomni kiriting va biz sizga mos natijalarni taqdim etamiz.</blockquote>\n"
+        "<b>ID bo'yicha qidirish</b>\n"
+        "<blockquote expandable>2️⃣ Agar sizda animening maxsus ID raqami bo'lsa, bu eng aniq qidiruv usuli! ID raqamini kiriting va biz sizga to'g'ri natijani taqdim etamiz.</blockquote>\n"
+        "<b>Janr bo'yicha qidirish</b>\n"
+        "<blockquote expandable>3️⃣  Agar sizda aniq nom yoki ID bo'lmasa, lekin qaysi janrni yoqtirishingizni bilsangiz, bu variant siz uchun! Janr nomini kiriting va biz sizga mos keladigan animelarni taqdim etamiz.</blockquote>"
     )
     return text, kb
 

@@ -56,9 +56,9 @@ async def buy_vip_menu(event: types.Message | types.CallbackQuery, state: FSMCon
         f"<blockquote expandable>✨ <b>Eksklyuziv status</b> - Profilingizda maxsus VIP ramka va nishonlar.</blockquote>\n"
     
         # 3-Blok: Tarifikatsiya va bonus tizimi
-        f"⚖️ <b>Bonus almashinuvi:</b>\n"
-        f"<blockquote expandable>🏷 <code>100 energiya = 30 kun VIP</code>\n\n"
-        f"<i>To'plagan energiyalaringizni darhol Premium obunaga almashtirishingiz mumkin!</i></blockquote>\n"
+        f"⚖️ <b>BALL ALMASHUVI:</b>\n"
+        f"<blockquote expandable>🏷 <code>100 energiya = 30 kun VIP</code></blockquote>\n"
+        f"<blockquote expandable><i>To'plagan energiyalaringizni darhol Premium obunaga almashtirishingiz mumkin!</i></blockquote>\n"
     
         f"═════════ ⛩ ═════════\n"
         f"👇 <i>O'z darajangizni oshirish uchun quyidagi tugmalardan birini tanlang:</i>"

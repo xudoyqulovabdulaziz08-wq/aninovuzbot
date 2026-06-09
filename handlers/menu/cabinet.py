@@ -74,11 +74,11 @@ async def personal_cabinet(event: Union[types.Message, types.CallbackQuery], sta
         "╔═════════ ⛩ ═════════╗\n"
         "   🏮 <b>SHAXSIY KABINET</b> 🏮\n"
         "╚═════════ ⛩ ═════════╝\n\n"
-        f"🪪 <b>ID raqam:</b> <code>{user_id}</code>\n"
-        f"💠 <b>Daraja:</b> <b>{status_label}</b>\n"
-        f"✨ <b>Ball:</b> <b>{points}</b> <i>(Ballar)</i>\n"
-        f"👥 <b>Referal:</b> <b>{referrals} ta</b> <i>(Takliflar)</i>\n"
-        f"💎 <b>Premium:</b> <b>{vip_status}</b>\n\n"
+        f"<blockquote expandable>🪪 <b>ID raqam:</b> <code>{user_id}</code></blockquote>\n"
+        f"<blockquote expandable>💠 <b>Daraja:</b> <b>{status_label}</b></blockquote>\n"
+        f"<blockquote expandable>✨ <b>Ball:</b> <b>{points}</b> <i>(Ballar)</i></blockquote>\n"
+        f"<blockquote expandable>👥 <b>Referal:</b> <b>{referrals} ta</b> <i>(Takliflar)</i></blockquote>\n"
+        f"<blockquote expandable>💎 <b>Premium:</b> <b>{vip_status}</b></blockquote>\n\n"
         "🌸 <i>O'zingiz yoqtirgan animelarni biz bilan kashf eting!</i>"
     )
 
