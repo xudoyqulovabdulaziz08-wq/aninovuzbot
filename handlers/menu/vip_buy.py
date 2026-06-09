@@ -99,25 +99,23 @@ async def buy_vip_med_handler(callback: types.CallbackQuery, state: FSMContext):
     }
     
     text = (
-    "╔═════════ ⛩ ═════════╗\n"
-    "   💳 <b>VIP TARIFLARI</b>\n"
-    "╚═════════ ⛩ ═════════╝\n\n"
+        "╔═════════ ⛩ ═════════╗\n"
+        "   💳 <b>VIP TARIFLARI</b>\n"
+        "╚═════════ ⛩ ═════════╝\n\n"
     
         f"Salom, <b>{html.escape(callback.from_user.full_name)}</b>! 👋\n\n"
     
-        # 1-Blok: Foydalanuvchi hisobi ma'lumotlari
-        f"👤 <b>Abonent ma'lumotlari:</b>\n"
-        f"<blockquote expandable>└ Maxfiy 🆔: <code>{user_id}</code>\n"
-        f"<i>Sotib olish paytida ushbu ID hisobga olinadi.</i></blockquote>\n\n"
+        f"👤 <b>TARIF MA'LUMOTLARI:</b>\n"
+        f"<blockquote expandable> Maxfiy 🆔: <code>{user_id}</code></blockquote>\n"
+        f"<blockquote expandable><i>Sotib olish paytida ushbu ID hisobga olinadi.</i></blockquote>\n\n"
     
-        # 2-Blok: Tariflar va Narxlar (Modulli quti)
         f"💵 <b>Mavjud tariflar va narxlar:</b>\n"
-        f"<blockquote expandable>"
-        f"🔹 1 oylik ➔ <b>{VIP_PRICES['1m']:,} so'm</b>\n"
-        f"🔹 3 oylik ➔ <b>{VIP_PRICES['3m']:,} so'm</b>\n"
-        f"🔹 6 oylik ➔ <b>{VIP_PRICES['6m']:,} so'm</b>\n"
-        f"🔹 1 yillik ➔ <b>{VIP_PRICES['12m']:,} so'm</b>"
-        f"</blockquote>\n\n"
+        
+        f"<blockquote expandable>🔹 1 oylik ➔ <b>{int(VIP_PRICES['1m']):,} so'm</b></blockquote>\n"
+        f"<blockquote expandable>🔹 3 oylik ➔ <b>{int(VIP_PRICES['3m']):,} so'm</b></blockquote>\n"
+        f"<blockquote expandable>🔹 6 oylik ➔ <b>{int(VIP_PRICES['6m']):,} so'm</b></blockquote>\n"
+        f"<blockquote expandable>🔹 1 yillik ➔ <b>{int(VIP_PRICES['12m']):,} so'm</b></blockquote>\n"
+        
     
         f"⚡️ <i>Har bir tarif barcha premium afzalliklarni cheklovsiz faollashtiradi.</i>\n"
         f"═════════ ⛩ ═════════\n"

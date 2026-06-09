@@ -31,10 +31,10 @@ async def ranked_menu(event: types.Message | types.CallbackQuery, state: FSMCont
         "   🌟 <b>REYTING BO'LIMI</b> 🌟\n"
         "╚═════════ ⛩ ═════════╝\n\n"
         
-        "🎬 <b>Anime Shon-sharafi:</b>\n"
-        "└ <i>Eng ko'p ko'rilgan va ommabop animelar TOP ro'yxati</i>\n\n"
+        "🎬 <b>ANIME REYTING:</b>\n"
+        "<blockquote expandable> <i>Eng ko'p ko'rilgan va ommabop animelar TOP ro'yxati</i>\n"
         "🏆 <b>Top Shinobilar:</b>\n"
-        "└ <i>Eng faol va yuqori energiyaga (ballarga) ega foydalanuvchilar</i>\n\n"
+        "<blockquote expandable> <i>Eng faol va yuqori energiyaga (ballarga) ega foydalanuvchilar</i></blockquote>n\n"
         "⚡️ <i>Klan muhandislarimiz yangi maxfiy tizimlar ustida ishlamoqda...</i>"
     )
 
