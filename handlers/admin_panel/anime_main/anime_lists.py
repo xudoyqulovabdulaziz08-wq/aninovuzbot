@@ -355,7 +355,6 @@ async def retry_publish_anime_to_channel(callback: CallbackQuery, session: Any):
             f"├ 🆔 Kod: <code>#{anime_id}</code>\n"  
             f"├ 📅 Yil: <b>{year}</b>\n"
             f"├ ▶️ Qism: <b>{episodes_count}</b> \n"
-            f"├ 🚦 Status: <b>{status_str}</b>\n"
             f"├ 🌐 Til: <b>{languages}</b>\n"
             f"╚══════════════════╝\n"
             f"╔══════════════════╗\n"
