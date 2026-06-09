@@ -562,7 +562,7 @@ async def view_episodes(callback: CallbackQuery, session: Any):
             f"╚══════════════════╝\n\n"
             f"<blockquote expandable>📖 <b>Anime:</b> <code>{title}</code></blockquote>\n"
             f"<blockquote expandable>📊 <b>Jami qismlar:</b> <code>{total_episodes} ta</code></blockquote>\n\n"
-            f"<blockquote expandable>💡 <i>Qism kontentini ko'rish yoki tahrirlash uchun quyidagi raqamlardan birini tanlang:</i>"
+            f"💡 <i>Qism kontentini ko'rish yoki tahrirlash uchun quyidagi raqamlardan birini tanlang:</i>"
         )
 
         # 6. SILIQ RENDERING (Xabar turi tekshirilib, edit qilinadi)
