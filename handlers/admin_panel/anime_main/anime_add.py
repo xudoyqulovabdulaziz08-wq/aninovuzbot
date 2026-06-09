@@ -846,7 +846,7 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             current_msg = await callback.message.answer(text=loading_text, parse_mode="HTML")
 
     try:
-        # 🔥 2. BAZAGA KETMA-KET YUKLASH (Xatolar ustidan nazorat bilan)
+        # 🔥 FIX 1: BAZAGA YUKLASH VA TRANZAKSIYANI NAZORAT QILISH
         successful_inserts = 0
         if temp_episodes:
             for ep in temp_episodes:
@@ -860,7 +860,11 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
                     successful_inserts += 1
                 except Exception as ep_err:
                     logger.warning(f"⚠️ {ep['episode_num']}-qismni yozishda xato: {ep_err}")
+                    await session.rollback()  # Xato bo'lsa sessiyani tozalaymiz, qolgan kod ishlayverishi uchun
                     continue
+            
+            # Barcha qismlar muvaffaqiyatli yozilgach bazaga tasdiqlaymiz
+            await session.commit()
         
         # 🔥 3. ANIMENI BAZADAN TO'LIQ JANRLARI BILAN BIRGA OLAMIZ
         stmt = (
@@ -885,22 +889,14 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
         status_str = "🟢 Tugallangan" if anime.is_completed else "🔴 Davom etmoqda"
         
         safe_title = html.escape(str(anime.title))
-        raw_description = anime.description or "Tavsif kiritilmagan."
-        
-        # 🔥 FIX: Telegram rasmlar ostidagi matn (caption) uchun 1024 belgi limitiga ega!
-        # Agar rasm bor bo'lsa va text juda uzun bo'lsa, qirqib tashlaymiz
-        if anime.poster_id and len(raw_description) > 700:
-            raw_description = raw_description[:697] + "..."
-            
-        safe_description = html.escape(raw_description)
-        
-        # Xotirada yozilganlar va bazadagi jami qismlar hisobi
+        safe_languages = html.escape(str(anime.languages)) if anime.languages else 'O\'zbekcha'
         episodes_count = len(anime.episodes) if anime.episodes else 0
 
-        # 5. 📢 KANALGA POST SHABLONI
-        caption = (
+        # 🔥 FIX 2: SHABLON MATNINI DINAMIK HISOBLASH (1024 Limitidan oshmaslik uchun)
+        # Avval shablonning o'zining uzunligini hisoblab olamiz
+        base_caption = (
             f"╔══════════════════╗\n"
-            f"       🎬 <b>{safe_title}</b>\n"
+            f"     🎬 <b>{safe_title}</b>\n"
             f"╚══════════════════╝\n\n"
             f"📌 <b>Anime haqida ma'lumot:</b>\n"
             f"╔══════════════════╗\n"
@@ -908,16 +904,27 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             f"├ 📅 Yil: <b>{anime.year}</b>\n"
             f"├ ▶️ Qism: <b>{episodes_count}</b> \n"
             f"├ 🚦 Status: <b>{status_str}</b>\n"
-            f"├ 🌐 Til: <b>{html.escape(anime.languages) if anime.languages else 'O\'zbekcha'}</b>\n"
+            f"├ 🌐 Til: <b>{safe_languages}</b>\n"
             f"╚══════════════════╝\n"
             f"╔══════════════════╗\n"
             f"  🔮 Janrlar: <i>{genres_str}</i>\n"
             f"╚══════════════════╝\n\n"
             f"📝 <b>Tavsif:</b>\n"
-            f"<blockquote expandable>"
-            f"{safe_description}"
-            f"</blockquote>"
         )
+        
+        raw_description = anime.description or "Tavsif kiritilmagan."
+        
+        # Agar rasm bo'lsa, Telegram limiti 1024 ta belgi. 
+        # Shablondan ortgan joyni tavsifga ajratamiz (35 belgi blockquote teglari va xavfsizlik zaxirasi)
+        if anime.poster_id:
+            max_description_allowed = 1024 - len(base_caption) - 35
+            if len(raw_description) > max_description_allowed:
+                raw_description = raw_description[:max_description_allowed] + "..."
+                
+        safe_description = html.escape(raw_description)
+        
+        # Yakuniy jami post matni
+        caption = base_caption + f"<blockquote expandable>{safe_description}</blockquote>"
         
         # 6. DYNAMIC DEEP-LINK TUGMASI
         bot_info = await callback.bot.get_me()
@@ -931,7 +938,7 @@ async def publish_anime_to_channel_and_save(callback: CallbackQuery, state: FSMC
             )
         )
 
-        # 🔥 FIX: Agar poster_id bo'lmasa, oddiy xabar jo'natamiz (Tizim qulamasligi uchun)
+        # 📢 KANALGA YUBORISH
         if anime.poster_id:
             await callback.bot.send_photo(
                 chat_id="@Aninovuz", 
