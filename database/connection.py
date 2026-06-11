@@ -48,8 +48,8 @@ engine = create_async_engine(
 
     # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun:
     # pool_size va max_overflow jami 12 tadan oshmaydi. Bot yuqori yuklamada ham xavfsiz ishlaydi.
-    pool_size=8,
-    max_overflow=4,
+    pool_size=10,
+    max_overflow=5,
 
     # Zombie ulanishlarni o'ldirish va qayta tiklash
     pool_pre_ping=True,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
@@ -9,7 +10,7 @@ from sqlalchemy import (
     String, Integer, BigInteger, Boolean,
     Text, DateTime, ForeignKey, Index,
     UniqueConstraint, Column, Table, Numeric, Enum,
-    JSON, UUID  # 🌟 Oracle uchun universal JSON va UUID yuklab olindi
+    Identity
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column,
@@ -36,7 +37,8 @@ anime_genres = Table(
 class DBUser(Base):
     __tablename__ = "users"
 
-    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Telegram user_id o'ta katta son (BigInteger), qo'lda beriladi (autoincrement emas)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
 
     username: Mapped[Optional[str]] = mapped_column(
         String(255),
@@ -49,11 +51,12 @@ class DBUser(Base):
         index=True
     )
 
-    points: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    points: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
 
     status: Mapped[str] = mapped_column(
-        Enum("user", "vip", "admin", name="user_status", inherit_schema=True), # 🌟 Oracle muvofiqligi
+        Enum("user", "vip", "admin", name="constraint_user_status"), # Oracle muvofiqligi uchun unikal nom
         default="user",
+        server_default="user",
         index=True
     )
 
@@ -61,10 +64,9 @@ class DBUser(Base):
         DateTime(timezone=True)
     )
 
-    health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+    health_mode: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
-    # index=True olib tashlandi, chunki pastda idx_user_ref_fast bor
-    referral_count: Mapped[int] = mapped_column(Integer, default=0)
+    referral_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50))
     referred_by_channel: Mapped[Optional[str]] = mapped_column(String(50))
@@ -130,7 +132,7 @@ class DBUser(Base):
 class Genre(Base):
     __tablename__ = "genres"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
     name: Mapped[str] = mapped_column(
         String(100),
@@ -149,9 +151,8 @@ class Genre(Base):
 class Anime(Base):
     __tablename__ = "anime_list"
 
-    anime_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    anime_id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
-    # index=True olib tashlandi (idx_anime_search qoladi)
     title: Mapped[str] = mapped_column(
         String(255),
         nullable=False
@@ -159,18 +160,17 @@ class Anime(Base):
 
     poster_id: Mapped[Optional[str]] = mapped_column(String(255))
 
-    # index=True olib tashlandi (idx_anime_year qoladi)
     year: Mapped[Optional[int]] = mapped_column(Integer)
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     languages: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     rating_sum: Mapped[Decimal] = mapped_column(Numeric(10, 2), server_default="0")
-    rating_count: Mapped[int] = mapped_column(Integer, default=0)
+    rating_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
-    views_week: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    views_week: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
 
-    is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     genres: Mapped[List["Genre"]] = relationship(
         secondary=anime_genres,
@@ -211,7 +211,7 @@ class Anime(Base):
 class Episode(Base):
     __tablename__ = "anime_episodes"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
     anime_id: Mapped[int] = mapped_column(
         ForeignKey("anime_list.anime_id", ondelete="CASCADE"),
@@ -269,15 +269,13 @@ class Favorite(Base):
 class History(Base):
     __tablename__ = "history"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
-    # index=True olib tashlandi (idx_history_user bor)
     user_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("users.user_id", ondelete="CASCADE")
     )
 
-    # index=True olib tashlandi (idx_history_anime bor)
     anime_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("anime_list.anime_id", ondelete="CASCADE")
@@ -310,15 +308,13 @@ class History(Base):
 class Comment(Base):
     __tablename__ = "comments"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
-    # index=True olib tashlandi (idx_comment_anime bor)
     anime_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("anime_list.anime_id", ondelete="CASCADE")
     )
 
-    # index=True olib tashlandi (idx_comment_user bor)
     user_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,
         ForeignKey("users.user_id", ondelete="SET NULL")
@@ -366,9 +362,8 @@ class Comment(Base):
 class Ticket(Base):
     __tablename__ = "tickets"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
-    # index=True olib tashlandi
     user_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,
         ForeignKey("users.user_id", ondelete="SET NULL")
@@ -378,13 +373,12 @@ class Ticket(Base):
 
     file_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
 
-    # index=True olib tashlandi
     status: Mapped[str] = mapped_column(
-        Enum("open", "closed", "pending", name="ticket_status", inherit_schema=True),
-        default="open"
+        Enum("open", "closed", "pending", name="constraint_ticket_status"), # Unikal nom
+        default="open",
+        server_default="open"
     )
 
-    # index=True olib tashlandi
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now()
@@ -408,8 +402,8 @@ class Channel(Base):
 
     id: Mapped[int] = mapped_column(
         BigInteger,
-        primary_key=True,
-        autoincrement=True
+        Identity(start=1),
+        primary_key=True
     )
 
     channel_id: Mapped[int] = mapped_column(
@@ -423,8 +417,7 @@ class Channel(Base):
 
     url: Mapped[Optional[str]] = mapped_column(String(255))
 
-    # index=True olib tashlandi
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -440,7 +433,7 @@ class Channel(Base):
 class HelpPage(Base):
     __tablename__ = "help_pages"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
     page_number: Mapped[int] = mapped_column(
         Integer,
@@ -463,7 +456,7 @@ class HelpPage(Base):
 class FanGroup(Base):
     __tablename__ = "fan_groups"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
     name: Mapped[str] = mapped_column(
         String(100),
@@ -477,11 +470,9 @@ class FanGroup(Base):
         nullable=False
     )
 
-    # index=True olib tashlandi
-    is_vip: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_vip: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
-    # index=True olib tashlandi
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -497,24 +488,20 @@ class FanGroup(Base):
 class Advertisement(Base):
     __tablename__ = "advertisements"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
     
-    # index=True olib tashlandi, chunki pastda buni idx_ad_type deb yozganmiz
     ad_type: Mapped[str] = mapped_column(
-        Enum("banner", "post", "video", name="ad_type", inherit_schema=True),
+        Enum("banner", "post", "video", name="constraint_ad_type"), # Unikal nom
         nullable=False
     )
-    # index=True olib tashlandi
     target_group: Mapped[str] = mapped_column(String(50), nullable=False)
     chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     
-    # Bular pastda yo'qligi uchun index=True holatda qolaveradi
     end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     
-    # index=True olib tashlandi
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
     __table_args__ = (
         Index("idx_ad_active", "is_active"),
@@ -526,7 +513,7 @@ class Advertisement(Base):
 class AdminSettings(Base):
     __tablename__ = "admin_settings"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(start=1), primary_key=True)
 
     user_id: Mapped[int] = mapped_column(
         BigInteger,
@@ -535,10 +522,10 @@ class AdminSettings(Base):
         index=True
     )
 
-    # index=True olib tashlandi
     role: Mapped[str] = mapped_column(
-        Enum("owner", "admin", "moderator", name="admin_role", inherit_schema=True),
-        default="moderator"
+        Enum("owner", "admin", "moderator", name="constraint_admin_role"), # Unikal nom
+        default="moderator",
+        server_default="moderator"
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -557,14 +544,9 @@ class AdminSettings(Base):
     )
 
 # ================= OUTBOX EVENT =================
-import json
-
-# ================= OUTBOX EVENT =================
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
-    # Bazadagi VARCHAR2(36) ga moslash uchun String(36) qildik
-    # default funksiyasini esa str qaytaradigan qilib o'zgartirdik
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
@@ -575,13 +557,12 @@ class OutboxEvent(Base):
     aggregate_id: Mapped[str] = mapped_column(String(255), index=True)
     event_type: Mapped[str] = mapped_column(String(255), index=True)
 
-    # Bazadagi CLOB turiga to'g'ri kelishi uchun Text qildik
     _payload: Mapped[str] = mapped_column("payload", Text, default="{}", server_default='{}')
 
     event_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    priority: Mapped[int] = mapped_column(Integer, default=1, index=True)
-    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=1, server_default="1", index=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -594,7 +575,6 @@ class OutboxEvent(Base):
         index=True
     )
 
-    # Python kodida payload'ni eski holatgacha dict sifatida ishlatish uchun dynamic property:
     @hybrid_property
     def payload(self) -> dict:
         return json.loads(self._payload)
@@ -602,6 +582,7 @@ class OutboxEvent(Base):
     @payload.setter
     def payload(self, value: dict):
         self._payload = json.dumps(value or {})
+
 # ================= OUTBOX CONFIG =================
 MODELS_TO_WATCH = [
     DBUser,

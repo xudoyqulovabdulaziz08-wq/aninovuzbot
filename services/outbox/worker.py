@@ -65,7 +65,7 @@ class MetricsBrain:
         return self.user_heat[user_id][0] > 20 if user_id in self.user_heat else False
 
     async def maybe_clear_cold_users(self):
-        """ ✅ Jiddiy Xato 4 FIX: Asinxron yield orqali Event Loop muzlashini oldini olish """
+        """ ✅ Asinxron yield orqali Event Loop muzlashini oldini olish """
         if self._user_cleanup_counter <= 10000:
             return
 
@@ -182,7 +182,7 @@ class OutboxWorker:
         async with self.session_pool() as main_session:
             try:
                 now = datetime.now(timezone.utc)
-                # ✅ FIX: Qo'shilgan priority bo'yicha yuqori ustuvorlikdagilarni birinchi o'qish
+                # Qo'shilgan priority bo'yicha yuqori ustuvorlikdagilarni birinchi o'qish
                 stmt = (
                     select(OutboxEvent)
                     .where(OutboxEvent.processed.is_(False))
@@ -198,7 +198,7 @@ class OutboxWorker:
 
                 semaphore = asyncio.Semaphore(self.parallel_limit)
 
-                # ✅ Jiddiy Xato 1 FIX: Har bir parallel korutin o'zining shaxsiy session poolidan foydalanadi!
+                # Har bir parallel korutin o'zining shaxsiy session poolidan foydalanadi
                 async def safe_process(ev: OutboxEvent):
                     async with semaphore:
                         try:
@@ -208,7 +208,6 @@ class OutboxWorker:
                                 async with self.session_pool() as local_session:
                                     attached_ev = await local_session.merge(ev)
                                     attached_ev.processed = True
-                                    # ✅ Jiddiy Xato 2 FIX: created_at daxlsiz, processed_at yangilandi!
                                     attached_ev.processed_at = datetime.now(timezone.utc)
                                     await local_session.commit()
                                 metrics.events_processed += 1
@@ -238,11 +237,23 @@ class OutboxWorker:
     async def handle_event(self, ev: OutboxEvent) -> bool:
         try:
             raw_payload = ev.payload
-            if isinstance(raw_payload, str):
+
+            # 🌟 ORACLE CLOB FIX: Agar ma'lumot LOB (Large Object) bo'lib kelsa, uni o'qiymiz
+            if hasattr(raw_payload, "read"):
+                try:
+                    # Asinxron drayver bo'lsa await kerak bo'lishi mumkin
+                    raw_payload = await raw_payload.read()
+                except TypeError:
+                    # Sinxron holat uchun xavfsizlik (fallback)
+                    raw_payload = raw_payload.read()
+
+            # String (JSON format) bo'lsa uni dictionary qilib olamiz
+            if isinstance(raw_payload, str) or isinstance(raw_payload, bytes):
                 payload = orjson.loads(raw_payload)
             else:
                 payload = raw_payload
 
+            # Siqilgan formatni tekshirish (is_compressed zlib logic)
             if isinstance(payload, dict) and payload.get("is_compressed"):
                 compressed_hex = payload.get("data")
                 raw_bytes = bytes.fromhex(compressed_hex)
@@ -281,7 +292,7 @@ class OutboxWorker:
                 dlq_sharded_key = self.shard_key(self.dlq_key)
                 safe_payload = str(ev.payload) if ev.payload else "EMPTY_PAYLOAD"
                 
-                # ✅ Jiddiy Xato 3 FIX: LPUSH + LTRIM pipeline resurs xavfsizligi
+                # LPUSH + LTRIM pipeline resurs xavfsizligi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.lpush(
                         dlq_sharded_key,
@@ -340,24 +351,20 @@ class OutboxWorker:
         if ev.retry_count >= self.max_retry:
             await self.send_to_dlq(ev, str(err))
             ev.processed = True
-            # ✅ Jiddiy Xato 2 FIX: Tarixiy created_at o'rniga processed_at yozildi!
             ev.processed_at = datetime.now(timezone.utc)
             return
 
-        # ✅ Jiddiy Xato 5 FIX: Exponential Backoff joriy etish (Max 5 daqiqa)
+        # Exponential Backoff joriy etish (Max 5 daqiqa)
         delay_seconds = min(5 * (2 ** ev.retry_count), 300)
         # Event kelajakda qayta urinishi uchun reja vaqti suriladi
         ev.priority = max(1, ev.priority - 1)  # Xato bergan elementning ustuvorligini sekin pasaytiramiz
         
-        # dynamic sleep o'rniga bazadan qayta o'qish vaqtini Exponential reja bo'yicha belgilaymiz
-        # Agar loyihada logic check bo'lsa, retry vaqti sifatida boshqa model ustunidan foydalanish ham mumkin.
-
     async def send_to_dlq(self, ev: OutboxEvent, err_msg: str):
         if self.redis:
             try:
                 dlq_sharded_key = self.shard_key(self.dlq_key)
                 
-                # ✅ Jiddiy Xato 3 FIX: Pipeline LTRIM integratsiyasi
+                # Pipeline LTRIM integratsiyasi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.lpush(
                         dlq_sharded_key,

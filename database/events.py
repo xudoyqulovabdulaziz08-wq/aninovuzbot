@@ -7,7 +7,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Any, Optional, Dict
 
-from sqlalchemy import event, inspect
+from sqlalchemy import event, inspect, select
 from sqlalchemy.engine import Connection
 
 # Modellaringiz joylashgan paketdan import qilinadi
@@ -18,7 +18,7 @@ logger = logging.getLogger("OutboxEmitter")
 # ================= CONFIG =================
 ENABLE_COMPRESSION = True  # Worker tomonda decompress qilinadi
 ENABLE_DEDUP = True        # Takroriy xabarlarni filtrlash (Deduplication)
-SLOW_EVENT_THRESHOLD_MS = 50  # ✅ Kichik Muammo 3 FIX: Tranzaksiya ichida 20ms juda qattiq edi, 50ms ga ko'tarildi
+SLOW_EVENT_THRESHOLD_MS = 50  # Tranzaksiya ichida 50ms dan oshsa ogohlantiradi
 
 
 # ================= SAFE PRIMARY KEY EXTRACTION =================
@@ -57,7 +57,7 @@ def has_real_changes(target: Any) -> bool:
 # ================= DEDUP HASH =================
 def make_event_hash(table: str, pk: str, event_type: str, raw_payload: Dict[str, Any]) -> str:
     """
-    💡 Jiddiy Xato 1 FIX: Hash doim siqilmagan (RAW) payload bo'yicha hisoblanadi.
+    💡 Hash doim siqilmagan (RAW) payload bo'yicha hisoblanadi.
     sort_keys=True yordamida deterministik string yaratiladi.
     """
     serialized_payload = json.dumps(raw_payload, sort_keys=True, ensure_ascii=False)
@@ -68,8 +68,8 @@ def make_event_hash(table: str, pk: str, event_type: str, raw_payload: Dict[str,
 # ================= RAW PAYLOAD BUILDER =================
 def build_raw_payload(target: Any, state: Optional[Any] = None) -> Optional[Dict[str, Any]]:
     """
-    🚀 Jiddiy Xato 1 SEPARATION: Faqat toza (raw) Python lug'atini yig'adi.
-    ✅ Kichik Muammo 1 FIX: Exception holatida dict emas, None qaytaradi.
+    Faqat toza (raw) Python lug'atini yig'adi.
+    Exception holatida dict emas, None qaytaradi.
     """
     try:
         data = {}
@@ -86,7 +86,7 @@ def build_raw_payload(target: Any, state: Optional[Any] = None) -> Optional[Dict
             if isinstance(val, datetime):
                 data[key] = val.isoformat()
             elif isinstance(val, Decimal):
-                data[key] = str(val)  # ✅ Jiddiy Xato 4 FIX: float o'rniga str (Aniqlik yo'qolmaydi!)
+                data[key] = str(val)  # float o'rniga str (Aniqlik yo'qolmaydi!)
             elif val.__class__.__name__ == 'UUID':
                 data[key] = str(val)
             else:
@@ -101,7 +101,7 @@ def build_raw_payload(target: Any, state: Optional[Any] = None) -> Optional[Dict
 # ================= COMPRESS ENGINE =================
 def compress_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    🚀 Jiddiy Xato 1 SEPARATION: Toza payloadni meta-dict ichiga siqib beradi.
+    Toza payloadni meta-dict ichiga siqib beradi.
     """
     raw_str = json.dumps(raw_payload, ensure_ascii=False)
     compressed_hex = zlib.compress(raw_str.encode(), level=6).hex()
@@ -116,7 +116,7 @@ def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_
     """
     Yagona va xavfsiz Outbox yozish funksiyasi. Savepoint va to'liq izolyatsiya bilan.
     """
-    start = datetime.now(timezone.utc)  # ✅ Jiddiy Xato 2 FIX: Izchil Timezone (UTC)
+    start = datetime.now(timezone.utc)  # Izchil Timezone (UTC)
     table = getattr(target, "__tablename__", "unknown")
     state = inspect(target)
     
@@ -132,26 +132,37 @@ def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_
         # 1. Toza (raw) payloadni olish yoki qurish
         raw_payload = pre_built_raw_payload or build_raw_payload(target, state=state)
         
-        # ✅ Kichik Muammo 1 FIX: Agar payload qurishda xato bo'lsa, jarayonni to'xtatamiz (Outbox ifloslanmaydi)
         if raw_payload is None:
             logger.error(f"❌ Payload build failed, outbox skipped for {table}:{pk_val}")
             return
 
-        # 2. ✅ Jiddiy Xato 1 FIX: Dedup HASH siqishdan oldin toza ma'lumotdan olinadi!
+        # 2. Dedup HASH siqishdan oldin toza ma'lumotdan olinadi
         event_hash = None
         if ENABLE_DEDUP:
             event_hash = make_event_hash(table, pk_val, event_type, raw_payload)
+            
+            # 🌟 ORA-OPTIMIZATION: Agar xuddi shu xabar bazada hali qayta ishlanmagan bo'lsa, dual insert qilmaymiz
+            dup_stmt = select(OutboxEvent.__table__.c.id).where(
+                OutboxEvent.__table__.c.event_hash == event_hash,
+                OutboxEvent.__table__.c.processed == False
+            )
+            if connection.execute(dup_stmt).first():
+                return  # Allaqachon navbatda bor, ortiqcha yuklamaslik uchun chiqib ketamiz
 
         # 3. Agar siqish yoqilgan bo'lsa, bazaga yozishdan oldin siqamiz
         final_payload = compress_payload(raw_payload) if ENABLE_COMPRESSION else raw_payload
+
+        # 🌟 CRITICAL ORACLE FIX: Core table darajasida insert qilinayotgani va ustun Text (CLOB) bo'lgani uchun,
+        # final_payload (dict) obyektini mantiqan to'g'ri string (JSON format) qilib yuborish shart!
+        payload_str = json.dumps(final_payload, ensure_ascii=False)
 
         stmt = OutboxEvent.__table__.insert().values(
             id=str(uuid4()),
             aggregate=table,
             aggregate_id=pk_val,
             event_type=event_type,
-            payload=final_payload,
-            event_hash=event_hash,  # ✅ Kichik Muammo 4: Modelda nullable=True bo'lishi shart!
+            payload=payload_str,  # <-- Lug'at o'rniga JSON string berildi!
+            event_hash=event_hash,
             processed=False,
             retry_count=0,
             created_at=datetime.now(timezone.utc)
@@ -180,7 +191,7 @@ def emit_outbox_event(connection: Connection, target: Any, event_type: str, pre_
 
 
 # ================= HOOK LISTENERS (DUPLICATE SAFE) =================
-_handlers = {}  # ✅ Jiddiy Xato 3 FIX: Handlerlarni xotirada keshda saqlash uchun lug'at
+_handlers = {}  # Handlerlarni xotirada keshda saqlash uchun lug'at
 
 def get_or_create_handlers(event_type: str):
     """
@@ -216,7 +227,7 @@ def attach_cache_listeners():
     try:
         count = 0
         for model in MODELS_TO_WATCH:
-            # ✅ Jiddiy Xato 3 FIX: Agar model allaqachon tinglanayotgan bo'lsa, tashlab ketamiz
+            # Agar model allaqachon tinglanayotgan bo'lsa, tashlab ketamiz
             if model in _handlers:
                 continue
 
@@ -232,7 +243,7 @@ def attach_cache_listeners():
             event.listen(model, "after_insert", handlers["insert"])
             event.listen(model, "after_update", handlers["update"])
             
-            # O'chirish hodisalari zanjiri (DetachedInstanceError oldini olish)
+            # O'chirish hodisalari zanjiri (DetachedInstanceError oldini balanslash)
             event.listen(model, "before_delete", handlers["before_delete"])
             event.listen(model, "after_delete", handlers["after_delete"])
             count += 1

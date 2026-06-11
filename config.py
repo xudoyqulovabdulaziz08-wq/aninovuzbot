@@ -3,12 +3,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Any, Optional
 from dotenv import load_dotenv
+from pathlib import Path
 
 # ================= ENV LOAD =================
 if os.path.exists(".env"):
     load_dotenv()
 
 logger = logging.getLogger("Config")
+
+ROOT_DIR = Path(__file__).resolve().parent
 
 
 # ================= SAFE CAST =================
@@ -43,8 +46,13 @@ class Config:
 
     # ================= DATABASE =================
     DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
+    
+    # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun default qiymatlarni mosladik:
     DB_POOL_SIZE: int = safe_cast("DB_POOL_SIZE", 10)
-    DB_MAX_OVERFLOW: int = safe_cast("DB_MAX_OVERFLOW", 20)
+    DB_MAX_OVERFLOW: int = safe_cast("DB_MAX_OVERFLOW", 5)
+    
+    # 🌟 Oracle Wallet (certs/) papkasi yo'li
+    ORACLE_CERTS_DIR: str = os.getenv("ORACLE_CERTS_DIR", os.path.join(ROOT_DIR, "certs"))
 
     # ================= SERVER =================
     PORT: int = safe_cast("PORT", 8000)
@@ -76,6 +84,10 @@ class Config:
 
         if not self.DATABASE_URL:
             errors.append("DATABASE_URL missing")
+            
+        # ---- Oracle URL check ----
+        if self.DATABASE_URL and not self.DATABASE_URL.startswith("oracle+oracledb://"):
+            logger.warning("‼ DATABASE_URL drayveri 'oracle+oracledb://' bilan boshlanmagan. Oracle ulanishida xatolik bo'lishi mumkin!")
 
         # ---- production strict mode ----
         if not self.DEBUG and not self.WEBHOOK_HOST:
