@@ -1,11 +1,11 @@
 aiogram
 sqlalchemy[asyncio]
 alembic
-asyncpg
-psycopg2-binary
 redis
 python-dotenv
 pydantic
 orjson
 pytz
 matplotlib
+oracledb
+SQLAlchemy
