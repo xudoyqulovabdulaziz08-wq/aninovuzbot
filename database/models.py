@@ -4,24 +4,24 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
-from sqlalchemy import JSON
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy import (
     String, Integer, BigInteger, Boolean,
     Text, DateTime, ForeignKey, Index,
-    UniqueConstraint, Column, Table, Numeric, Enum
+    UniqueConstraint, Column, Table, Numeric, Enum,
+    JSON, UUID  # 🌟 Oracle uchun universal JSON va UUID yuklab olindi
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column,
     relationship
 )
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import JSONB
 
 # ================= BASE =================
 class Base(DeclarativeBase):
     """Shared base for all models"""
     pass
+
 # ================= ASSOCIATION TABLE =================
 anime_genres = Table(
     "anime_genres",
@@ -31,6 +31,7 @@ anime_genres = Table(
     Index("idx_anime_id", "anime_id"),
     Index("idx_genre_id", "genre_id"),
 )
+
 # ================= USER =================
 class DBUser(Base):
     __tablename__ = "users"
@@ -51,7 +52,7 @@ class DBUser(Base):
     points: Mapped[int] = mapped_column(Integer, default=0, index=True)
 
     status: Mapped[str] = mapped_column(
-        Enum("user", "vip", "admin", name="user_status"),
+        Enum("user", "vip", "admin", name="user_status", inherit_schema=True), # 🌟 Oracle muvofiqligi
         default="user",
         index=True
     )
@@ -62,12 +63,12 @@ class DBUser(Base):
 
     health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    referral_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    # index=True olib tashlandi, chunki pastda idx_user_ref_fast bor
+    referral_count: Mapped[int] = mapped_column(Integer, default=0)
 
     last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50))
     referred_by_channel: Mapped[Optional[str]] = mapped_column(String(50))
 
-    # 🔴 FK QO‘SHILDI (ENG MUHIM FIX)
     referred_by: Mapped[Optional[int]] = mapped_column(
         BigInteger,
         ForeignKey("users.user_id", ondelete="SET NULL"),
@@ -83,7 +84,6 @@ class DBUser(Base):
     )
 
     # ================= RELATIONSHIPS =================
-
     favorites: Mapped[List["Favorite"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -118,7 +118,6 @@ class DBUser(Base):
         Index("idx_user_ref_fast", "referral_count"),
     )
 
-    # 🔥 HYBRID (queryda ham ishlaydi)
     @hybrid_property
     def is_vip(self) -> bool:
         if self.status != "vip":
@@ -126,6 +125,7 @@ class DBUser(Base):
         if not self.vip_expire_date:
             return True
         return self.vip_expire_date > datetime.now(timezone.utc)
+
 # ================= GENRE =================
 class Genre(Base):
     __tablename__ = "genres"
@@ -138,7 +138,6 @@ class Genre(Base):
         index=True
     )
 
-    # optional
     animes: Mapped[List["Anime"]] = relationship(
         "Anime",
         secondary="anime_genres",
@@ -146,26 +145,23 @@ class Genre(Base):
         lazy="selectin"
     )
 
-
-
-# ================= ANIME =================
 # ================= ANIME =================
 class Anime(Base):
     __tablename__ = "anime_list"
 
     anime_id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
+    # index=True olib tashlandi (idx_anime_search qoladi)
     title: Mapped[str] = mapped_column(
         String(255),
-        nullable=False,
-        index=True
+        nullable=False
     )
 
     poster_id: Mapped[Optional[str]] = mapped_column(String(255))
 
-    year: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    # index=True olib tashlandi (idx_anime_year qoladi)
+    year: Mapped[Optional[int]] = mapped_column(Integer)
 
-    # ➕ YANGI QO'SHILGAN USTUNLAR (FSMingizga moslandi)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     languages: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
@@ -233,6 +229,7 @@ class Episode(Base):
     __table_args__ = (
         UniqueConstraint("anime_id", "episode"),
     )
+
 # ================= FAVORITE =================
 class Favorite(Base):
     __tablename__ = "favorites"
@@ -268,24 +265,22 @@ class Favorite(Base):
         Index("idx_fav_anime", "anime_id"),
     )
 
-
-
 # ================= HISTORY =================
 class History(Base):
     __tablename__ = "history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
+    # index=True olib tashlandi (idx_history_user bor)
     user_id: Mapped[int] = mapped_column(
         BigInteger,
-        ForeignKey("users.user_id", ondelete="CASCADE"),
-        index=True
+        ForeignKey("users.user_id", ondelete="CASCADE")
     )
 
+    # index=True olib tashlandi (idx_history_anime bor)
     anime_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("anime_list.anime_id", ondelete="CASCADE"),
-        index=True
+        ForeignKey("anime_list.anime_id", ondelete="CASCADE")
     )
 
     watched_at: Mapped[datetime] = mapped_column(
@@ -310,22 +305,23 @@ class History(Base):
         Index("idx_history_user", "user_id"),
         Index("idx_history_anime", "anime_id"),
     )
+
 # ================= COMMENT =================
 class Comment(Base):
     __tablename__ = "comments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
+    # index=True olib tashlandi (idx_comment_anime bor)
     anime_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("anime_list.anime_id", ondelete="CASCADE"),
-        index=True
+        ForeignKey("anime_list.anime_id", ondelete="CASCADE")
     )
 
+    # index=True olib tashlandi (idx_comment_user bor)
     user_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,
-        ForeignKey("users.user_id", ondelete="SET NULL"),
-        index=True
+        ForeignKey("users.user_id", ondelete="SET NULL")
     )
 
     parent_id: Mapped[Optional[int]] = mapped_column(
@@ -366,34 +362,32 @@ class Comment(Base):
         Index("idx_comment_parent", "parent_id"),
     )
 
-
-
 # ================= TICKET =================
 class Ticket(Base):
     __tablename__ = "tickets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
+    # index=True olib tashlandi
     user_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,
-        ForeignKey("users.user_id", ondelete="SET NULL"),
-        index=True
+        ForeignKey("users.user_id", ondelete="SET NULL")
     )
 
     message: Mapped[str] = mapped_column(Text)
 
     file_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
 
+    # index=True olib tashlandi
     status: Mapped[str] = mapped_column(
-        Enum("open", "closed", "pending", name="ticket_status"),
-        default="open",
-        index=True
+        Enum("open", "closed", "pending", name="ticket_status", inherit_schema=True),
+        default="open"
     )
 
+    # index=True olib tashlandi
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now(),
-        index=True
+        server_default=func.now()
     )
 
     user: Mapped[Optional["DBUser"]] = relationship(
@@ -407,6 +401,7 @@ class Ticket(Base):
         Index("idx_ticket_status", "status"),
         Index("idx_ticket_created", "created_at"),
     )
+
 # ================= BOSHQA JADVALLAR =================
 class Channel(Base):
     __tablename__ = "channels"
@@ -428,7 +423,8 @@ class Channel(Base):
 
     url: Mapped[Optional[str]] = mapped_column(String(255))
 
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # index=True olib tashlandi
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -440,9 +436,7 @@ class Channel(Base):
         Index("idx_channel_active", "is_active"),
     )
 
-
-
-#=============HelpPage===================    
+#============= HelpPage ===================    
 class HelpPage(Base):
     __tablename__ = "help_pages"
 
@@ -465,8 +459,7 @@ class HelpPage(Base):
         nullable=False
     )
 
-
-#=============FanGroup=====================
+#============= FanGroup =====================
 class FanGroup(Base):
     __tablename__ = "fan_groups"
 
@@ -484,9 +477,11 @@ class FanGroup(Base):
         nullable=False
     )
 
-    is_vip: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # index=True olib tashlandi
+    is_vip: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # index=True olib tashlandi
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -498,44 +493,28 @@ class FanGroup(Base):
         Index("idx_fan_vip", "is_vip"),
     )
 
-
-
-
-
-
-#==========================================================
+# ================= ADVERTISEMENT =================
 class Advertisement(Base):
     __tablename__ = "advertisements"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-
+    
+    # index=True olib tashlandi, chunki pastda buni idx_ad_type deb yozganmiz
     ad_type: Mapped[str] = mapped_column(
-        Enum("banner", "post", "video", name="ad_type"),
-        nullable=False,
-        index=True
-    )
-
-    target_group: Mapped[str] = mapped_column(
-        String(50),
-        index=True,
+        Enum("banner", "post", "video", name="ad_type", inherit_schema=True),
         nullable=False
     )
-
+    # index=True olib tashlandi
+    target_group: Mapped[str] = mapped_column(String(50), nullable=False)
     chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-
-    end_date: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        index=True
-    )
-
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        index=True
-    )
+    
+    # Bular pastda yo'qligi uchun index=True holatda qolaveradi
+    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    
+    # index=True olib tashlandi
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     __table_args__ = (
         Index("idx_ad_active", "is_active"),
@@ -543,9 +522,7 @@ class Advertisement(Base):
         Index("idx_ad_target", "target_group"),
     )
 
-
-
-#==========================================================
+# ================= ADMIN SETTINGS =================
 class AdminSettings(Base):
     __tablename__ = "admin_settings"
 
@@ -558,10 +535,10 @@ class AdminSettings(Base):
         index=True
     )
 
+    # index=True olib tashlandi
     role: Mapped[str] = mapped_column(
-        Enum("owner", "admin", "moderator", name="admin_role"),
-        default="moderator",
-        index=True
+        Enum("owner", "admin", "moderator", name="admin_role", inherit_schema=True),
+        default="moderator"
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -579,35 +556,31 @@ class AdminSettings(Base):
         Index("idx_admin_role", "role"),
     )
 
+# ================= OUTBOX EVENT =================
+import json
 
-
-
-#==========================================================
-
-
-
+# ================= OUTBOX EVENT =================
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
-    id: Mapped[uuid.UUID] = mapped_column(
+    # Bazadagi VARCHAR2(36) ga moslash uchun String(36) qildik
+    # default funksiyasini esa str qaytaradigan qilib o'zgartirdik
+    id: Mapped[str] = mapped_column(
+        String(36),
         primary_key=True,
-        default=uuid.uuid4
+        default=lambda: str(uuid.uuid4())
     )
 
-    aggregate: Mapped[str] = mapped_column(String, index=True)
-    aggregate_id: Mapped[str] = mapped_column(String, index=True)
+    aggregate: Mapped[str] = mapped_column(String(255), index=True)
+    aggregate_id: Mapped[str] = mapped_column(String(255), index=True)
+    event_type: Mapped[str] = mapped_column(String(255), index=True)
 
-    event_type: Mapped[str] = mapped_column(String, index=True)
-
-    payload: Mapped[dict] = mapped_column(JSONB, default=dict, server_default='{}')
+    # Bazadagi CLOB turiga to'g'ri kelishi uchun Text qildik
+    _payload: Mapped[str] = mapped_column("payload", Text, default="{}", server_default='{}')
 
     event_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-
-    # 🌟 MANA SHU USTUNNI QO'SHASIZ:
-    # default=1 (past ustuvorlik), index=True (saralash tez bo'lishi uchun)
     priority: Mapped[int] = mapped_column(Integer, default=1, index=True)
-
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -621,11 +594,15 @@ class OutboxEvent(Base):
         index=True
     )
 
+    # Python kodida payload'ni eski holatgacha dict sifatida ishlatish uchun dynamic property:
+    @hybrid_property
+    def payload(self) -> dict:
+        return json.loads(self._payload)
 
-
+    @payload.setter
+    def payload(self, value: dict):
+        self._payload = json.dumps(value or {})
 # ================= OUTBOX CONFIG =================
-
-# Keshni yangilashi yoki hodisalarni kuzatishi kerak bo'lgan modellar ro'yxati[cite: 16]
 MODELS_TO_WATCH = [
     DBUser,
     Anime,
