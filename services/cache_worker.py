@@ -7,24 +7,15 @@ import orjson
 from datetime import datetime, timezone, timedelta
 from typing import Any, List, Optional
 
-from sqlalchemy import select, delete, and_, or_
+from sqlalchemy import select, delete, and_, or_, update
 from sqlalchemy.exc import SQLAlchemyError
 from database.models import OutboxEvent
 
-
 logger = logging.getLogger("CacheWorker")
 
-print("=" * 50)
-print("DEBUG: OutboxEvent modelining ustunlari:")
-print(OutboxEvent.__table__.columns.keys())
-print("=" * 50)
-
-    
 class CacheInvalidationWorker:
     """
-    🚀 ULTRA PRO MAX DISTRIBUTED ZERO-LOSS EVENT SYSTEM
-    🛠 INTEGRATED FIXES: Safe Multi-Session Concurrency, True Exponential Backoff, 
-    Audit-Safe Cleanups, and Leak-Proof Distributed Locks.
+    🚀 ULTRA PRO MAX DISTRIBUTED ZERO-LOSS EVENT SYSTEM (PROD READY)
     """
 
     def __init__(self, session_factory: Any, cache_manager: Any, redis: Optional[Any] = None):
@@ -36,26 +27,28 @@ class CacheInvalidationWorker:
         self.instance_id = str(uuid.uuid4())
 
         # ================= TUNING =================
-        # ✅ Kichik Muammo 3 FIX: 150 ta parallel DB operatsiyasi juda og'ir, batch optimal 30 qilib belgilandi
         self.batch_size = 30
-        self.fast_sleep = 0.02
+        self.fast_sleep = 0.1  # CPU va Redis yuklamasini kamaytirish uchun 0.02 dan 0.1 ga oshirildi
         self.idle_sleep = 0.5
         self.cleanup_interval = 300  # 5 daqiqa
 
         self.max_retries = 5
         self._last_cleanup = time.time()
 
-        # Kalitlar integratsiyasi (Sinxronizatsiya)
+        # Kalitlar integratsiyasi
         self.dlq_key = "{cache}:dlq"
         self.lock_key = "{cache}:worker_lock"
         self.stream_key = "{cache}:invalidate"
+        
+        # 🔒 CONNECTION POOL PROTECTION SEMAPHORE
+        # Bir vaqtning o'zida bazaga ko'p ulanish ochilmasligini nazorat qiladi
+        self.db_semaphore = asyncio.Semaphore(5) 
 
     # ================= DISTRIBUTED LOCK =================
     async def _acquire_lock(self) -> bool:
         if not self.redis:
             return True
         try:
-            # ✅ Kichik Muammo 4 FIX: Lock TTL batch_size yuklamasiga qarab xavfsiz 60 soniya qilindi
             return await self.redis.set(
                 self.lock_key,
                 self.instance_id,
@@ -95,7 +88,7 @@ class CacheInvalidationWorker:
 
     # ================= MAIN LOOP =================
     async def run(self):
-        logger.info(f"🚀 Cache Worker STARTED [Instance ID: {self.instance_id}] (ZERO-LOSS & MULTI-INSTANCE SAFE)")
+        logger.info(f"🚀 Cache Worker STARTED [Instance ID: {self.instance_id}]")
         await self._setup_redis_stream()
 
         while self._running:
@@ -104,7 +97,6 @@ class CacheInvalidationWorker:
                     await asyncio.sleep(self.idle_sleep)
                     continue
 
-                # ✅ Jiddiy Xato 1 FIX: try/finally bloki orqali Lock Leak to'liq bartaraf etildi!
                 try:
                     processed = await self.process_events()
                 finally:
@@ -115,7 +107,6 @@ class CacheInvalidationWorker:
                 else:
                     await asyncio.sleep(self.idle_sleep)
 
-                # Davriy ravishda eskirgan eventlarni tozalash
                 await self._maybe_cleanup()
 
             except asyncio.CancelledError:
@@ -127,7 +118,6 @@ class CacheInvalidationWorker:
 
     # ================= EVENT PROCESS (CONCURRENT-SAFE) =================
     async def process_events(self) -> int:
-        """ Asosiy batch so'rovi uchun bitta o'qish sessiyasi ochiladi """
         async with self.session_factory() as main_session:
             try:
                 now = datetime.now(timezone.utc)
@@ -153,104 +143,120 @@ class CacheInvalidationWorker:
                 if not events:
                     return 0
 
-                # ✅ Jiddiy Xato 2 FIX: Har bir event parallel gathersiz, alohida mustaqil sessiyada yoziladi (Race Condition Fixed!)
-                async def safe_process_single(ev: OutboxEvent):
-                    async with self.session_factory() as ev_session:
-                        try:
-                            # Obyektni yangi sessiyaga o'tkazib ulaymiz (merge orqali xavfsiz holatga keltirish)
-                            attached_ev = await ev_session.merge(ev)
-                            await self._process_single(attached_ev)
-                            await ev_session.commit()
-                        except Exception as e:
-                            await ev_session.rollback()
-                            logger.error(f"❌ Event execution failed [ID: {ev.id}]: {e}")
-                            
-                            # Xatolikni alohida sessiya kontekstida qayta ishlash
-                            async with self.session_factory() as fail_session:
-                                attached_fail_ev = await fail_session.merge(ev)
-                                await self._handle_failure(fail_session, attached_fail_ev, str(e))
-                                await fail_session.commit()
+                # Bizga faqat ID va kerakli ma'lumotlar xotirada qolishi kifoya (Sessiyadan ajratamiz)
+                # Bu orqali har bir task mustaqil ishlay oladi
+                event_data_list = [
+                    {
+                        "id": ev.id,
+                        "aggregate": ev.aggregate,
+                        "aggregate_id": ev.aggregate_id,
+                        "retry_count": ev.retry_count
+                    } for ev in events
+                ]
 
-                # Har bir element uchun xavfsiz parallel tasklar guruhini ishga tushiramiz
-                await asyncio.gather(*(safe_process_single(ev) for ev in events))
+                async def safe_process_single(ev_data: dict):
+                    # Semaphore yordamida DB ulanishlar pooldan tartib bilan olinadi
+                    async with self.db_semaphore:
+                        async with self.session_factory() as ev_session:
+                            try:
+                                # Keshni invalidatsiya qilish va streamga chiqarish
+                                await self._process_cache_and_stream(ev_data)
+                                
+                                # Obyektni to'liq yuklamasdan (merge-siz) to'g'ridan-to'g'ri UPDATE so'rovi berish
+                                u_stmt = (
+                                    update(OutboxEvent)
+                                    .where(OutboxEvent.id == ev_data["id"])
+                                    .values(processed=True, processed_at=datetime.now(timezone.utc))
+                                )
+                                await ev_session.execute(u_stmt)
+                                await ev_session.commit()
+                            except Exception as e:
+                                await ev_session.rollback()
+                                logger.error(f"❌ Event execution failed [ID: {ev_data['id']}]: {e}")
+                                
+                                # Xatolikni alohida sessiyada qayta ishlash
+                                async with self.session_factory() as fail_session:
+                                    await self._handle_failure(fail_session, ev_data, str(e))
+                                    await fail_session.commit()
+
+                # Tasklar guruhini xavfsiz parallel boshqarish
+                await asyncio.gather(*(safe_process_single(ev) for ev in event_data_list))
                 return len(events)
 
             except SQLAlchemyError as e:
                 logger.error(f"❌ Database execution error in cache batch: {e}")
                 return 0
 
-    # ================= SINGLE EVENT PROCESS =================
-    async def _process_single(self, ev: OutboxEvent):
-        # 1. Mahalliy va Global (Valkey) keshni o'chirish
-        await self.cache.invalidate(table=ev.aggregate, obj_id=ev.aggregate_id)
+    # ================= INVALIDATION LOGIC =================
+    async def _process_cache_and_stream(self, ev_data: dict):
+        # 1. Keshni tozalash
+        await self.cache.invalidate(table=ev_data["aggregate"], obj_id=ev_data["aggregate_id"])
         
-        # 2. Boshqa parallel server node-lariga Stream orqali xabar tarqatish
+        # 2. Redis Stream xabari
         if self.redis:
-            # ✅ Kichik Muammo 2 FIX: Stream cheksiz o'smasligi uchun maxlen=10000 limit o'rnatildi
             await self.redis.xadd(
                 self.stream_key,
                 {
                     "action": "invalidate",
-                    "table": str(ev.aggregate),
-                    "obj_id": str(ev.aggregate_id),
+                    "table": str(ev_data["aggregate"]),
+                    "obj_id": str(ev_data["aggregate_id"]),
                     "sender": self.instance_id
                 },
                 maxlen=10000,
                 approximate=True
             )
-        
-        # ✅ Jiddiy Xato 3 FIX: created_at daxlsiz qoldi, yangi processed_at ustuniga vaqt yozildi
-        ev.processed = True
-        ev.processed_at = datetime.now(timezone.utc)
 
     # ================= FAILURE HANDLING (TRUE EXPONENTIAL BACKOFF) =================
-    async def _handle_failure(self, session: Any, ev: OutboxEvent, error: str):
-        ev.retry_count += 1
+    async def _handle_failure(self, session: Any, ev_data: dict, error: str):
+        new_retry_count = ev_data["retry_count"] + 1
 
-        if ev.retry_count <= self.max_retries:
-            # ✅ Jiddiy Xato 4 FIX: Haqiqiy Exponential Backoff formula joriy qilindi! (Max 5 daqiqa)
-            delay_seconds = min(5 * (2 ** ev.retry_count), 300)
+        if new_retry_count <= self.max_retries:
+            delay_seconds = min(5 * (2 ** new_retry_count), 300)
+            next_run = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
             
-            # Keyingi urinish vaqti created_at mantiqiy hisobi asosida suriladi (Tarixiy emas, reja vaqti)
-            ev.created_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
-            
-            logger.warning(f"🔁 Event [ID: {ev.id}] scheduled for retry {ev.retry_count}/{self.max_retries} in {delay_seconds}s")
-            await session.merge(ev)
+            u_stmt = (
+                update(OutboxEvent)
+                .where(OutboxEvent.id == ev_data["id"])
+                .values(retry_count=new_retry_count, created_at=next_run)
+            )
+            await session.execute(u_stmt)
+            logger.warning(f"🔁 Event [ID: {ev_data['id']}] scheduled for retry {new_retry_count}/{self.max_retries} in {delay_seconds}s")
             return
 
         # Maksimal urinishlar tugasa DLQ ga ketadi
-        await self._send_to_dlq(ev, error)
-        ev.processed = True
-        ev.processed_at = datetime.now(timezone.utc)  # Audit va tozalash vaqti belgilandi
-        await session.merge(ev)
+        await self._send_to_dlq(ev_data, error, new_retry_count)
+        
+        u_stmt = (
+            update(OutboxEvent)
+            .where(OutboxEvent.id == ev_data["id"])
+            .values(processed=True, processed_at=datetime.now(timezone.utc), retry_count=new_retry_count)
+        )
+        await session.execute(u_stmt)
 
     # ================= DEAD LETTER QUEUE =================
-    async def _send_to_dlq(self, ev: OutboxEvent, error: str):
+    async def _send_to_dlq(self, ev_data: dict, error: str, final_retry_count: int):
         try:
             payload = {
-                "id": ev.id,
-                "aggregate": ev.aggregate,
-                "aggregate_id": ev.aggregate_id,
+                "id": ev_data["id"],
+                "aggregate": ev_data["aggregate"],
+                "aggregate_id": ev_data["aggregate_id"],
                 "error": error,
-                "retry_count": ev.retry_count,
+                "retry_count": final_retry_count,
                 "time": datetime.now(timezone.utc).isoformat()
             }
 
-            # ✅ Jiddiy Xato 5 FIX: Pipeline MULTI/EXEC va LTRIM orqali DLQ xotirasi to'lib ketishi yopildi!
             if self.redis:
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.lpush(self.dlq_key, orjson.dumps(payload))
-                    pipe.ltrim(self.dlq_key, 0, 9999)  # Maksimal 10,000 ta tahlil xabari saqlanadi
+                    pipe.ltrim(self.dlq_key, 0, 9999)
                     await pipe.execute()
 
-            logger.critical(f"💀 EVENT PERMANENTLY MOVED TO DLQ: {ev.id} | Cause: {error}")
-
+            logger.critical(f"💀 EVENT PERMANENTLY MOVED TO DLQ: {ev_data['id']} | Cause: {error}")
         except Exception as e:
             logger.critical(f"🚨 CRITICAL: Failed to push to DLQ stream: {e}")
 
-    # ================= CLEANUP OLD PROCESSED EVENTS (AUDIT-SAFE) =================
+    # ================= CLEANUP OLD PROCESSED EVENTS =================
     async def _maybe_cleanup(self):
-        """ Muvaffaqiyatli bajarilgan eski outbox xabarlarini tozalash (Storage Optimization) """
         now = time.time()
         if now - self._last_cleanup < self.cleanup_interval:
             return
@@ -258,7 +264,6 @@ class CacheInvalidationWorker:
         self._last_cleanup = now
         try:
             async with self.session_factory() as session:
-                # ✅ Jiddiy Xato 6 FIX: Audit log, debugging va monitoring yo'qolmasligi uchun kamida 24 soat kutiladi!
                 cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
                 
                 stmt = (
@@ -274,7 +279,7 @@ class CacheInvalidationWorker:
                 await session.commit()
                 
                 if result.rowcount > 0:
-                    logger.info(f"🧹 Storage cleaned: {result.rowcount} processed cache events (older than 24h) purged from database.")
+                    logger.info(f"Purged {result.rowcount} processed cache events (older than 24h).")
         except Exception as e:
             logger.error(f"❌ Cleanup storage error: {e}")
 

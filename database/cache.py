@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import time
 import logging
@@ -57,7 +59,7 @@ sharder = ShardRouter()
 
 
 # ======================================================
-# 🚀 CACHE MANAGER CORE (PRODUCTION PRO MAX)
+# 🚀 CACHE MANAGER CORE (PRODUCTION PRO MAX - FIXED)
 # ======================================================
 class CacheManager:
     def __init__(self, url: str):
@@ -132,7 +134,6 @@ class CacheManager:
     async def set_anime_search_map(self, search_data: dict):
         """
         🚀 Barcha anime nomlarini Redis Hash (HSET) tuzilmasiga o'tkazish.
-        Bu Race Condition (Read-Modify-Write) muammosini butkul yo'q qiladi.
         """
         key = f"{self.namespace}:anime_search:all_titles"
         try:
@@ -143,7 +144,6 @@ class CacheManager:
             hash_fields = {str(k): str(v) for k, v in search_data.items()}
             
             if self.redis:
-                # ✅ FIX 5: Stream maxlen qo'shildi va kesh yozildi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.delete(key)  # Eski keshni yangilash uchun avval tozalaymiz
                     pipe.hset(key, mapping=hash_fields)
@@ -156,13 +156,14 @@ class CacheManager:
 
             # Mahalliy L1 keshga nusxasini yuklaymiz
             await self._set_l1(key, search_data, 1800)
-            logger.info(f"🔥 CacheManager: {len(search_data)} ta anime Redis HASH qidiruv keshiga yozildi va tarqatildi.")
+            logger.info(f"🔥 CacheManager: {len(search_data)} ta anime Redis HASH qidiruv keshiga yozildi.")
         except Exception as e:
             metrics.errors += 1
             logger.error(f"❌ SET ANIME SEARCH MAP ERROR: {e}")
 
+    async def get_anime_search_map(self) -> Optional[dict]:
         """
-        🔎 Qidiruv xaritasini L1 keshdan yoki Redis HASH (HGETALL) orqali Singleflight bilan olish
+        🔎 Qidiruv xaritasini L1 keshdan yoki Redis HASH (HGETALL) orqali Singleflight bilan olish (FIXED)
         """
         key = f"{self.namespace}:anime_search:all_titles"
         
@@ -177,7 +178,6 @@ class CacheManager:
                 self._l1_cache.pop(key, None)
 
         # 2. Singleflight Pattern orqali xavfsiz olish
-        # ✅ FIX 2: asyncio.get_running_loop() ga o'tkazildi
         async with self._inflight_lock:
             if key in self._inflight:
                 metrics.inflight_hits += 1
@@ -190,7 +190,6 @@ class CacheManager:
             if self.redis:
                 raw_hash = await self.redis.hgetall(key)
                 if raw_hash:
-                    # Redis bytes obyektlarini stringga o'tkazib dict hosil qilamiz
                     data = {k.decode('utf-8'): v.decode('utf-8') for k, v in raw_hash.items()}
 
             if data:
@@ -199,7 +198,6 @@ class CacheManager:
             else:
                 metrics.misses += 1
             
-            # ✅ FIX 1: Har qanday holatda Future'ni yopish kafolati
             if not fut.done():
                 fut.set_result(data)
             return data.copy() if (data and hasattr(data, "copy")) else data
@@ -211,7 +209,6 @@ class CacheManager:
                 fut.set_result(None)
             return None
         finally:
-            # ✅ FIX 1: Finally blokida singleflight tozalanishi va xavfsiz resolve
             async with self._inflight_lock:
                 self._inflight.pop(key, None)
             if not fut.done():
@@ -219,7 +216,7 @@ class CacheManager:
 
     async def update_single_anime_in_search_map(self, anime_id: int, title: str, year: int):
         """
-        ✅ FIX 3: O(1) Operatsiya. HSET yordamida keshni buzmasdan parallel yozish xavfsizligi ta'minlandi.
+        ✅ O(1) Operatsiya. HSET yordamida keshni buzmasdan parallel yozish xavfsizligi.
         """
         key = f"{self.namespace}:anime_search:all_titles"
         try:
@@ -227,17 +224,14 @@ class CacheManager:
             field_val = f"{title} ({year})"
             
             if self.redis:
-                # ✅ FIX 5: Pipeline ichida maxlen qo'shildi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.hset(key, field_key, field_val)
                     pipe.expire(key, 1800)
                     
-                    # L1 larni invalidate qilish uchun DEL buyrug'ini tarqatamiz
                     payload = {"key": key, "sender": self.node_id, "action": "DEL"}
                     pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)}, maxlen=self._main_stream_maxlen, approximate=True)
                     await pipe.execute()
 
-            # Mahalliy L1 keshni ham yangilab qo'yamiz (Yoki o'chirib, keyingi safar yangisini tortsa ham bo'ladi)
             async with self._l1_lock:
                 if key in self._l1_cache:
                     current_map, exp = self._l1_cache[key]
@@ -246,7 +240,7 @@ class CacheManager:
                     else:
                         self._l1_cache.pop(key, None)
 
-            logger.info(f"🔄 CacheManager: HSET orqali yangi anime [{anime_id}] keshga qo'shildi va sinxronlandi.")
+            logger.info(f"🔄 CacheManager: HSET orqali [{anime_id}] keshga qo'shildi.")
         except Exception as e:
             metrics.errors += 1
             logger.error(f"❌ UPDATE SINGLE ANIME IN SEARCH MAP ERROR: {e}")
@@ -259,7 +253,6 @@ class CacheManager:
         data = {"file_id": file_id}
         try:
             if self.redis:
-                # ✅ FIX 5: Pipeline va maxlen qo'shildi (Kesh invalidate xabari tarmoqqa ham ketadi)
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.setex(key, ttl, orjson.dumps(data))
                     payload = {"key": key, "sender": self.node_id, "action": "SET"}
@@ -274,35 +267,22 @@ class CacheManager:
     # ================= 🔥 INVALIDATE ANIME CACHE (EPISODE FIX) =================
     async def invalidate_anime_cache(self, anime_id: int):
         """
-        🎬 Yangi epizod qo'shilganda yoki o'chirilganda ushbu animening keshini 
-        L1 (Local Memory) va L2 (Redis) darajasida butkul tozalaydi.
-        Kanal interfeyslaridagi va Admin paneldagi sonlar real vaqtda to'g'rilanadi.
+        🎬 Yangi epizod qo'shilganda yoki o'chirilganda animening keshini L1 va L2 da tozalaydi.
         """
         try:
-            # 1. Animening ob'ekt kalitini generatsiya qilamiz
             anime_key = self._key("anime_list", anime_id)
             
-            # 2. Local L1 keshdan o'chirib tashlaymiz
             async with self._l1_lock:
-                if anime_key in self._l1_cache:
-                    self._l1_cache.pop(anime_key, None)
+                self._l1_cache.pop(anime_key, None)
             
-            # 3. Redis (L2) keshdan o'chiramiz va klasterdagi boshqa node'larga xabar beramiz
             if self.redis:
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.delete(anime_key)
-                    
-                    # Cluster ichidagi boshqa serverlarga L1 keshni o'chirish buyrug'ini tarqatamiz
                     payload = {"key": anime_key, "sender": self.node_id, "action": "DEL"}
-                    pipe.xadd(
-                        self._stream_name, 
-                        {"data": orjson.dumps(payload)}, 
-                        maxlen=self._main_stream_maxlen, 
-                        approximate=True
-                    )
+                    pipe.xadd(self._stream_name, {"data": orjson.dumps(payload)}, maxlen=self._main_stream_maxlen, approximate=True)
                     await pipe.execute()
             
-            logger.info(f"🧹 CacheManager: Anime #{anime_id} keshi tozalandi (Yangi epizod hodisasi).")
+            logger.info(f"🧹 CacheManager: Anime #{anime_id} keshi tozalandi.")
         except Exception as e:
             metrics.errors += 1
             logger.error(f"❌ INVALIDATE ANIME CACHE ERROR: {e}")  
@@ -315,13 +295,8 @@ class CacheManager:
     
     # ================= CHANNELS CACHE =================
     async def get_channels(self) -> Optional[list]:
-        """
-        ✅ FIX 4: Singleflight va universal get() tizimiga ulandi.
-        Bu orqali 100 ta parallel so'rov kelsa ham, Redis faqat 1 marta yuklanadi.
-        """
         key = f"{self.namespace}:channels:active"
         
-        # 1. Avval L1 local xotirani tekshirish
         async with self._l1_lock:
             if key in self._l1_cache:
                 data, exp = self._l1_cache[key]
@@ -329,7 +304,6 @@ class CacheManager:
                     metrics.l1_hits += 1
                     return data
 
-        # 2. Singleflight zanjiri orqali Redisdan olish
         async with self._inflight_lock:
             if key in self._inflight:
                 metrics.inflight_hits += 1
@@ -364,14 +338,10 @@ class CacheManager:
                 fut.set_result(None)
 
     async def set_channels(self, channels_list: list):
-        """
-        ✅ Kichik Muammo 3 FIX: Endi channels yangilanganda boshqa node'larga ham broadcast xabari ketadi.
-        """
         key = f"{self.namespace}:channels:active"
         try:
             raw_data = orjson.dumps(channels_list)
             if self.redis:
-                # ✅ FIX 5: maxlen qo'shildi va pipeline orqali uzatildi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.setex(key, 3600, raw_data)
                     payload = {"key": key, "sender": self.node_id, "action": "SET"}
@@ -387,7 +357,6 @@ class CacheManager:
         key = self._key(table, obj_id)
         now = datetime.now(timezone.utc)
 
-        # ---------- L1 LOCAL CACHE ----------
         async with self._l1_lock:
             if key in self._l1_cache:
                 data, exp = self._l1_cache[key]
@@ -397,8 +366,6 @@ class CacheManager:
                     return data.copy() if hasattr(data, "copy") else data
                 self._l1_cache.pop(key, None)
 
-        # ---------- SINGLEFLIGHT PATTERN ----------
-        # ✅ FIX 2: asyncio.get_running_loop() ga o'tkazildi
         async with self._inflight_lock:
             if key in self._inflight:
                 metrics.inflight_hits += 1
@@ -429,7 +396,6 @@ class CacheManager:
                 fut.set_result(None)
             return None
         finally:
-            # ✅ FIX 1: Deadlock va Abadiy Hang holatini davolovchi to'liq xavfsiz blok
             async with self._inflight_lock:
                 self._inflight.pop(key, None)
             if not fut.done():
@@ -440,7 +406,6 @@ class CacheManager:
         try:
             raw = orjson.dumps(data)
             if self.redis:
-                # ✅ FIX 5: Maxlen limitlari qo'shildi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.setex(key, ttl, raw)
                     payload = {"key": key, "sender": self.node_id, "action": "SET"}
@@ -481,14 +446,11 @@ class CacheManager:
             if not keys_to_delete:
                 return
 
-            # Mahalliy L1 keshdan o'chirish
             async with self._l1_lock:
                 for k in keys_to_delete:
                     self._l1_cache.pop(k, None)
 
-            # Redis (L2) dan o'chirish va Pipeline orqali tarmoqqa tarqatish
             if self.redis:
-                # ✅ FIX 5: Maxlen limitlari kiritildi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     for k in keys_to_delete:
                         pipe.delete(k)
@@ -585,24 +547,23 @@ class CacheManager:
                 if self.is_alive:
                     logger.debug(f"PEL Recovery Loop Info: {e}")
 
-    # ================= L1 CLEANUP (OPTIMIZED SNAPSHOT) =================
+    # ================= L1 CLEANUP (FIXED - NO DEADLOCK / NO RUNTIME ERROR) =================
     async def _l1_cleanup(self):
         """
-        ✅ Kichik Muammo 1 FIX: O(N) kesh tekshiruvi Snapshot (Nusxa) orqali yechildi.
-        Asosiy lock faqat micro-soniyalar ushlanadi, xotira bloklanmaydi.
+        ✅ FIXED: Snapshot o'chirish jarayonida lock bitta siklda ketma-ket olinmaydi, 
+        dictionary hajmi o'zgarishi (RuntimeError) va Deadlock xavfi to'liq bartaraf etildi.
         """
         while self.is_alive:
             await asyncio.sleep(30)
             try:
                 now = datetime.now(timezone.utc)
                 
-                # 1. Lock ichida tezkor kalitlar nusxasini olamiz
+                # 1. Lock ichida faqat muddati o'tgan kalitlarni aniqlab olamiz
                 async with self._l1_lock:
                     expired = [k for k, (_, exp) in self._l1_cache.items() if now > exp]
-                
-                # 2. Lockni ochib, muddati o'tganlarni birma-bir xavfsiz o'chiramiz
-                if expired:
-                    async with self._l1_lock:
+                    
+                    # 2. Xuddi shu lock doirasida o'chirishni xavfsiz yakunlaymiz (Double lock olmasdan)
+                    if expired:
                         for k in expired:
                             self._l1_cache.pop(k, None)
             except Exception as e:
@@ -624,13 +585,12 @@ class CacheManager:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
-        # ✅ Kichik Muammo 2 FIX: Stop chaqirilganda L1 kesh to'liq tozalanadi
         async with self._l1_lock:
             self._l1_cache.clear()
 
         if self.redis:
             await self.redis.close()
-        logger.info("✅ CACHE SHUTDOWN CLEAN (Cluster Streams Preserved & L1 Memory Purged)")
+        logger.info("✅ CACHE SHUTDOWN CLEAN")
 
 
 cache_manager = CacheManager(config.VALKEY_URL)
