@@ -47,13 +47,13 @@ class Config:
     # ================= DATABASE =================
     DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
     
-    # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun default qiymatlarni mosladik:
+    # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun default qiymatlar:
     DB_POOL_SIZE: int = safe_cast("DB_POOL_SIZE", 10)
     DB_MAX_OVERFLOW: int = safe_cast("DB_MAX_OVERFLOW", 5)
     
-    # 🌟 Oracle Wallet (certs/) papkasi yo'li
-    ORACLE_CERTS_DIR: str = os.getenv("ORACLE_CERTS_DIR", os.path.join(ROOT_DIR, "certs"))
-
+    # 🔥 Tunnel ishlatganimiz sababli Wallet (certs/) endi shart emas!
+    # Bu oʻzgaruvchini kod toʻxtab qolmasligi uchun shunchaki saqlab turamiz:
+    ORACLE_CERTS_DIR: Optional[str] = os.getenv("ORACLE_CERTS_DIR", None)
     # ================= SERVER =================
     PORT: int = safe_cast("PORT", 8000)
     WEBHOOK_HOST: str = os.getenv("WEBHOOK_HOST", "").strip()

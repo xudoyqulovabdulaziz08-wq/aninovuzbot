@@ -12,42 +12,15 @@ from config import config
 
 logger = logging.getLogger("DB")
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-
-# ================= ORACLE CONFIG (WALLET / CERTS) =================
-def get_oracle_connect_args() -> dict:
-    """
-    Oracle Cloud Wallet (certs) papkasini Linux/Windows muhitiga moslab dynamic ulash.
-    """
-    # config.py ichida certs papkasi yo'li berilgan bo'lsa o'shani oladi, 
-    # bo'lmasa loyiha ildizidagi 'certs' papkasini qidiradi
-    certs_dir = getattr(config, "ORACLE_CERTS_DIR", os.path.join(ROOT_DIR, "certs"))
-    
-    # Render'da muhit o'zgaruvchisidan WALLET_PASSPHRASE ni o'qiymiz
-    wallet_password = os.getenv("WALLET_PASSPHRASE")
-
-    logger.info(f"--> Oracle config_dir ulanmoqda: {certs_dir}")
-
-    # async oracledb Thin rejimida ishlashi uchun kerakli argumentlar
-    connect_args = {
-        "config_dir": certs_dir,
-        "wallet_location": certs_dir,
-    }
-    
-    if wallet_password:
-        connect_args["wallet_password"] = wallet_password
-
-    return connect_args
-
-connect_args = get_oracle_connect_args()
+# ❌ ESKI ORACLE CONFIG (WALLET / CERTS) FUNKSIYASINI BUTUNLAY OʻCHIRDIK!
+# Chunki tunnel orqali mTLS (Wallet)'siz, toʻgʻridan-toʻgʻri TCP ulanamiz.
 
 # ================= ENGINE (MAX CONNECTION 30 LIMIT FIX) =================
 engine = create_async_engine(
-    config.DATABASE_URL,  # Bu yerda endi oracle+oracledb://... bo'lishi shart
+    config.DATABASE_URL,  # Render'dagi: oracle+oracledb://ADMIN:parol@db.aninov.uz:1522/?service_name=aninovuzdb_high
     echo=False,
 
     # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun:
-    # pool_size va max_overflow jami 12 tadan oshmaydi. Bot yuqori yuklamada ham xavfsiz ishlaydi.
     pool_size=10,
     max_overflow=5,
 
@@ -56,7 +29,9 @@ engine = create_async_engine(
     pool_recycle=900,  # Oracle ulanishlarni tezroq tozalashi uchun 15 daqiqaga tushirdik
     pool_timeout=15,   # Puldan joy bo'shashini kutish vaqti
 
-    connect_args=connect_args
+    # 🔥 DIQQAT: connect_args ichidagi wallet va certs parametrlarini olib tashladik!
+    # Drayver toza Thin mode rejimida internet orqali ulanib ketadi.
+    connect_args={} 
 )
 
 # ================= SESSION =================
@@ -77,7 +52,7 @@ async def check_db(retries: int = 3, delay: float = 2.0):
                 # ⚠ Oracle'da oddiy "SELECT 1" xato beradi, "FROM dual" shart!
                 await conn.execute(text("SELECT 1 FROM dual"))
 
-            logger.info("🚀 Oracle Database connected successfully and healthy!")
+            logger.info("🚀 Oracle Database connected successfully via Tunnel and healthy!")
             return True
 
         except Exception as e:
@@ -107,7 +82,7 @@ async def safe_db_execute(session: AsyncSession, stmt, timeout: float = 3.0):
 # ================= GRACEFUL SHUTDOWN =================
 async def close_db():
     """
-    Bot to'xtatilganda barcha ulanishlar pulini toza yopish (Sessiyalar osilib qolmasligi uchun juda muhim!)
+    Bot to'xtatilganda barcha ulanishlar pulini toza yopish
     """
     try:
         await engine.dispose()
