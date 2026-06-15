@@ -9,6 +9,7 @@ from typing import Any, Optional, Dict
 
 from sqlalchemy import event, inspect, select
 from sqlalchemy.engine import Connection
+from sqlalchemy.sql import expression  # Oracle boolean muammosi uchun qo'shildi
 
 from database.models import OutboxEvent, MODELS_TO_WATCH
 
@@ -129,10 +130,10 @@ def emit_outbox_event(
         if ENABLE_DEDUP:
             event_hash = make_event_hash(table, pk_val, event_type, raw_payload)
             
-            # Unprocessed bo'lgan aynan shu hashni tekshirish
+            # 🔥 ORACLE FIX: boolean uchun expression.false() ishlatildi
             dup_stmt = select(OutboxEvent.__table__.c.id).where(
                 OutboxEvent.__table__.c.event_hash == event_hash,
-                OutboxEvent.__table__.c.processed == False
+                OutboxEvent.__table__.c.processed == expression.false()
             )
             if connection.execute(dup_stmt).first():
                 return  
@@ -147,7 +148,7 @@ def emit_outbox_event(
             event_type=event_type,
             payload=payload_str,  
             event_hash=event_hash,
-            processed=False,
+            processed=False,  # Insert jarayonida SQLAlchemy buni 0 ga o'zi to'g'rilab beradi
             retry_count=0,
             created_at=datetime.now(timezone.utc)
         )

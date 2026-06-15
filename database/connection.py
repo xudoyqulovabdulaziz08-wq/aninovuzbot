@@ -12,26 +12,27 @@ from config import config
 
 logger = logging.getLogger("DB")
 
-# ❌ ESKI ORACLE CONFIG (WALLET / CERTS) FUNKSIYASINI BUTUNLAY OʻCHIRDIK!
-# Chunki tunnel orqali mTLS (Wallet)'siz, toʻgʻridan-toʻgʻri TCP ulanamiz.
+# ================= ENGINE (WALLET ORQALI ULANISH) =================
+# 🔐 Render Secret Files orqali mTLS (Wallet) bilan xavfsiz ulanish
 
-# ================= ENGINE (MAX CONNECTION 30 LIMIT FIX) =================
 engine = create_async_engine(
-    config.DATABASE_URL,  # Render'dagi: oracle+oracledb://ADMIN:parol@db.aninov.uz:1522/?service_name=aninovuzdb_high
+    config.DATABASE_URL,
     echo=False,
 
-    # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun:
-    pool_size=10,
-    max_overflow=5,
+    # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun config'dan olyapmiz:
+    pool_size=config.DB_POOL_SIZE,
+    max_overflow=config.DB_MAX_OVERFLOW,
 
     # Zombie ulanishlarni o'ldirish va qayta tiklash
     pool_pre_ping=True,
-    pool_recycle=900,  # Oracle ulanishlarni tezroq tozalashi uchun 15 daqiqaga tushirdik
+    pool_recycle=900,  # Oracle ulanishlarni tezroq tozalashi uchun 15 daqiqa
     pool_timeout=15,   # Puldan joy bo'shashini kutish vaqti
 
-    # 🔥 DIQQAT: connect_args ichidagi wallet va certs parametrlarini olib tashladik!
-    # Drayver toza Thin mode rejimida internet orqali ulanib ketadi.
-    connect_args={} 
+    # 🔥 DIQQAT: Config.py dan olingan Wallet parollari shu yerdan drayverga uzatiladi
+    connect_args={
+        "wallet_location": config.WALLET_LOCATION,
+        "wallet_password": config.WALLET_PASSWORD
+    }
 )
 
 # ================= SESSION =================
@@ -52,7 +53,7 @@ async def check_db(retries: int = 3, delay: float = 2.0):
                 # ⚠ Oracle'da oddiy "SELECT 1" xato beradi, "FROM dual" shart!
                 await conn.execute(text("SELECT 1 FROM dual"))
 
-            logger.info("🚀 Oracle Database connected successfully via Tunnel and healthy!")
+            logger.info("🚀 Oracle Database connected successfully via Wallet and healthy!")
             return True
 
         except Exception as e:
