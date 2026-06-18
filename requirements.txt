@@ -9,3 +9,4 @@ pytz
 matplotlib
 oracledb
 SQLAlchemy
+asyncpg
