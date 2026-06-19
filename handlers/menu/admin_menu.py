@@ -1,5 +1,6 @@
 import logging
-from aiogram import Router, F, types
+from typing import Any
+from aiogram import Router, F, types 
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 async def admin_panel_handler(
     event: types.Message | types.CallbackQuery, 
     state: FSMContext,
-    db_session: AsyncSession  # 🟢 Middleware orqali keladigan DB sessiya
+    session: Any  # 🟢 FIX: Middleware dagi data["session"] nomiga to'liq moslandi
 ):
     if state:
         await state.clear()
@@ -31,8 +32,9 @@ async def admin_panel_handler(
 
     # 1. Bazadan foydalanuvchini va uning statusini yuklab olamiz
     try:
+        # 🔥 FIX: 'session' obyekti orqali lazy query yuboriladi
         query = select(DBUser).where(DBUser.user_id == user_id)
-        result = await db_session.execute(query)
+        result = await session.execute(query)
         db_user = result.scalar_one_or_none()
         
         # Agar foydalanuvchi bazada bo'lmasa yoki admin bo'lmasa, kirishni taqiqlaymiz
