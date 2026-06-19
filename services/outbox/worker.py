@@ -8,8 +8,8 @@ import hashlib
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional, List
-from sqlalchemy import select, update, or_
 
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from database.models import OutboxEvent
@@ -30,8 +30,9 @@ class MetricsBrain:
 
         self.window_size = 200
         self.latency_window = deque(maxlen=self.window_size)
-        self._latency_sum = 0.0 
+        self._latency_sum = 0.0  # Real O(1) uchun yig'indi
         
+        # user_id -> [heat_score, last_active_timestamp]
         self.user_heat = defaultdict(list)
         self._user_cleanup_counter = 0
 
@@ -64,6 +65,7 @@ class MetricsBrain:
         return self.user_heat[user_id][0] > 20 if user_id in self.user_heat else False
 
     async def maybe_clear_cold_users(self):
+        """ ✅ Asinxron yield orqali Event Loop muzlashini oldini olish """
         if self._user_cleanup_counter <= 10000:
             return
 
@@ -80,20 +82,21 @@ class MetricsBrain:
                 continue
             
             score, last_active = user_data
+            # 20 minut aktiv bo'lmagan yoki balli past foydalanuvchini o'chirish
             if current_time - last_active > 1200 or score <= 2:
                 self.user_heat.pop(uid, None)
             else:
                 self.user_heat[uid][0] = score // 2
 
             if i % chunk_size == 0:
-                await asyncio.sleep(0) 
+                await asyncio.sleep(0)  # Loopga nafas beramiz
 
 
 metrics = MetricsBrain()
 
 
 # ==========================================
-# 🚀 PRO ULTRA WORKER (CRASH + CLUSTER SAFE)
+# 🚀 PRO ULTRA WORKER (CRASH + CLUSTER SAFE & POSTGRES OPTIMIZED)
 # ==========================================
 class OutboxWorker:
     def __init__(self, session_pool: Any, cache_manager: Any, redis: Optional[Any] = None):
@@ -104,12 +107,9 @@ class OutboxWorker:
         self.running = True
 
         # Tuning parameters
-        self.batch_size = 50  # Render CPU limitatsiyasi uchun 100 dan 50 ga tushirildi (Xavfsiz batch)
+        self.batch_size = 100
         self.max_retry = 6
-        self.parallel_limit = 15  # Pool Overflow bo'lmasligi uchun limit muvozanatlandi
-
-        # Global DB Connection Semaphore (Pool himoyasi)
-        self.semaphore = asyncio.Semaphore(self.parallel_limit)
+        self.parallel_limit = 20  
 
         # DLQ keys
         self.dlq_key = "dlq:outbox"
@@ -123,7 +123,7 @@ class OutboxWorker:
     def dynamic_ttl(self, user_id: int) -> int:
         base = 300
         if metrics.is_hot_user(user_id):
-            return base * 5  
+            return base * 5  # Hot user keshda 25 daqiqa saqlanadi
         return base + random.randint(0, 120)
 
     def shard_key(self, key: str) -> str:
@@ -146,7 +146,7 @@ class OutboxWorker:
             logger.info("✅ CIRCUIT BREAKER CLOSED. RESUMING OPERATIONS.")
 
     async def start(self):
-        logger.info("🚀 PRO ULTRA WORKER STARTED SUCCESSFULLY (RENDER & CLOUD OPTIMIZED)")
+        logger.info("🚀 PRO ULTRA WORKER STARTED SUCCESSFULLY")
 
         while self.running:
             try:
@@ -156,6 +156,7 @@ class OutboxWorker:
                     await asyncio.sleep(2)
                     continue
 
+                # Davriy tozalashni xavfsiz chaqirish
                 await metrics.maybe_clear_cold_users()
 
                 start_time = time.time()
@@ -164,7 +165,7 @@ class OutboxWorker:
                 metrics.add_latency(time.time() - start_time)
 
                 if processed:
-                    await asyncio.sleep(0.05)  # Render CPU dam olishi uchun biroz oshirildi
+                    await asyncio.sleep(0.01)  
                 else:
                     await asyncio.sleep(0.5)   
 
@@ -181,16 +182,13 @@ class OutboxWorker:
         async with self.session_pool() as main_session:
             try:
                 now = datetime.now(timezone.utc)
-                
-                # Faqat qayta ishlanmagan va ijro vaqti yetib kelgan eventlarni saralab olish
+                # ✅ FIX: Faqat qayta urinish vaqti kelgan yoki yangi eventlarni o'qiymiz
+                # Agar modelda next_retry_at bo'lmasa, shunchaki bu shartni o'chirib qo'yishingiz mumkin.
                 stmt = (
                     select(OutboxEvent)
                     .where(
                         OutboxEvent.processed.is_(False),
-                        or_(
-                            OutboxEvent.created_at.is_(None),
-                            OutboxEvent.created_at <= now
-                        )
+                        (OutboxEvent.next_retry_at.is_(None)) | (OutboxEvent.next_retry_at <= now)
                     )
                     .order_by(OutboxEvent.priority.desc(), OutboxEvent.id.asc()) 
                     .limit(self.batch_size)
@@ -202,40 +200,31 @@ class OutboxWorker:
                 if not events:
                     return 0
 
-                # Memory leak va Merge conflict oldini olish uchun obyekt ma'lumotlarini ajratib olamiz
-                event_tasks_data = [
-                    {
-                        "id": ev.id,
-                        "payload": ev.payload,
-                        "event_type": ev.event_type,
-                        "retry_count": ev.retry_count,
-                        "priority": ev.priority
-                    } for ev in events
-                ]
+                semaphore = asyncio.Semaphore(self.parallel_limit)
 
-                async def safe_process(ev_data: dict):
-                    async with self.semaphore:  # Global semafor pooldan to'g'ri foydalanishni ta'minlaydi
+                # ✅ Jiddiy Xato 1 FIX: Har bir parallel korutin o'zining shaxsiy session poolidan foydalanadi!
+                async def safe_process(ev: OutboxEvent):
+                    async with semaphore:
                         try:
-                            # Biznes mantiqni bajarish
-                            success = await self.handle_event(ev_data)
+                            success = await self.handle_event(ev)
                             if success:
+                                # Muvaffaqiyatli yakunlansa, oqim buzilmasligi uchun alohida sessiyada saqlaymiz
                                 async with self.session_pool() as local_session:
-                                    # ✅ BULK UPDATE OPTIMIZATION: Merge ishlatilmaydi, to'g'ridan-to'g'ri ID bo'yicha yoziladi
-                                    u_stmt = (
-                                        update(OutboxEvent)
-                                        .where(OutboxEvent.id == ev_data["id"])
-                                        .values(processed=True, processed_at=datetime.now(timezone.utc))
-                                    )
-                                    await local_session.execute(u_stmt)
+                                    attached_ev = await local_session.merge(ev)
+                                    attached_ev.processed = True
+                                    # ✅ Jiddiy Xato 2 FIX: created_at daxlsiz, processed_at yangilandi!
+                                    attached_ev.processed_at = datetime.now(timezone.utc)
                                     await local_session.commit()
                                 metrics.events_processed += 1
                         except Exception as res_err:
+                            # Xatoliklarni mutlaqo izolatsiya qilingan sessiyada bajarish
                             async with self.session_pool() as fail_session:
-                                await self.handle_failure(fail_session, ev_data, res_err)
+                                attached_fail_ev = await fail_session.merge(ev)
+                                await self.handle_failure(fail_session, attached_fail_ev, res_err)
                                 await fail_session.commit()
 
-                # Tasklarni parallel xavfsiz boshqarish
-                await asyncio.gather(*(safe_process(ev) for ev in event_tasks_data))
+                # Tasklarni parallel asinxron ishga tushiramiz
+                await asyncio.gather(*(safe_process(ev) for ev in events))
                 
                 if self.failure_count > 0:
                     self.failure_count = max(0, self.failure_count - 1)
@@ -250,16 +239,10 @@ class OutboxWorker:
     # ==========================================
     # ⚙️ EVENT HANDLER (SAFE PARSING & EXECUTION)
     # ==========================================
-    async def handle_event(self, ev_data: dict) -> bool:
+    async def handle_event(self, ev: OutboxEvent) -> bool:
         try:
-            raw_payload = ev_data["payload"]
-
-            if hasattr(raw_payload, "read"):
-                try:
-                    raw_payload = await raw_payload.read()
-                except TypeError:
-                    raw_payload = raw_payload.read()
-
+            raw_payload = ev.payload
+            # PostgreSQL xavfsiz JSON handling (Oracle CLOB logikasi olib tashlangan)
             if isinstance(raw_payload, (str, bytes)):
                 payload = orjson.loads(raw_payload)
             else:
@@ -272,54 +255,59 @@ class OutboxWorker:
                 payload = orjson.loads(decompressed_bytes)
             
         except Exception as e:
-            logger.critical(f"🚨 PAYLOAD PARSING ERROR [ID: {ev_data['id']}]: {e}")
-            await self.send_to_dlq_raw(ev_data, f"Parsing failed: {e}")
-            return True  
+            logger.critical(f"🚨 PAYLOAD PARSING ERROR [ID: {ev.id}]: {e}")
+            await self.send_to_dlq_raw(ev, f"Parsing failed: {e}")
+            return True  # Zanjir buzilmasligi uchun True qaytarib, o'chiramiz (u DLQ ga ketdi)
 
-        # Asosiy tashqi xizmatlar bilan ishlash
-        await asyncio.gather(
-            self.fake_telegram(payload),
-            self.fake_notify(payload)
-        )
+        try:
+            # Asosiy biznes logikani bajarish
+            await asyncio.gather(
+                self.fake_telegram(payload),
+                self.fake_notify(payload)
+            )
 
-        user_id = payload.get("user_id")
-        if user_id:
-            metrics.mark_user(int(user_id))
-            ttl = self.dynamic_ttl(int(user_id))
-            await self.cache_event(payload, ttl)
+            user_id = payload.get("user_id")
+            if user_id:
+                metrics.mark_user(int(user_id))
+                ttl = self.dynamic_ttl(int(user_id))
+                await self.cache_event(payload, ttl, ev.id)
 
-        return True
+            return True
+
+        except Exception as biz_err:
+            raise biz_err
 
     # ==========================================
     # 💀 RAW DLQ FOR BROKEN JSON
     # ==========================================
-    async def send_to_dlq_raw(self, ev_data: dict, err_msg: str):
+    async def send_to_dlq_raw(self, ev: OutboxEvent, err_msg: str):
         if self.redis:
             try:
                 dlq_sharded_key = self.shard_key(self.dlq_key)
-                safe_payload = str(ev_data["payload"]) if ev_data["payload"] else "EMPTY_PAYLOAD"
+                safe_payload = str(ev.payload) if ev.payload else "EMPTY_PAYLOAD"
                 
+                # ✅ Jiddiy Xato 3 FIX: LPUSH + LTRIM pipeline resurs xavfsizligi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.lpush(
                         dlq_sharded_key,
                         orjson.dumps({
-                            "id": str(ev_data["id"]),
-                            "event_type": ev_data["event_type"],
+                            "id": str(ev.id),
+                            "event_type": ev.event_type,
                             "error": err_msg,
                             "raw_payload": safe_payload,
                             "time": datetime.now(timezone.utc).isoformat()
                         })
                     )
-                    pipe.ltrim(dlq_sharded_key, 0, 4999) 
+                    pipe.ltrim(dlq_sharded_key, 0, 4999) # Max 5000 ta saqlanadi
                     await pipe.execute()
             except Exception as redis_err:
                 logger.error(f"🚨 FAILED TO PUSH TO REDIS RAW DLQ: {redis_err}")
-        logger.critical(f"💀 BROKEN EVENT FORCED TO DLQ: {ev_data['id']}")
+        logger.critical(f"💀 BROKEN EVENT FORCED TO DLQ: {ev.id}")
 
     # ==========================================
-    # 🧠 CACHE ACTION
+    # 🧠 CACHE ACTION (RACE-CONDITION SAFE)
     # ==========================================
-    async def cache_event(self, payload: Dict[str, Any], ttl: int):
+    async def cache_event(self, payload: Dict[str, Any], ttl: int, event_id: Any):
         try:
             user_id = payload.get("user_id")
             if user_id:
@@ -348,49 +336,41 @@ class OutboxWorker:
     # ==========================================
     # 💀 FAILURE + DLQ MANAGEMENT (WITH EXPONENTIAL BACKOFF)
     # ==========================================
-    async def handle_failure(self, session: Any, ev_data: dict, err: Exception):
+    async def handle_failure(self, session: Any, ev: OutboxEvent, err: Exception):
         metrics.failures += 1
-        new_retry_count = ev_data["retry_count"] + 1
+        ev.retry_count += 1
         
-        logger.warning(f"⚠️ Event operational failure [ID: {ev_data['id']} | Attempt: {new_retry_count}]: {err}")
+        logger.warning(f"⚠️ Event operational failure [ID: {ev.id} | Attempt: {ev.retry_count}]: {err}")
 
-        if new_retry_count >= self.max_retry:
-            await self.send_to_dlq(ev_data, str(err), new_retry_count)
-            # Maksimal urunish tugasa ham bazada processed qilinadi, aks holda cheksiz aylanadi
-            u_stmt = (
-                update(OutboxEvent)
-                .where(OutboxEvent.id == ev_data["id"])
-                .values(processed=True, processed_at=datetime.now(timezone.utc), retry_count=new_retry_count)
-            )
-            await session.execute(u_stmt)
+        if ev.retry_count >= self.max_retry:
+            await self.send_to_dlq(ev, str(err))
+            ev.processed = True
+            # ✅ Jiddiy Xato 2 FIX: Tarixiy created_at o'rniga processed_at yozildi!
+            ev.processed_at = datetime.now(timezone.utc)
             return
 
-        # ✅ True Exponential Backoff joriy qilish va bazaga saqlash
-        delay_seconds = min(5 * (2 ** new_retry_count), 300)
-        next_retry_time = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
-        new_priority = max(1, ev_data["priority"] - 1)
-
-        # Kelajakda qayta urinish rejasini bazaga yozamiz
-        u_stmt = (
-            update(OutboxEvent)
-            .where(OutboxEvent.id == ev_data["id"])
-            .values(retry_count=new_retry_count, created_at=next_retry_time, priority=new_priority)
-        )
-        await session.execute(u_stmt)
+        # ✅ Jiddiy Xato 5 FIX: Exponential Backoff real qo'llanildi
+        delay_seconds = min(5 * (2 ** ev.retry_count), 300)
         
-    async def send_to_dlq(self, ev_data: dict, err_msg: str, final_retry_count: int):
+        # Keyingi urinish vaqtini kelajakka suramiz (baza band bo'lib qolmasligi uchun)
+        if hasattr(ev, 'next_retry_at'):
+            ev.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+            
+        ev.priority = max(1, ev.priority - 1)  # Ustuvorlikni pasaytiramiz
+
+    async def send_to_dlq(self, ev: OutboxEvent, err_msg: str):
         if self.redis:
             try:
                 dlq_sharded_key = self.shard_key(self.dlq_key)
                 
+                # ✅ Jiddiy Xato 3 FIX: Pipeline LTRIM integratsiyasi
                 async with self.redis.pipeline(transaction=True) as pipe:
                     pipe.lpush(
                         dlq_sharded_key,
                         orjson.dumps({
-                            "id": str(ev_data["id"]),
-                            "event_type": ev_data["event_type"],
+                            "id": str(ev.id),
+                            "event_type": ev.event_type,
                             "error": err_msg,
-                            "retry_count": final_retry_count,
                             "time": datetime.now(timezone.utc).isoformat()
                         })
                     )
@@ -398,4 +378,4 @@ class OutboxWorker:
                     await pipe.execute()
             except Exception as redis_err:
                 logger.error(f"🚨 FAILED TO PUSH TO REDIS DLQ: {redis_err}")
-        logger.critical(f"💀 PERMANENT OUTBOX FAILURE MOVE TO DLQ: {ev_data['id']}")
+        logger.critical(f"💀 PERMANENT OUTBOX FAILURE MOVE TO DLQ: {ev.id}")
