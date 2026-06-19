@@ -15,14 +15,41 @@ logger = logging.getLogger(__name__)
 # ========================================================================
 @router.message(F.text == "⚙️ SC ADMIN PANEL")
 @router.callback_query(F.data == "admin_panel")
-async def admin_panel_handler(event: types.Message | types.CallbackQuery, state: FSMContext):
+async def admin_panel_handler(
+    event: types.Message | types.CallbackQuery, 
+    state: FSMContext,
+    db_session: AsyncSession  # 🟢 Middleware orqali keladigan DB sessiya
+):
     if state:
         await state.clear()
     
-    # Kelajakda Middleware yoki DB orqali haqiqiy statusni olishingiz mumkin
     user_id = event.from_user.id
-    user_status = "admin" 
-    
+
+    # 1. Bazadan foydalanuvchini va uning statusini yuklab olamiz
+    try:
+        query = select(DBUser).where(DBUser.user_id == user_id)
+        result = await db_session.execute(query)
+        db_user = result.scalar_one_or_none()
+        
+        # Agar foydalanuvchi bazada bo'lmasa yoki admin bo'lmasa, kirishni taqiqlaymiz
+        if not db_user or db_user.status != "admin":
+            if isinstance(event, types.CallbackQuery):
+                await event.answer("⚠️ Bu bo'limga kirish faqat adminlar uchun!", show_alert=True)
+            else:
+                await event.answer("⚠️ Kechirasiz, siz admin emassiz!")
+            return  # Handler ishini shu yerda tugatadi
+
+        user_status = db_user.status  # "admin" ekanligi aniq bo'ldi
+
+    except Exception as e:
+        logger.error(f"❌ DB dan admin statusini olishda xatolik: {e}")
+        if isinstance(event, types.CallbackQuery):
+            await event.answer("⚠️ Tizim xatoligi yuz berdi. Keyinroq urinib ko'ring.", show_alert=True)
+        else:
+            await event.answer("⚠️ Tizim xatoligi yuz berdi.")
+        return
+
+    # 2. Admin ekanligi tasdiqlangach, panelni ko'rsatish
     kb = admin_panel_kb(user_id=user_id, user_status=user_status)
     
     text = (
@@ -45,11 +72,9 @@ async def admin_panel_handler(event: types.Message | types.CallbackQuery, state:
     except Exception as e:
         logger.error(f"❌ Admin panel kutilmagan xatolik: {e}")
     finally:
-        # Callback kelganda miltillash va qotib qolishni oldini olish
+        # Callback kelganda yuklanish belgisini o'chirish
         if isinstance(event, types.CallbackQuery):
             await event.answer("🛡 Joninlar paneli yuklandi")
-
-
 # ========================================================================
 # 👑 2. CREATOR (OLIY KAGE) BOSHQARUV PANELI
 # ========================================================================

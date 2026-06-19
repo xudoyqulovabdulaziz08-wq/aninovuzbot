@@ -1,259 +1,115 @@
 from __future__ import annotations
-
-
-
 import uuid
-
+import enum
 from datetime import datetime, timezone
-
 from decimal import Decimal
-
 from typing import List, Optional
-
 from sqlalchemy import JSON
-
 from sqlalchemy.ext.hybrid import hybrid_property
-
 from sqlalchemy import (
-
     String, Integer, BigInteger, Boolean,
-
     Text, DateTime, ForeignKey, Index,
-
     UniqueConstraint, Column, Table, Numeric, Enum
-
 )
-
 from sqlalchemy.orm import (
-
     DeclarativeBase, Mapped, mapped_column,
-
     relationship
-
 )
-
 from sqlalchemy.sql import func
-
 from sqlalchemy.dialects.postgresql import JSONB
-
-
-
 # ================= BASE =================
-
 class Base(DeclarativeBase):
-
     """Shared base for all models"""
-
     pass
-
 # ================= ASSOCIATION TABLE =================
-
 anime_genres = Table(
-
     "anime_genres",
-
     Base.metadata,
-
     Column("anime_id", ForeignKey("anime_list.anime_id", ondelete="CASCADE"), primary_key=True),
-
     Column("genre_id", ForeignKey("genres.id", ondelete="CASCADE"), primary_key=True),
-
     Index("idx_anime_id", "anime_id"),
-
     Index("idx_genre_id", "genre_id"),
-
 )
-
+class UserStatus(enum.Enum):
+    USER = "user"
+    VIP = "vip"
+    ADMIN = "admin"
 # ================= USER =================
-
 class DBUser(Base):
-
     __tablename__ = "users"
-
-
-
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-
-
-
     username: Mapped[Optional[str]] = mapped_column(
-
         String(255),
-
         index=True
-
     )
-
-
-
     joined_at: Mapped[datetime] = mapped_column(
-
         DateTime(timezone=True),
-
         server_default=func.now(),
-
         index=True
-
     )
-
-
-
     points: Mapped[int] = mapped_column(Integer, default=0, index=True)
-
-
-
-    status: Mapped[str] = mapped_column(
-
-        Enum("user", "vip", "admin", name="user_status"),
-
-        default="user",
-
+    status: Mapped[UserStatus] = mapped_column(
+        Enum(UserStatus, name="user_status"),
+        default=UserStatus.USER,
         index=True
-
     )
-
-
-
     vip_expire_date: Mapped[Optional[datetime]] = mapped_column(
-
         DateTime(timezone=True)
-
     )
-
-
-
     health_mode: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
-
     referral_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
-
-
-
     last_redirected_channel: Mapped[Optional[str]] = mapped_column(String(50))
-
     referred_by_channel: Mapped[Optional[str]] = mapped_column(String(50))
-
-
-
     # 🔴 FK QO‘SHILDI (ENG MUHIM FIX)
-
     referred_by: Mapped[Optional[int]] = mapped_column(
-
         BigInteger,
-
         ForeignKey("users.user_id", ondelete="SET NULL"),
-
         index=True
-
     )
-
-
-
     # 🔥 SELF RELATION
-
     referred_by_user: Mapped[Optional["DBUser"]] = relationship(
-
         "DBUser",
-
         remote_side=[user_id],
-
         backref="referrals",
-
         lazy="joined"
-
     )
-
-
-
     # ================= RELATIONSHIPS =================
-
-
-
     favorites: Mapped[List["Favorite"]] = relationship(
-
         back_populates="user",
-
         cascade="all, delete-orphan",
-
         lazy="selectin"
-
     )
-
-
-
     history: Mapped[List["History"]] = relationship(
-
         back_populates="user",
-
         cascade="all, delete-orphan",
-
         lazy="selectin"
-
     )
-
-
-
     comments: Mapped[List["Comment"]] = relationship(
-
         "Comment",
-
         back_populates="user",
-
         lazy="selectin"
-
     )
-
-
-
     tickets: Mapped[List["Ticket"]] = relationship(
-
         back_populates="user",
-
         lazy="selectin"
-
     )
-
-
-
     admin_settings: Mapped[Optional["AdminSettings"]] = relationship(
-
         back_populates="user",
-
         uselist=False,
-
         lazy="joined"
-
     )
-
-
-
     __table_args__ = (
-
         Index("idx_user_points_fast", "status", "points"),
-
         Index("idx_user_ref_fast", "referral_count"),
-
     )
-
-
-
     # 🔥 HYBRID (queryda ham ishlaydi)
-
     @hybrid_property
-
     def is_vip(self) -> bool:
-
         if self.status != "vip":
-
             return False
-
         if not self.vip_expire_date:
-
             return True
-
         return self.vip_expire_date > datetime.now(timezone.utc)
-
 # ================= GENRE =================
 
 class Genre(Base):
