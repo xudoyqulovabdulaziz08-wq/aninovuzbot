@@ -264,14 +264,24 @@ class DbSessionMiddleware(BaseMiddleware):
 
     async def _enqueue_cache_update(self, user_data: Dict[str, Any]):
         try:
+            # 🌟 DYNAMIC LAZY INITIALIZATION (MUMKIN BO'LGAN NONE XATOSINI OLDINI OLISH):
+            if not hasattr(state, "cache_queue") or state.cache_queue is None:
+                # Agar queue hali yaratilmagan bo'lsa, joriy loop ichida yaratamiz
+                state.cache_queue = asyncio.Queue(maxsize=1000)
+                logger.info("⚙️ [Cache Queue] Asinxron navbat dinamik ravishda yaratildi.")
+
             state.cache_queue.put_nowait(user_data)
         except asyncio.QueueFull:
             try:
+                # Navbat to'lib ketganda eng birinchi eski elementni o'chiramiz
                 dropped = state.cache_queue.get_nowait()
                 logger.warning(f"⚠️ Cache queue overflow, dropped oldest update for user_id={dropped.get('user_id', 'unknown')}")
                 state.cache_queue.put_nowait(user_data)
             except Exception as e:
                 logger.error(f"❌ Cache queue push exception: {e}")
+        except AttributeError as e:
+            # Har qanday kutilmagan NoneType xatolaridan to'liq himoya
+            logger.error(f"❌ Cache queue initsializatsiya xatoligi chetlab o'tildi: {e}")
 
     def _emergency_user(self, user_obj: User) -> Dict[str, Any]:
         return {
