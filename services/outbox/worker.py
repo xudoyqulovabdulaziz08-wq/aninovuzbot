@@ -5,7 +5,7 @@ import logging
 import time
 import random
 import hashlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional, List
 
@@ -181,15 +181,10 @@ class OutboxWorker:
     async def process_batch(self) -> int:
         async with self.session_pool() as main_session:
             try:
-                now = datetime.now(timezone.utc)
-                # ✅ FIX: Faqat qayta urinish vaqti kelgan yoki yangi eventlarni o'qiymiz
-                # Agar modelda next_retry_at bo'lmasa, shunchaki bu shartni o'chirib qo'yishingiz mumkin.
+                # ✅ FIX: Modelingizga 100% mos tushadigan va 'next_retry_at'siz ishlaydigan query
                 stmt = (
                     select(OutboxEvent)
-                    .where(
-                        OutboxEvent.processed.is_(False),
-                        (OutboxEvent.next_retry_at.is_(None)) | (OutboxEvent.next_retry_at <= now)
-                    )
+                    .where(OutboxEvent.processed.is_(False))
                     .order_by(OutboxEvent.priority.desc(), OutboxEvent.id.asc()) 
                     .limit(self.batch_size)
                 )
@@ -242,7 +237,7 @@ class OutboxWorker:
     async def handle_event(self, ev: OutboxEvent) -> bool:
         try:
             raw_payload = ev.payload
-            # PostgreSQL xavfsiz JSON handling (Oracle CLOB logikasi olib tashlangan)
+            # PostgreSQL xavfsiz JSON handling (Mavjud OutboxEvent modelingiz bilan mos holatda)
             if isinstance(raw_payload, (str, bytes)):
                 payload = orjson.loads(raw_payload)
             else:
@@ -334,7 +329,7 @@ class OutboxWorker:
         await asyncio.sleep(0.005)
 
     # ==========================================
-    # 💀 FAILURE + DLQ MANAGEMENT (WITH EXPONENTIAL BACKOFF)
+    # 💀 FAILURE + DLQ MANAGEMENT (WITH PRIORITY DEGRADATION)
     # ==========================================
     async def handle_failure(self, session: Any, ev: OutboxEvent, err: Exception):
         metrics.failures += 1
@@ -349,14 +344,10 @@ class OutboxWorker:
             ev.processed_at = datetime.now(timezone.utc)
             return
 
-        # ✅ Jiddiy Xato 5 FIX: Exponential Backoff real qo'llanildi
-        delay_seconds = min(5 * (2 ** ev.retry_count), 300)
-        
-        # Keyingi urinish vaqtini kelajakka suramiz (baza band bo'lib qolmasligi uchun)
-        if hasattr(ev, 'next_retry_at'):
-            ev.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
-            
-        ev.priority = max(1, ev.priority - 1)  # Ustuvorlikni pasaytiramiz
+        # ✅ FIX: 'next_retry_at' ustuni yo'qligi sababli muammoni priority orqali yechamiz.
+        # Xato bergan elementning ustuvorligini (priority) kamaytiramiz. 
+        # Shunda yangi va muvaffaqiyatli eventlar birinchi navbatda qayta ishlanadi va baza siqilib qolmaydi.
+        ev.priority = max(0, ev.priority - 1)  
 
     async def send_to_dlq(self, ev: OutboxEvent, err_msg: str):
         if self.redis:

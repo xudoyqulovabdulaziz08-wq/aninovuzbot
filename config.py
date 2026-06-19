@@ -43,19 +43,12 @@ class Config:
     )
     VALKEY_SSL_SKIP: bool = os.getenv("VALKEY_SSL_SKIP", "true").lower() == "true"
 
-    # ================= DATABASE (ORACLE WALLET) =================
+    # ================= DATABASE (POSTGRESQL OPTIMIZED) =================
     DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
     
-    # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun:
+    # Pool parametrlari Render + PostgreSQL uchun moslangan
     DB_POOL_SIZE: int = safe_cast("DB_POOL_SIZE", 10)
     DB_MAX_OVERFLOW: int = safe_cast("DB_MAX_OVERFLOW", 5)
-    
-    # 🔐 Wallet xavfsizlik sozlamalari (Render Secret Files uchun moslangan)
-    WALLET_LOCATION: str = os.getenv("WALLET_LOCATION", "/etc/secrets").strip()
-    WALLET_PASSWORD: str = os.getenv("WALLET_PASSWORD", "").strip()
-    
-    # tnsnames.ora ichidagi DSN nomi (masalan: aninovuzdb_low)
-    ORACLE_DSN: str = os.getenv("ORACLE_DSN", "aninovuzdb_low").strip()
 
     # ================= SERVER =================
     PORT: int = safe_cast("PORT", 8000)
@@ -87,15 +80,6 @@ class Config:
 
         if not self.DATABASE_URL:
             errors.append("DATABASE_URL missing")
-            
-        # ---- Oracle Wallet xavfsizlik tekshiruvlari ----
-        if self.DATABASE_URL and self.DATABASE_URL.startswith("oracle+oracledb://"):
-            if not self.WALLET_PASSWORD:
-                logger.warning("⚠️ WALLET_PASSWORD kiritilmagan! Agar bazaga Wallet orqali ulanayotgan bo'lsangiz, bu xatolikka olib keladi.")
-            
-            # Agar production'da bo'lsak va /etc/secrets papkasi bo'lmasa, ogohlantirish
-            if not self.DEBUG and not os.path.exists(self.WALLET_LOCATION):
-                logger.warning(f"⚠️ Wallet papkasi ({self.WALLET_LOCATION}) topilmadi. Render'da Secret Files to'g'ri o'rnatilganiga ishonch hosil qiling.")
 
         # ---- production strict mode ----
         if not self.DEBUG and not self.WEBHOOK_HOST:
@@ -133,5 +117,3 @@ class Config:
 
 # ================= SINGLETON =================
 config = Config()
-
-#config

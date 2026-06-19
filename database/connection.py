@@ -12,27 +12,24 @@ from config import config
 
 logger = logging.getLogger("DB")
 
-# ================= ENGINE (WALLET ORQALI ULANISH) =================
-# 🔐 Render Secret Files orqali mTLS (Wallet) bilan xavfsiz ulanish
+# ================= ENGINE (POSTGRESQL ULANISH) =================
+# 🚀 Render va PostgreSQL uchun optimallashtirilgan ulanish tizimi
 
 engine = create_async_engine(
     config.DATABASE_URL,
     echo=False,
 
-    # ⚠ Oracle Free Tier 30 ta sessiya limitidan oshib ketmaslik uchun config'dan olyapmiz:
+    # Sessiyalar limitidan oshib ketmaslik uchun config'dan olyapmiz:
     pool_size=config.DB_POOL_SIZE,
     max_overflow=config.DB_MAX_OVERFLOW,
 
     # Zombie ulanishlarni o'ldirish va qayta tiklash
     pool_pre_ping=True,
-    pool_recycle=900,  # Oracle ulanishlarni tezroq tozalashi uchun 15 daqiqa
+    pool_recycle=900,  # Ulanishlarni har 15 daqiqada yangilash
     pool_timeout=15,   # Puldan joy bo'shashini kutish vaqti
 
-    # 🔥 DIQQAT: Config.py dan olingan Wallet parollari shu yerdan drayverga uzatiladi
-    connect_args={
-        "wallet_location": config.WALLET_LOCATION,
-        "wallet_password": config.WALLET_PASSWORD
-    }
+    # ✅ FIX: PostgreSQL-da 'wallet_location' kerak emasligi uchun connect_args bo'shatildi yoki mTLS shart bo'lsa ssl parametrlarini yozish mumkin
+    connect_args={}
 )
 
 # ================= SESSION =================
@@ -45,19 +42,19 @@ AsyncSessionLocal = async_sessionmaker(
 # ================= HEALTH CHECK =================
 async def check_db(retries: int = 3, delay: float = 2.0):
     """
-    Bot ishga tushayotganda Oracle bazasini tekshirish (DUAL jadvali orqali)
+    Bot ishga tushayotganda PostgreSQL bazasini tekshirish (Standart SELECT 1 orqali)
     """
     for attempt in range(1, retries + 1):
         try:
             async with engine.connect() as conn:
-                # ⚠ Oracle'da oddiy "SELECT 1" xato beradi, "FROM dual" shart!
-                await conn.execute(text("SELECT 1 FROM dual"))
+                # ✅ FIX: Oracle uchun xos bo'lgan "FROM dual" olib tashlandi, PostgreSQL uchun toza "SELECT 1" qo'yildi
+                await conn.execute(text("SELECT 1"))
 
-            logger.info("🚀 Oracle Database connected successfully via Wallet and healthy!")
+            logger.info("🚀 PostgreSQL Database connected successfully and healthy!")
             return True
 
         except Exception as e:
-            logger.warning(f"⚠️ Oracle DB check failed ({attempt}/{retries}): {e}")
+            logger.warning(f"⚠️ PostgreSQL DB check failed ({attempt}/{retries}): {e}")
 
             if attempt == retries:
                 logger.critical("🚨 DATABASE DEAD - CANNOT START APPLICATION")
@@ -87,6 +84,6 @@ async def close_db():
     """
     try:
         await engine.dispose()
-        logger.info("🛑 Oracle DB engine connection pool closed gracefully")
+        logger.info("🛑 PostgreSQL DB engine connection pool closed gracefully")
     except Exception as e:
         logger.error(f"Error closing DB pool: {e}")
